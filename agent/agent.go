@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -26,6 +27,7 @@ func (i AgentInfo) String() string {
 }
 
 // defaultWorkspace returns ~/.ringclaw/workspace as the default working directory.
+// Ensures it is a git repo so CLI agents like codex don't complain.
 func defaultWorkspace() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -33,6 +35,11 @@ func defaultWorkspace() string {
 	}
 	dir := filepath.Join(home, ".ringclaw", "workspace")
 	os.MkdirAll(dir, 0o755)
+	// Initialize as git repo if not already one
+	gitDir := filepath.Join(dir, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		exec.Command("git", "init", dir).Run()
+	}
 	return dir
 }
 
