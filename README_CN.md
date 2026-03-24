@@ -6,9 +6,9 @@ RingCentral AI Agent 桥接器 — 将 RingCentral Team Messaging 接入 AI Agen
 
 > 本项目灵感来自 [WeClaw](https://github.com/fastclaw-ai/weclaw/) — 原版微信 AI Agent 桥接器，WeClaw 则参考了 [@tencent-weixin/openclaw-weixin](https://npmx.dev/package/@tencent-weixin/openclaw-weixin)。
 
-|                                                 |                                                 |                                                 |
-| :---------------------------------------------: | :---------------------------------------------: | :---------------------------------------------: |
-| <img src="previews/preview1.png" width="280" /> | <img src="previews/preview2.png" width="280" /> | <img src="previews/preview3.png" width="280" /> |
+<p align="center">
+  <img src="previews/preview.gif" width="600" />
+</p>
 
 ## 快速开始
 

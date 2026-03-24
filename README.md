@@ -6,9 +6,9 @@ RingCentral AI Agent Bridge — connect RingCentral Team Messaging to AI agents 
 
 > This project is inspired by [WeClaw](https://github.com/fastclaw-ai/weclaw/) — the original WeChat AI Agent Bridge, which was in turn inspired by [@tencent-weixin/openclaw-weixin](https://npmx.dev/package/@tencent-weixin/openclaw-weixin).
 
-| | | |
-|:---:|:---:|:---:|
-| <img src="previews/preview1.png" width="280" /> | <img src="previews/preview2.png" width="280" /> | <img src="previews/preview3.png" width="280" /> |
+<p align="center">
+  <img src="previews/preview.gif" width="600" />
+</p>
 
 ## Quick Start
 
