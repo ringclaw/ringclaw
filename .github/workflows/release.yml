@@ -22,6 +22,10 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -36,13 +40,15 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           go build -ldflags="-s -w -X github.com/ringclaw/ringclaw/cmd.Version=${{ github.ref_name }}" \
-            -o ringclaw_${{ matrix.goos }}_${{ matrix.goarch }} .
+            -o ringclaw_${{ matrix.goos }}_${{ matrix.goarch }}${EXT} .
 
       - uses: actions/upload-artifact@v4
         with:
           name: ringclaw_${{ matrix.goos }}_${{ matrix.goarch }}
-          path: ringclaw_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: ringclaw_${{ matrix.goos }}_${{ matrix.goarch }}*
 
   release:
     needs: build

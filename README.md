@@ -13,8 +13,11 @@ RingCentral AI Agent Bridge — connect RingCentral Team Messaging to AI agents 
 ## Quick Start
 
 ```bash
-# One-line install
+# One-line install (macOS/Linux)
 curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | sh
+
+# One-line install (Windows PowerShell)
+irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
 # Set RingCentral credentials
 export RC_CLIENT_ID="your_client_id"
@@ -322,7 +325,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow builds binaries for `darwin/linux` x `amd64/arm64`, creates a GitHub Release, and uploads all artifacts with checksums.
+The workflow builds binaries for `darwin/linux/windows` x `amd64/arm64`, creates a GitHub Release, and uploads all artifacts with checksums.
 
 ## Development
 

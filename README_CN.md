@@ -13,8 +13,11 @@ RingCentral AI Agent 桥接器 — 将 RingCentral Team Messaging 接入 AI Agen
 ## 快速开始
 
 ```bash
-# 一键安装
+# 一键安装（macOS/Linux）
 curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | sh
+
+# 一键安装（Windows PowerShell）
+irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
 # 设置 RingCentral 凭据
 export RC_CLIENT_ID="your_client_id"
@@ -324,7 +327,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-自动构建 `darwin/linux` x `amd64/arm64` 四个平台的二进制，创建 GitHub Release 并上传所有产物和校验文件。
+自动构建 `darwin/linux/windows` x `amd64/arm64` 六个平台的二进制，创建 GitHub Release 并上传所有产物和校验文件。
 
 ## 开发
 
