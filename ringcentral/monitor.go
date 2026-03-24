@@ -29,26 +29,41 @@ type Monitor struct {
 	client    *Client
 	handler   MessageHandler
 	failures  int
-	sentPosts map[string]bool // track post IDs sent by bot to avoid loops
+	sentPosts map[string]time.Time // post ID -> timestamp
 	mu        sync.Mutex
 }
+
+const sentPostTTL = 5 * time.Minute
 
 // MarkSentPost records a post ID as sent by the bot.
 func (m *Monitor) MarkSentPost(id string) {
 	m.mu.Lock()
-	m.sentPosts[id] = true
-	// Keep map from growing unbounded
-	if len(m.sentPosts) > 1000 {
-		m.sentPosts = make(map[string]bool)
+	m.sentPosts[id] = time.Now()
+	// Evict expired entries
+	if len(m.sentPosts) > 100 {
+		now := time.Now()
+		for k, t := range m.sentPosts {
+			if now.Sub(t) > sentPostTTL {
+				delete(m.sentPosts, k)
+			}
+		}
 	}
 	m.mu.Unlock()
 }
 
-// IsSentPost checks if a post was sent by the bot.
+// IsSentPost checks if a post was recently sent by the bot.
 func (m *Monitor) IsSentPost(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.sentPosts[id]
+	t, ok := m.sentPosts[id]
+	if !ok {
+		return false
+	}
+	if time.Since(t) > sentPostTTL {
+		delete(m.sentPosts, id)
+		return false
+	}
+	return true
 }
 
 // NewMonitor creates a new WebSocket monitor.
@@ -56,7 +71,7 @@ func NewMonitor(client *Client, handler MessageHandler) *Monitor {
 	return &Monitor{
 		client:    client,
 		handler:   handler,
-		sentPosts: make(map[string]bool),
+		sentPosts: make(map[string]time.Time),
 	}
 }
 
