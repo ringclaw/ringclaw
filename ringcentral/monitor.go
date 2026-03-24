@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -264,7 +265,13 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 		return
 	}
 
-	// Skip posts sent by the bot itself (prevents reply loops)
+	// Skip bot messages: check answer markers and known bot texts
+	if isBotMessage(event.Body.Text) {
+		log.Printf("[monitor] ignoring bot message (text match): %s", event.Body.ID)
+		return
+	}
+
+	// Fallback: skip posts tracked by ID (covers edge cases)
 	if m.IsSentPost(event.Body.ID) {
 		log.Printf("[monitor] ignoring bot's own post %s", event.Body.ID)
 		return
@@ -305,4 +312,8 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+func isBotMessage(text string) bool {
+	return strings.HasPrefix(text, "--------answer--------") || text == "Thinking..."
 }
