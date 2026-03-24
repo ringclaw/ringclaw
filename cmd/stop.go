@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -33,7 +32,7 @@ var stopCmd = &cobra.Command{
 			return fmt.Errorf("find process: %w", err)
 		}
 
-		if err := p.Signal(syscall.SIGTERM); err != nil {
+		if err := signalTerminate(p); err != nil {
 			return fmt.Errorf("stop process: %w", err)
 		}
 

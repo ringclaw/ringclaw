@@ -3,8 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os/signal"
-	"syscall"
 
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/messaging"
@@ -37,7 +35,7 @@ var sendCmd = &cobra.Command{
 			return fmt.Errorf("at least one of --text or --media is required")
 		}
 
-		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		ctx, cancel := notifyContext(context.Background())
 		defer cancel()
 
 		cfg, err := config.Load()

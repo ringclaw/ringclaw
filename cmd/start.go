@@ -6,11 +6,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ringclaw/ringclaw/agent"
@@ -43,7 +41,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return runDaemon()
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := notifyContext(context.Background())
 	defer cancel()
 
 	// Load config
@@ -292,7 +290,7 @@ func runDaemon() error {
 	cmd := exec.Command(exe, "start", "-f")
 	cmd.Stdout = lf
 	cmd.Stderr = lf
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	setSysProcAttr(cmd)
 
 	if err := cmd.Start(); err != nil {
 		lf.Close()
@@ -321,14 +319,6 @@ func readPid() (int, error) {
 		return 0, err
 	}
 	return pid, nil
-}
-
-func processExists(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // verifyAgents checks each detected agent and logs availability status.
