@@ -7,12 +7,121 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
 var summarizeKeywords = []string{"总结", "summarize", "summary"}
+
+// chatCacheEntry stores a resolved chat name -> ID mapping.
+type chatCacheEntry struct {
+	ChatID   string
+	ChatName string
+	ChatType string // "Direct", "Team", "Group"
+}
+
+// chatCache caches chat lookups to avoid repeated API calls.
+type chatCache struct {
+	mu        sync.RWMutex
+	entries   []chatCacheEntry
+	persons   map[string]*ringcentral.PersonInfo // personID -> info
+	loadedAt  time.Time
+	ttl       time.Duration
+}
+
+var globalChatCache = &chatCache{
+	persons: make(map[string]*ringcentral.PersonInfo),
+	ttl:     10 * time.Minute,
+}
+
+func (c *chatCache) isStale() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.entries == nil || time.Since(c.loadedAt) > c.ttl
+}
+
+// lookup searches cached entries by name. Returns nil if not found.
+func (c *chatCache) lookup(name string) *chatCacheEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for i := range c.entries {
+		if fuzzyMatch(c.entries[i].ChatName, name) {
+			return &c.entries[i]
+		}
+	}
+	return nil
+}
+
+// getPerson returns cached person info or fetches it.
+func (c *chatCache) getPerson(ctx context.Context, client *ringcentral.Client, personID string) *ringcentral.PersonInfo {
+	c.mu.RLock()
+	if p, ok := c.persons[personID]; ok {
+		c.mu.RUnlock()
+		return p
+	}
+	c.mu.RUnlock()
+
+	if strings.HasPrefix(personID, "glip-") {
+		return nil
+	}
+	person, err := client.GetPersonInfo(ctx, personID)
+	if err != nil {
+		return nil
+	}
+	c.mu.Lock()
+	c.persons[personID] = person
+	c.mu.Unlock()
+	return person
+}
+
+// load fetches all chats and builds the cache.
+func (c *chatCache) load(ctx context.Context, client *ringcentral.Client) {
+	log.Println("[summarize] loading chat cache...")
+	var entries []chatCacheEntry
+	ownerID := client.OwnerID()
+
+	for _, chatType := range []string{"Direct", "Team", "Group"} {
+		chats, err := client.ListChats(ctx, chatType)
+		if err != nil {
+			log.Printf("[summarize] failed to list %s chats: %v", chatType, err)
+			continue
+		}
+
+		for _, chat := range chats.Records {
+			name := chat.Name
+			// Direct chats may have empty Name; resolve from member
+			if name == "" && chatType == "Direct" {
+				for _, m := range chat.Members {
+					if m.ID == ownerID || strings.HasPrefix(m.ID, "glip-") {
+						continue
+					}
+					person := c.getPerson(ctx, client, m.ID)
+					if person != nil {
+						name = strings.TrimSpace(person.FirstName + " " + person.LastName)
+					}
+					break
+				}
+			}
+			if name == "" {
+				continue
+			}
+			entries = append(entries, chatCacheEntry{
+				ChatID:   chat.ID,
+				ChatName: name,
+				ChatType: chatType,
+			})
+		}
+	}
+
+	c.mu.Lock()
+	c.entries = entries
+	c.loadedAt = time.Now()
+	c.mu.Unlock()
+
+	log.Printf("[summarize] chat cache loaded: %d entries", len(entries))
+}
 
 // IsSummarizeCommand checks if the text starts with a summarize keyword.
 func IsSummarizeCommand(text string) bool {
@@ -68,57 +177,28 @@ func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, text str
 
 	log.Printf("[summarize] fuzzy searching for %q", name)
 
-	// Search Direct chats: Name may be empty, fall back to member lookup
-	directChats, err := client.ListChats(ctx, "Direct")
-	if err != nil {
-		log.Printf("[summarize] failed to list Direct chats: %v", err)
-	} else {
-		log.Printf("[summarize] searching %d Direct chats", len(directChats.Records))
-		ownerID := client.OwnerID()
-		for _, chat := range directChats.Records {
-			// Try Name field first
-			if chat.Name != "" && fuzzyMatch(chat.Name, name) {
-				req.ChatID = chat.ID
-				req.ChatName = chat.Name
-				log.Printf("[summarize] matched Direct chat by name %q (id=%s)", chat.Name, chat.ID)
-				return req, nil
-			}
-			// Fall back: look up the other member's name
-			for _, m := range chat.Members {
-				if m.ID == ownerID || strings.HasPrefix(m.ID, "glip-") {
-					continue
-				}
-				person, perr := client.GetPersonInfo(ctx, m.ID)
-				if perr != nil {
-					continue
-				}
-				fullName := strings.TrimSpace(person.FirstName + " " + person.LastName)
-				if fuzzyMatch(fullName, name) || fuzzyMatch(person.Email, name) {
-					req.ChatID = chat.ID
-					req.ChatName = fullName
-					log.Printf("[summarize] matched Direct chat by member %q (id=%s)", fullName, chat.ID)
-					return req, nil
-				}
-			}
-		}
+	// Load cache if stale or empty
+	if globalChatCache.isStale() {
+		globalChatCache.load(ctx, client)
 	}
 
-	// Search Team and Group chats by name
-	for _, chatType := range []string{"Team", "Group"} {
-		chats, err := client.ListChats(ctx, chatType)
-		if err != nil {
-			log.Printf("[summarize] failed to list %s chats: %v", chatType, err)
-			continue
-		}
-		log.Printf("[summarize] searching %d %s chats by name", len(chats.Records), chatType)
-		for _, chat := range chats.Records {
-			if chat.Name != "" && fuzzyMatch(chat.Name, name) {
-				req.ChatID = chat.ID
-				req.ChatName = chat.Name
-				log.Printf("[summarize] matched %s chat %q (id=%s)", chatType, chat.Name, chat.ID)
-				return req, nil
-			}
-		}
+	// Search cache
+	if entry := globalChatCache.lookup(name); entry != nil {
+		req.ChatID = entry.ChatID
+		req.ChatName = entry.ChatName
+		log.Printf("[summarize] cache hit: %s chat %q (id=%s)", entry.ChatType, entry.ChatName, entry.ChatID)
+		return req, nil
+	}
+
+	// Cache miss: force refresh and retry once
+	log.Printf("[summarize] cache miss for %q, refreshing...", name)
+	globalChatCache.load(ctx, client)
+
+	if entry := globalChatCache.lookup(name); entry != nil {
+		req.ChatID = entry.ChatID
+		req.ChatName = entry.ChatName
+		log.Printf("[summarize] cache hit after refresh: %s chat %q (id=%s)", entry.ChatType, entry.ChatName, entry.ChatID)
+		return req, nil
 	}
 
 	return nil, fmt.Errorf("could not find a chat matching %q", name)
@@ -141,22 +221,16 @@ func BuildSummaryPrompt(ctx context.Context, client *ringcentral.Client, req *Su
 		return "", fmt.Errorf("no messages found")
 	}
 
-	// Resolve person names (with cache)
-	nameCache := make(map[string]string)
+	// Resolve person names using global cache
 	resolveName := func(creatorID string) string {
-		if n, ok := nameCache[creatorID]; ok {
-			return n
-		}
-		person, err := client.GetPersonInfo(ctx, creatorID)
-		if err != nil {
-			nameCache[creatorID] = creatorID
+		person := globalChatCache.getPerson(ctx, client, creatorID)
+		if person == nil {
 			return creatorID
 		}
 		name := strings.TrimSpace(person.FirstName + " " + person.LastName)
 		if name == "" {
-			name = creatorID
+			return creatorID
 		}
-		nameCache[creatorID] = name
 		return name
 	}
 
