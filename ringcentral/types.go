@@ -146,17 +146,31 @@ type WSEvent struct {
 	Body           Post   `json:"body"`
 }
 
+// ChatMember represents a member in a chat.
+type ChatMember struct {
+	ID string `json:"id"`
+}
+
 // Chat represents a Team Messaging chat.
 type Chat struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	Type             string   `json:"type"`
-	Status           string   `json:"status"`
-	Members          []string `json:"members"`
-	IsPublic         bool     `json:"isPublic"`
-	CreationTime     string   `json:"creationTime"`
-	LastModifiedTime string   `json:"lastModifiedTime"`
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	Description      string       `json:"description"`
+	Type             string       `json:"type"`
+	Status           string       `json:"status"`
+	Members          []ChatMember `json:"members"`
+	IsPublic         bool         `json:"isPublic"`
+	CreationTime     string       `json:"creationTime"`
+	LastModifiedTime string       `json:"lastModifiedTime"`
+}
+
+// MemberIDs returns a string slice of member IDs.
+func (c Chat) MemberIDs() []string {
+	ids := make([]string, len(c.Members))
+	for i, m := range c.Members {
+		ids[i] = m.ID
+	}
+	return ids
 }
 
 // Credentials stores RC session data.

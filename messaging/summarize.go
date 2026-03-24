@@ -108,11 +108,12 @@ func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, text str
 		log.Printf("[summarize] searching %d Direct chats (members in each: looking up names)", len(directChats.Records))
 		ownerID := client.OwnerID()
 		for _, chat := range directChats.Records {
-			if len(chat.Members) == 0 {
+			memberIDs := chat.MemberIDs()
+			if len(memberIDs) == 0 {
 				log.Printf("[summarize]   chat %s has no members field", chat.ID)
 				continue
 			}
-			for _, memberID := range chat.Members {
+			for _, memberID := range memberIDs {
 				if memberID == ownerID {
 					continue
 				}
@@ -316,8 +317,8 @@ func findDirectChat(ctx context.Context, client *ringcentral.Client, personID st
 		return "", err
 	}
 	for _, chat := range chats.Records {
-		for _, memberID := range chat.Members {
-			if memberID == personID {
+		for _, m := range chat.Members {
+			if m.ID == personID {
 				return chat.ID, nil
 			}
 		}
