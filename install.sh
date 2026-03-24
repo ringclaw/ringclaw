@@ -22,9 +22,9 @@ esac
 
 echo "Detected: ${OS}/${ARCH}"
 
-# Get latest version
+# Get latest version (uses redirect from /latest to avoid API rate limits)
 echo "Fetching latest release..."
-VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
+VERSION=$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
 
 if [ -z "$VERSION" ]; then
   echo "Error: could not determine latest version. Is there a release on GitHub?"
