@@ -55,9 +55,17 @@ docker run -it -v ~/.ringclaw:/root/.ringclaw \
 
 ## 架构
 
-<p align="center">
-  <img src="previews/architecture.png" width="600" />
-</p>
+```mermaid
+graph LR
+    User[用户] -->|发送消息| RC[RingCentral]
+    RC -->|WebSocket 事件| RingClaw
+    RingClaw -->|路由到| Codex
+    RingClaw -->|路由到| Claude[Claude Code]
+    RingClaw -->|路由到| OpenClaw
+    RingClaw -->|路由到| More[更多 Agent...]
+    RingClaw -->|回复| RC
+    RC -->|显示回复| User
+```
 
 RingClaw 通过 WebSocket 连接 RingCentral Team Messaging 实时接收消息。当消息到达时，路由到配置的 AI Agent 处理，然后将回复发回聊天。Agent 处理期间，会显示 "Thinking..." 占位消息，处理完成后更新为最终回复。
 

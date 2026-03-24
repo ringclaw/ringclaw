@@ -54,9 +54,17 @@ docker run -it -v ~/.ringclaw:/root/.ringclaw \
 
 ## How It Works
 
-<p align="center">
-  <img src="previews/architecture.png" width="600" />
-</p>
+```mermaid
+graph LR
+    User -->|sends message| RC[RingCentral]
+    RC -->|WebSocket event| RingClaw
+    RingClaw -->|routes to| Codex
+    RingClaw -->|routes to| Claude[Claude Code]
+    RingClaw -->|routes to| OpenClaw
+    RingClaw -->|routes to| More[More Agents...]
+    RingClaw -->|replies| RC
+    RC -->|displays reply| User
+```
 
 RingClaw connects to RingCentral Team Messaging via WebSocket to receive messages in real-time. When a message arrives, it routes it to the configured AI agent, then posts the reply back to the chat. While the agent is processing, a "Thinking..." placeholder message is shown and updated with the final reply.
 
