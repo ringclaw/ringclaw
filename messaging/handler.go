@@ -212,6 +212,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		// Extract image URLs from markdown
 		imageURLs := ExtractImageURLs(reply)
 
+		// Wrap reply with answer markers
+		reply = wrapAnswer(reply)
+
 		// Update the placeholder with the real reply, or send a new post if placeholder failed
 		if placeholderID != "" {
 			if updateErr := UpdatePostText(ctx, client, chatID, placeholderID, reply); updateErr != nil {
@@ -316,4 +319,8 @@ func buildHelpText() string {
 /help - Show this help message
 
 Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode)`
+}
+
+func wrapAnswer(text string) string {
+	return "--------answer--------\n" + text + "\n---------end----------"
 }
