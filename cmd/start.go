@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -68,14 +69,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Log available agents
-	if len(cfg.Agents) > 0 {
-		names := make([]string, 0, len(cfg.Agents))
-		for name := range cfg.Agents {
-			names = append(names, name)
-		}
-		log.Printf("Available agents: %v (default: %s)", names, cfg.DefaultAgent)
-	}
+	// Verify detected agents
+	verifyAgents(cfg)
 
 	// Create RingCentral client
 	creds := &ringcentral.Credentials{
@@ -333,4 +328,103 @@ func processExists(pid int) bool {
 		return false
 	}
 	return p.Signal(syscall.Signal(0)) == nil
+}
+
+// verifyAgents checks each detected agent and logs availability status.
+func verifyAgents(cfg *config.Config) {
+	if len(cfg.Agents) == 0 {
+		log.Println("[agents] No agents detected")
+		return
+	}
+
+	log.Println("[agents] Verifying detected agents...")
+
+	type result struct {
+		name   string
+		agType string
+		cmd    string
+		ok     bool
+		detail string
+	}
+
+	results := make(chan result, len(cfg.Agents))
+	var wg sync.WaitGroup
+
+	for name, agCfg := range cfg.Agents {
+		wg.Add(1)
+		go func(name string, agCfg config.AgentConfig) {
+			defer wg.Done()
+			r := result{name: name, agType: agCfg.Type, cmd: agCfg.Command}
+
+			switch agCfg.Type {
+			case "cli", "acp":
+				// Quick version/help check with timeout
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, agCfg.Command, "--version")
+				out, err := cmd.Output()
+				if err != nil {
+					// Try --help as fallback
+					cmd = exec.CommandContext(ctx, agCfg.Command, "--help")
+					out, err = cmd.Output()
+				}
+				if err != nil {
+					r.ok = false
+					r.detail = "binary found but not responding"
+				} else {
+					r.ok = true
+					ver := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+					if len(ver) > 60 {
+						ver = ver[:60] + "..."
+					}
+					r.detail = ver
+				}
+			case "http":
+				r.ok = true
+				r.cmd = agCfg.Endpoint
+				r.detail = "http endpoint"
+			default:
+				r.ok = false
+				r.detail = "unknown type"
+			}
+
+			results <- r
+		}(name, agCfg)
+	}
+
+	wg.Wait()
+	close(results)
+
+	var available, unavailable []string
+	for r := range results {
+		if r.ok {
+			log.Printf("[agents]   ✓ %-12s (type=%s, %s)", r.name, r.agType, r.detail)
+			available = append(available, r.name)
+		} else {
+			log.Printf("[agents]   ✗ %-12s (type=%s, %s)", r.name, r.agType, r.detail)
+			unavailable = append(unavailable, r.name)
+		}
+	}
+
+	log.Printf("[agents] %d available, %d unavailable (default: %s)",
+		len(available), len(unavailable), cfg.DefaultAgent)
+
+	// Remove unavailable agents from config
+	for _, name := range unavailable {
+		delete(cfg.Agents, name)
+		if cfg.DefaultAgent == name {
+			cfg.DefaultAgent = ""
+		}
+	}
+
+	// Re-pick default if removed
+	if cfg.DefaultAgent == "" && len(available) > 0 {
+		for _, name := range config.DefaultOrder() {
+			if _, ok := cfg.Agents[name]; ok {
+				cfg.DefaultAgent = name
+				log.Printf("[agents] default agent set to %s", name)
+				break
+			}
+		}
+	}
 }

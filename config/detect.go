@@ -43,6 +43,9 @@ var agentCandidates = []agentCandidate{
 	{Name: "qwen", Binary: "qwen", Args: []string{"--acp"}, Type: "acp", Model: ""},
 }
 
+// DefaultOrder returns the priority list for choosing the default agent.
+func DefaultOrder() []string { return defaultOrder }
+
 // defaultOrder defines the priority for choosing the default agent.
 // Lower index = higher priority.
 var defaultOrder = []string{
