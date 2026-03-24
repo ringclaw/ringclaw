@@ -250,7 +250,7 @@ func (c *Client) CreateConversation(ctx context.Context, memberIDs []string) (*C
 		return nil, fmt.Errorf("marshal create chat: %w", err)
 	}
 
-	respBody, err := c.doRequest(ctx, http.MethodPost, "/team-messaging/v1/chats", "application/json", bytes.NewReader(data))
+	respBody, err := c.doRequest(ctx, http.MethodPost, "/team-messaging/v1/conversations", "application/json", bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +260,22 @@ func (c *Client) CreateConversation(ctx context.Context, memberIDs []string) (*C
 		return nil, fmt.Errorf("parse create chat: %w", err)
 	}
 	return &chat, nil
+}
+
+// FindDirectChatByMember searches Direct chats for one containing the given member ID.
+func (c *Client) FindDirectChatByMember(ctx context.Context, memberID string) (*Chat, error) {
+	chats, err := c.ListChats(ctx, "Direct")
+	if err != nil {
+		return nil, err
+	}
+	for _, chat := range chats.Records {
+		for _, m := range chat.Members {
+			if m.ID == memberID {
+				return &chat, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no Direct chat found with member %s", memberID)
 }
 
 // GetExtensionInfo fetches current user's extension info to get the owner ID.

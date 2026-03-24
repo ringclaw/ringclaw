@@ -213,11 +213,15 @@ func (c *chatCache) lookupViaDirectory(ctx context.Context, client *ringcentral.
 	fullName := strings.TrimSpace(best.FirstName + " " + best.LastName)
 	log.Printf("[summarize] directory matched: %q (id=%s, email=%s)", fullName, best.ID, best.Email)
 
-	// Create or find Direct chat
+	// Find Direct chat: try conversations API first, fall back to member search
 	chat, err := client.CreateConversation(ctx, []string{best.ID})
 	if err != nil {
-		log.Printf("[summarize] create conversation failed: %v", err)
-		return nil
+		log.Printf("[summarize] conversations API failed: %v, trying member search...", err)
+		chat, err = client.FindDirectChatByMember(ctx, best.ID)
+		if err != nil {
+			log.Printf("[summarize] member search also failed: %v", err)
+			return nil
+		}
 	}
 
 	log.Printf("[summarize] resolved Direct chat: %q -> %s", fullName, chat.ID)
