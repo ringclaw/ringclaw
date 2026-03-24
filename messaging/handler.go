@@ -174,6 +174,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
+	// Summarize command
+	if IsSummarizeCommand(text) {
+		h.handleSummarize(ctx, client, post)
+		return
+	}
+
 	// Route: "/agentname message" -> specific agent, otherwise -> default
 	agentName, message := parseCommand(text)
 
@@ -390,4 +396,56 @@ Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) 
 
 func wrapAnswer(text string) string {
 	return "--------answer--------\n" + text + "\n---------end----------"
+}
+
+func (h *Handler) handleSummarize(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) {
+	chatID := post.GroupID
+	text := strings.TrimSpace(post.Text)
+
+	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
+	if placeholderErr != nil {
+		log.Printf("[handler] failed to send typing placeholder: %v", placeholderErr)
+	}
+
+	sendReply := func(reply string) {
+		if placeholderID != "" {
+			if err := UpdatePostText(ctx, client, chatID, placeholderID, reply); err != nil {
+				log.Printf("[handler] failed to update placeholder: %v", err)
+				_ = SendTextReply(ctx, client, chatID, reply)
+			}
+		} else {
+			_ = SendTextReply(ctx, client, chatID, reply)
+		}
+	}
+
+	// Resolve target chat
+	req, err := ResolveChatTarget(ctx, client, text, post.Mentions)
+	if err != nil {
+		sendReply(fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	log.Printf("[summarize] target chat: %s (%s), from: %s", req.ChatName, req.ChatID, req.TimeFrom.Format(time.RFC3339))
+
+	// Build prompt from chat messages
+	prompt, err := BuildSummaryPrompt(ctx, client, req)
+	if err != nil {
+		sendReply(fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	// Send to default agent
+	ag := h.getDefaultAgent()
+	if ag == nil {
+		sendReply("Error: no agent available for summarization")
+		return
+	}
+
+	reply, err := h.chatWithAgent(ctx, ag, post.CreatorID, prompt)
+	if err != nil {
+		sendReply(fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	sendReply(wrapAnswer(reply))
 }

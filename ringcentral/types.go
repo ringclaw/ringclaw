@@ -34,6 +34,35 @@ type Mention struct {
 	Name string `json:"name"`
 }
 
+// PostList is the response from listing posts in a chat.
+type PostList struct {
+	Records    []Post `json:"records"`
+	Navigation struct {
+		PrevPageToken string `json:"prevPageToken"`
+		NextPageToken string `json:"nextPageToken"`
+	} `json:"navigation"`
+}
+
+// ChatList is the response from listing chats.
+type ChatList struct {
+	Records []Chat `json:"records"`
+}
+
+// PersonInfo represents a user's profile.
+type PersonInfo struct {
+	ID        string `json:"id"`
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	Email     string `json:"email"`
+}
+
+// ListPostsOpts holds query parameters for ListPosts.
+type ListPostsOpts struct {
+	RecordCount      int
+	CreationTimeFrom string
+	CreationTimeTo   string
+}
+
 // CreatePostRequest is the body for creating a post.
 type CreatePostRequest struct {
 	Text string `json:"text"`

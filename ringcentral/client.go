@@ -155,6 +155,69 @@ func (c *Client) UploadFile(ctx context.Context, chatID, fileName string, fileDa
 	return &files[0], nil
 }
 
+// ListPosts fetches posts from a chat with optional filters.
+func (c *Client) ListPosts(ctx context.Context, chatID string, opts ListPostsOpts) (*PostList, error) {
+	params := url.Values{}
+	if opts.RecordCount > 0 {
+		params.Set("recordCount", fmt.Sprintf("%d", opts.RecordCount))
+	} else {
+		params.Set("recordCount", "250")
+	}
+	if opts.CreationTimeFrom != "" {
+		params.Set("creationTimeFrom", opts.CreationTimeFrom)
+	}
+	if opts.CreationTimeTo != "" {
+		params.Set("creationTimeTo", opts.CreationTimeTo)
+	}
+
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts?%s", chatID, params.Encode())
+	respBody, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var list PostList
+	if err := json.Unmarshal(respBody, &list); err != nil {
+		return nil, fmt.Errorf("parse posts response: %w", err)
+	}
+	return &list, nil
+}
+
+// GetPersonInfo fetches a person's profile by ID.
+func (c *Client) GetPersonInfo(ctx context.Context, personID string) (*PersonInfo, error) {
+	path := fmt.Sprintf("/team-messaging/v1/persons/%s", personID)
+	respBody, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var info PersonInfo
+	if err := json.Unmarshal(respBody, &info); err != nil {
+		return nil, fmt.Errorf("parse person info: %w", err)
+	}
+	return &info, nil
+}
+
+// ListChats fetches chats with optional type filter.
+func (c *Client) ListChats(ctx context.Context, chatType string) (*ChatList, error) {
+	params := url.Values{"recordCount": {"250"}}
+	if chatType != "" {
+		params.Set("type", chatType)
+	}
+
+	path := "/team-messaging/v1/chats?" + params.Encode()
+	respBody, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var list ChatList
+	if err := json.Unmarshal(respBody, &list); err != nil {
+		return nil, fmt.Errorf("parse chats response: %w", err)
+	}
+	return &list, nil
+}
+
 // GetExtensionInfo fetches current user's extension info to get the owner ID.
 func (c *Client) GetExtensionInfo(ctx context.Context) (string, error) {
 	respBody, err := c.doRequest(ctx, http.MethodGet, "/restapi/v1.0/account/~/extension/~", "", nil)
