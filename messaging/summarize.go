@@ -2,8 +2,11 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,9 +20,24 @@ var summarizeKeywords = []string{"总结", "summarize", "summary"}
 
 // chatCacheEntry stores a resolved chat name -> ID mapping.
 type chatCacheEntry struct {
-	ChatID   string
-	ChatName string
-	ChatType string // "Direct", "Team", "Group"
+	ChatID   string `json:"chat_id"`
+	ChatName string `json:"chat_name"`
+	ChatType string `json:"chat_type"` // "Direct", "Team", "Group"
+}
+
+// cachedPerson is the JSON-serializable subset of PersonInfo.
+type cachedPerson struct {
+	ID        string `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+}
+
+// persistentCacheData is the on-disk format for ~/.ringclaw/chat_cache.json.
+type persistentCacheData struct {
+	Entries  []chatCacheEntry    `json:"entries"`
+	Persons  map[string]cachedPerson `json:"persons"`
+	SavedAt  time.Time           `json:"saved_at"`
 }
 
 // chatCache caches chat lookups to avoid repeated API calls.
@@ -36,10 +54,94 @@ var globalChatCache = &chatCache{
 	ttl:     10 * time.Minute,
 }
 
+func cacheFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".ringclaw", "chat_cache.json")
+}
+
 func (c *chatCache) isStale() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.entries == nil {
+		// Try loading from disk first
+		c.mu.RUnlock()
+		c.loadFromDisk()
+		c.mu.RLock()
+	}
 	return c.entries == nil || time.Since(c.loadedAt) > c.ttl
+}
+
+// loadFromDisk reads the cache file if it exists and is fresh.
+func (c *chatCache) loadFromDisk() {
+	path := cacheFilePath()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var pd persistentCacheData
+	if err := json.Unmarshal(data, &pd); err != nil {
+		log.Printf("[summarize] failed to parse cache file: %v", err)
+		return
+	}
+	// Only use if not too old
+	if time.Since(pd.SavedAt) > c.ttl {
+		return
+	}
+
+	c.mu.Lock()
+	c.entries = pd.Entries
+	c.loadedAt = pd.SavedAt
+	for id, cp := range pd.Persons {
+		c.persons[id] = &ringcentral.PersonInfo{
+			ID:        cp.ID,
+			FirstName: cp.FirstName,
+			LastName:  cp.LastName,
+			Email:     cp.Email,
+		}
+	}
+	c.mu.Unlock()
+	log.Printf("[summarize] loaded cache from disk: %d chats, %d persons", len(pd.Entries), len(pd.Persons))
+}
+
+// saveToDisk writes the cache to disk.
+func (c *chatCache) saveToDisk() {
+	path := cacheFilePath()
+	if path == "" {
+		return
+	}
+	c.mu.RLock()
+	pd := persistentCacheData{
+		Entries: c.entries,
+		Persons: make(map[string]cachedPerson, len(c.persons)),
+		SavedAt: c.loadedAt,
+	}
+	for id, p := range c.persons {
+		pd.Persons[id] = cachedPerson{
+			ID:        p.ID,
+			FirstName: p.FirstName,
+			LastName:  p.LastName,
+			Email:     p.Email,
+		}
+	}
+	c.mu.RUnlock()
+
+	data, err := json.Marshal(pd)
+	if err != nil {
+		log.Printf("[summarize] failed to marshal cache: %v", err)
+		return
+	}
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		log.Printf("[summarize] failed to write cache file: %v", err)
+		return
+	}
+	log.Printf("[summarize] saved cache to disk: %d chats, %d persons", len(pd.Entries), len(pd.Persons))
 }
 
 // lookup searches cached entries by name. Returns nil if not found.
@@ -121,6 +223,9 @@ func (c *chatCache) load(ctx context.Context, client *ringcentral.Client) {
 	c.mu.Unlock()
 
 	log.Printf("[summarize] chat cache loaded: %d entries", len(entries))
+
+	// Persist to disk
+	c.saveToDisk()
 }
 
 // IsSummarizeCommand checks if the text starts with a summarize keyword.
