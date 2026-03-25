@@ -193,6 +193,35 @@ func TestStatusEmoji(t *testing.T) {
 	}
 }
 
+func TestWantsNoteOutput(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		// Chinese
+		{"总结一下Nova工具人今天的聊天内容，并用Note的方式发送", true},
+		{"总结今天的内容，创建Note", true},
+		{"总结一下，用笔记发送到群里", true},
+		{"总结一下，保存为note", true},
+		{"总结一下，以Note发送", true},
+		{"summarize today and send as note", true},
+		// English
+		{"summarize and create a note", true},
+		{"summarize this chat as a note", true},
+		{"summarize in note format", true},
+		// Should NOT match
+		{"总结一下今天的聊天", false},
+		{"summarize today", false},
+		{"/note list", false},
+		{"hello", false},
+	}
+	for _, tt := range tests {
+		if got := wantsNoteOutput(tt.text); got != tt.want {
+			t.Errorf("wantsNoteOutput(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
 func TestFormatActionHelp(t *testing.T) {
 	for _, cmd := range []string{"/task", "/note", "/event"} {
 		help := formatActionHelp(cmd)

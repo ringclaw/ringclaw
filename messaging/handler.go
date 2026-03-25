@@ -461,4 +461,23 @@ func (h *Handler) handleSummarize(ctx context.Context, client *ringcentral.Clien
 	}
 
 	sendReply(wrapAnswer(reply))
+
+	// If user requested note output, create a Note in the target chat
+	if wantsNoteOutput(text) {
+		noteTitle := fmt.Sprintf("Summary: %s", req.ChatName)
+		note, noteErr := client.CreateNote(ctx, req.ChatID, &ringcentral.CreateNoteRequest{
+			Title: noteTitle,
+			Body:  reply,
+		})
+		if noteErr != nil {
+			slog.Error("failed to create note", "component", "handler", "error", noteErr)
+			_ = SendTextReply(ctx, client, chatID, fmt.Sprintf("Summary sent, but failed to create Note: %v", noteErr))
+			return
+		}
+		if pubErr := client.PublishNote(ctx, note.ID); pubErr != nil {
+			slog.Error("failed to publish note", "component", "handler", "noteID", note.ID, "error", pubErr)
+		}
+		_ = SendTextReply(ctx, client, chatID, fmt.Sprintf("Note created in %s: `%s`", req.ChatName, note.ID))
+		slog.Info("created summary note", "component", "handler", "noteID", note.ID, "chatID", req.ChatID)
+	}
 }

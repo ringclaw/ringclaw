@@ -479,6 +479,40 @@ func statusEmoji(status string) string {
 	}
 }
 
+// noteOutputPatterns matches phrases indicating the user wants output as a Note.
+var noteOutputPatterns = []string{
+	// Chinese
+	"用note发送", "用note发", "以note发送", "以note发",
+	"创建note", "生成note", "发到note", "发note",
+	"用笔记发送", "用笔记发", "以笔记发送", "创建笔记", "生成笔记",
+	"写入note", "写入笔记", "保存为note", "保存为笔记",
+	"note方式", "笔记方式",
+	// English
+	"send as note", "send as a note", "create a note", "create note",
+	"save as note", "save as a note", "as a note", "as note",
+	"post as note", "write a note", "write note",
+	"in note form", "note format",
+}
+
+// wantsNoteOutput checks if the user's text contains a phrase requesting Note output.
+func wantsNoteOutput(text string) bool {
+	lower := strings.ToLower(text)
+	// Remove spaces and common Chinese particles for fuzzy matching
+	for _, ch := range []string{" ", "的", "了", "把", "将", "来", "去"} {
+		lower = strings.ReplaceAll(lower, ch, "")
+	}
+	for _, p := range noteOutputPatterns {
+		normalized := strings.ToLower(p)
+		for _, ch := range []string{" "} {
+			normalized = strings.ReplaceAll(normalized, ch, "")
+		}
+		if strings.Contains(lower, normalized) {
+			return true
+		}
+	}
+	return false
+}
+
 func formatActionHelp(cmd string) string {
 	switch cmd {
 	case "/task":
