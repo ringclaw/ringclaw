@@ -392,3 +392,41 @@ func TestFormatActionHelp(t *testing.T) {
 		t.Error("formatActionHelp(/unknown) returned empty string")
 	}
 }
+
+func TestExtractChatID(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"12345", "12345"},
+		{"![:Team](137158549510)", "137158549510"},
+		{"![:Person](608081020)", "608081020"},
+		{" 12345 ", "12345"},
+	}
+	for _, tt := range tests {
+		if got := extractChatID(tt.input); got != tt.want {
+			t.Errorf("extractChatID(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseAgentActions_CardWithChatID(t *testing.T) {
+	reply := `Card sent.
+
+ACTION:CARD chatid=137158549510
+{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Hello"}]}
+END_ACTION`
+
+	clean, actions := ParseAgentActions(reply)
+	if clean != "Card sent." {
+		t.Errorf("expected 'Card sent.', got %q", clean)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if actions[0].Type != "CARD" {
+		t.Errorf("expected CARD, got %s", actions[0].Type)
+	}
+	if actions[0].Params["chatid"] != "137158549510" {
+		t.Errorf("expected chatid '137158549510', got %q", actions[0].Params["chatid"])
+	}
+}

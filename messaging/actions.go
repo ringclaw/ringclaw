@@ -531,17 +531,17 @@ IMPORTANT: You are running inside a RingCentral Team Messaging bot. You have REA
 
 Available actions (append at the END of your response):
 
-ACTION:NOTE title=<title>
+ACTION:NOTE title=<title> [chatid=<target chat ID>]
 <body content>
 END_ACTION
 
-ACTION:TASK subject=<subject>
+ACTION:TASK subject=<subject> [chatid=<target chat ID>]
 END_ACTION
 
 ACTION:EVENT title=<title> start=<ISO8601> end=<ISO8601>
 END_ACTION
 
-ACTION:CARD
+ACTION:CARD [chatid=<target chat ID>]
 <Adaptive Card JSON, version 1.3>
 END_ACTION
 
@@ -552,8 +552,10 @@ Card elements: TextBlock, FactSet, ColumnSet/Column, Image, Container, Action.Op
 
 Rules:
 - Your text reply comes FIRST, then ACTION blocks at the end.
-- When the user asks for cards, rich display, progress, reports, or structured data → use ACTION:CARD to post an Adaptive Card directly in the chat.
+- When the user asks for cards, rich display, progress, reports, or structured data → use ACTION:CARD.
 - When the user asks to create notes/tasks/events → use the corresponding ACTION block.
+- When the user mentions a target chat via ![:Team](ID) or ![:Person](ID), extract the numeric ID and pass it as chatid=<ID> in the ACTION header.
+- If no chatid is specified, the action executes in the current chat.
 - Do NOT create files. Do NOT output raw JSON in your reply. Use ACTION blocks so the system executes them.
 - If no action is needed, reply normally without ACTION blocks.
 `
@@ -637,7 +639,7 @@ func parseActionBlock(block string) *AgentAction {
 func parseActionParams(s string) []keyValue {
 	var result []keyValue
 	// Split by known keys to handle values with spaces
-	keys := []string{"title", "subject", "start", "end"}
+	keys := []string{"title", "subject", "start", "end", "chatid"}
 	remaining := s
 	for len(remaining) > 0 {
 		remaining = strings.TrimSpace(remaining)
@@ -672,13 +674,19 @@ func parseActionParams(s string) []keyValue {
 func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID string, actions []AgentAction) []string {
 	var results []string
 	for _, a := range actions {
+		// Allow each action to override the target chat via chatid param
+		targetChat := chatID
+		if cid := a.Params["chatid"]; cid != "" {
+			targetChat = extractChatID(cid)
+		}
+
 		switch a.Type {
 		case "NOTE":
 			title := a.Params["title"]
 			if title == "" {
 				title = "Note"
 			}
-			note, err := client.CreateNote(ctx, chatID, &ringcentral.CreateNoteRequest{
+			note, err := client.CreateNote(ctx, targetChat, &ringcentral.CreateNoteRequest{
 				Title: title,
 				Body:  a.Body,
 			})
@@ -691,21 +699,21 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 				slog.Error("action: publish note failed", "noteID", note.ID, "error", pubErr)
 			}
 			results = append(results, fmt.Sprintf("Note created: `%s` — %s", note.ID, title))
-			slog.Info("action: created note", "noteID", note.ID, "chatID", chatID, "title", title)
+			slog.Info("action: created note", "noteID", note.ID, "chatID", targetChat, "title", title)
 
 		case "TASK":
 			subject := a.Params["subject"]
 			if subject == "" {
 				continue
 			}
-			task, err := client.CreateTask(ctx, chatID, &ringcentral.CreateTaskRequest{Subject: subject})
+			task, err := client.CreateTask(ctx, targetChat, &ringcentral.CreateTaskRequest{Subject: subject})
 			if err != nil {
 				slog.Error("action: create task failed", "error", err)
 				results = append(results, fmt.Sprintf("Failed to create task: %v", err))
 				continue
 			}
 			results = append(results, fmt.Sprintf("Task created: `%s` — %s", task.ID, subject))
-			slog.Info("action: created task", "taskID", task.ID, "chatID", chatID, "subject", subject)
+			slog.Info("action: created task", "taskID", task.ID, "chatID", targetChat, "subject", subject)
 
 		case "EVENT":
 			title := a.Params["title"]
@@ -737,17 +745,31 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 				results = append(results, "Failed to create card: invalid JSON")
 				continue
 			}
-			card, err := client.CreateAdaptiveCard(ctx, chatID, json.RawMessage(cardJSON))
+			card, err := client.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
 			if err != nil {
 				slog.Error("action: create adaptive card failed", "error", err)
 				results = append(results, fmt.Sprintf("Failed to create card: %v", err))
 				continue
 			}
-			results = append(results, fmt.Sprintf("Adaptive Card created: `%s`", card.ID))
-			slog.Info("action: created adaptive card", "cardID", card.ID, "chatID", chatID)
+			results = append(results, fmt.Sprintf("Adaptive Card created: `%s` in chat `%s`", card.ID, targetChat))
+			slog.Info("action: created adaptive card", "cardID", card.ID, "chatID", targetChat)
 		}
 	}
 	return results
+}
+
+// extractChatID extracts a numeric chat ID from various formats:
+// "12345", "![:Team](12345)", "![:Person](12345)"
+func extractChatID(s string) string {
+	s = strings.TrimSpace(s)
+	// Handle mention format: ![:Team](12345) or ![:Person](12345)
+	if idx := strings.Index(s, "("); idx >= 0 {
+		end := strings.Index(s[idx:], ")")
+		if end > 0 {
+			return s[idx+1 : idx+end]
+		}
+	}
+	return s
 }
 
 func formatActionHelp(cmd string) string {
