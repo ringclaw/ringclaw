@@ -193,32 +193,111 @@ func TestStatusEmoji(t *testing.T) {
 	}
 }
 
-func TestWantsNoteOutput(t *testing.T) {
-	tests := []struct {
-		text string
-		want bool
-	}{
-		// Chinese
-		{"总结一下Nova工具人今天的聊天内容，并用Note的方式发送", true},
-		{"总结今天的内容，创建Note", true},
-		{"总结一下，用笔记发送到群里", true},
-		{"总结一下，保存为note", true},
-		{"总结一下，以Note发送", true},
-		{"summarize today and send as note", true},
-		// English
-		{"summarize and create a note", true},
-		{"summarize this chat as a note", true},
-		{"summarize in note format", true},
-		// Should NOT match
-		{"总结一下今天的聊天", false},
-		{"summarize today", false},
-		{"/note list", false},
-		{"hello", false},
+func TestParseAgentActions_NoAction(t *testing.T) {
+	reply := "This is a normal reply without any actions."
+	clean, actions := ParseAgentActions(reply)
+	if clean != reply {
+		t.Errorf("expected clean reply to be original, got %q", clean)
 	}
-	for _, tt := range tests {
-		if got := wantsNoteOutput(tt.text); got != tt.want {
-			t.Errorf("wantsNoteOutput(%q) = %v, want %v", tt.text, got, tt.want)
-		}
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions, got %d", len(actions))
+	}
+}
+
+func TestParseAgentActions_Note(t *testing.T) {
+	reply := `Here is the summary.
+
+ACTION:NOTE title=Meeting Summary
+## Key Points
+- Discussed API design
+- Agreed on deadline
+END_ACTION`
+
+	clean, actions := ParseAgentActions(reply)
+	if !strings.Contains(clean, "Here is the summary") {
+		t.Errorf("clean reply should contain main text, got %q", clean)
+	}
+	if strings.Contains(clean, "ACTION:") {
+		t.Errorf("clean reply should not contain ACTION block, got %q", clean)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if actions[0].Type != "NOTE" {
+		t.Errorf("expected NOTE, got %s", actions[0].Type)
+	}
+	if actions[0].Params["title"] != "Meeting Summary" {
+		t.Errorf("expected title 'Meeting Summary', got %q", actions[0].Params["title"])
+	}
+	if !strings.Contains(actions[0].Body, "Key Points") {
+		t.Errorf("expected body to contain 'Key Points', got %q", actions[0].Body)
+	}
+}
+
+func TestParseAgentActions_Task(t *testing.T) {
+	reply := `Done.
+
+ACTION:TASK subject=Review PR #6
+END_ACTION`
+
+	clean, actions := ParseAgentActions(reply)
+	if clean != "Done." {
+		t.Errorf("expected 'Done.', got %q", clean)
+	}
+	if len(actions) != 1 || actions[0].Type != "TASK" {
+		t.Fatalf("expected 1 TASK action, got %v", actions)
+	}
+	if actions[0].Params["subject"] != "Review PR #6" {
+		t.Errorf("expected subject 'Review PR #6', got %q", actions[0].Params["subject"])
+	}
+}
+
+func TestParseAgentActions_Event(t *testing.T) {
+	reply := `Meeting scheduled.
+
+ACTION:EVENT title=Team Standup start=2026-03-26T14:00:00Z end=2026-03-26T15:00:00Z
+END_ACTION`
+
+	clean, actions := ParseAgentActions(reply)
+	if clean != "Meeting scheduled." {
+		t.Errorf("expected 'Meeting scheduled.', got %q", clean)
+	}
+	if len(actions) != 1 || actions[0].Type != "EVENT" {
+		t.Fatalf("expected 1 EVENT action, got %v", actions)
+	}
+	if actions[0].Params["title"] != "Team Standup" {
+		t.Errorf("expected title 'Team Standup', got %q", actions[0].Params["title"])
+	}
+	if actions[0].Params["start"] != "2026-03-26T14:00:00Z" {
+		t.Errorf("expected start '2026-03-26T14:00:00Z', got %q", actions[0].Params["start"])
+	}
+	if actions[0].Params["end"] != "2026-03-26T15:00:00Z" {
+		t.Errorf("expected end '2026-03-26T15:00:00Z', got %q", actions[0].Params["end"])
+	}
+}
+
+func TestParseAgentActions_Multiple(t *testing.T) {
+	reply := `Summary done.
+
+ACTION:NOTE title=Summary
+content here
+END_ACTION
+
+ACTION:TASK subject=Follow up on action items
+END_ACTION`
+
+	clean, actions := ParseAgentActions(reply)
+	if clean != "Summary done." {
+		t.Errorf("expected 'Summary done.', got %q", clean)
+	}
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(actions))
+	}
+	if actions[0].Type != "NOTE" {
+		t.Errorf("expected first action NOTE, got %s", actions[0].Type)
+	}
+	if actions[1].Type != "TASK" {
+		t.Errorf("expected second action TASK, got %s", actions[1].Type)
 	}
 }
 

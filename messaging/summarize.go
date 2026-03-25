@@ -250,15 +250,17 @@ func IsSummarizeCommand(text string) bool {
 
 // SummarizeRequest holds parsed summarize parameters.
 type SummarizeRequest struct {
-	ChatID   string
-	ChatName string
-	TimeFrom time.Time
+	ChatID      string
+	ChatName    string
+	TimeFrom    time.Time
+	UserRequest string // original user message
 }
 
 // ResolveChatTarget finds the target chat ID from mentions or fuzzy name matching.
 func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, text string, mentions []ringcentral.Mention) (*SummarizeRequest, error) {
 	req := &SummarizeRequest{
-		TimeFrom: todayStart(),
+		TimeFrom:    todayStart(),
+		UserRequest: text,
 	}
 
 	// Parse time range from text
@@ -373,14 +375,21 @@ func BuildSummaryPrompt(ctx context.Context, client *ringcentral.Client, req *Su
 
 	timeDesc := formatTimeDesc(req.TimeFrom)
 
-	prompt := fmt.Sprintf(`Please summarize the following chat messages from "%s" (%s). 
+	userReq := req.UserRequest
+	if userReq == "" {
+		userReq = "summarize the chat"
+	}
+
+	prompt := fmt.Sprintf(`User request: %s
+
+Please summarize the following chat messages from "%s" (%s). 
 Provide a concise summary in the same language as the messages. 
 Highlight key topics, decisions, and action items if any.
-
+%s
 --- Messages (%d total) ---
 %s
 --- End of Messages ---`,
-		chatLabel, timeDesc, len(lines), strings.Join(lines, "\n"))
+		userReq, chatLabel, timeDesc, ActionPrompt, len(lines), strings.Join(lines, "\n"))
 
 	slog.Info("built prompt", "component", "summarize", "chatLabel", chatLabel, "messages", len(lines), "chars", len(prompt))
 	return prompt, nil

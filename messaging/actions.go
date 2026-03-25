@@ -479,38 +479,199 @@ func statusEmoji(status string) string {
 	}
 }
 
-// noteOutputPatterns matches phrases indicating the user wants output as a Note.
-var noteOutputPatterns = []string{
-	// Chinese
-	"用note发送", "用note发", "以note发送", "以note发",
-	"创建note", "生成note", "发到note", "发note",
-	"用笔记发送", "用笔记发", "以笔记发送", "创建笔记", "生成笔记",
-	"写入note", "写入笔记", "保存为note", "保存为笔记",
-	"note方式", "笔记方式",
-	// English
-	"send as note", "send as a note", "create a note", "create note",
-	"save as note", "save as a note", "as a note", "as note",
-	"post as note", "write a note", "write note",
-	"in note form", "note format",
+// ActionPrompt is appended to prompts to enable the AI agent to trigger actions.
+const ActionPrompt = `
+
+You have the following actions available. If the user's request implies creating a Note, Task, or Event, append one or more ACTION blocks at the END of your response. Your main response text should come FIRST, then any ACTION blocks.
+
+ACTION:NOTE title=<title>
+<body content in the note>
+END_ACTION
+
+ACTION:TASK subject=<subject>
+END_ACTION
+
+ACTION:EVENT title=<title> start=<ISO8601> end=<ISO8601>
+END_ACTION
+
+Rules:
+- Only use ACTION blocks when the user explicitly or implicitly requests creating notes/tasks/events.
+- You may include multiple ACTION blocks if needed.
+- If no action is needed, just reply normally without any ACTION block.
+- The main response should NOT contain the ACTION blocks — they are metadata only.
+`
+
+// AgentAction represents a parsed action from the agent's response.
+type AgentAction struct {
+	Type   string // "NOTE", "TASK", "EVENT"
+	Params map[string]string
+	Body   string
 }
 
-// wantsNoteOutput checks if the user's text contains a phrase requesting Note output.
-func wantsNoteOutput(text string) bool {
-	lower := strings.ToLower(text)
-	// Remove spaces and common Chinese particles for fuzzy matching
-	for _, ch := range []string{" ", "的", "了", "把", "将", "来", "去"} {
-		lower = strings.ReplaceAll(lower, ch, "")
-	}
-	for _, p := range noteOutputPatterns {
-		normalized := strings.ToLower(p)
-		for _, ch := range []string{" "} {
-			normalized = strings.ReplaceAll(normalized, ch, "")
+// ParseAgentActions extracts ACTION blocks from the agent's response and returns
+// the clean reply text (without ACTION blocks) and the parsed actions.
+func ParseAgentActions(reply string) (string, []AgentAction) {
+	var actions []AgentAction
+	clean := reply
+
+	for {
+		startIdx := strings.Index(clean, "ACTION:")
+		if startIdx < 0 {
+			break
 		}
-		if strings.Contains(lower, normalized) {
-			return true
+		endIdx := strings.Index(clean[startIdx:], "END_ACTION")
+		if endIdx < 0 {
+			break
+		}
+		endIdx += startIdx + len("END_ACTION")
+
+		block := clean[startIdx:endIdx]
+		action := parseActionBlock(block)
+		if action != nil {
+			actions = append(actions, *action)
+		}
+
+		clean = clean[:startIdx] + clean[endIdx:]
+	}
+
+	clean = strings.TrimSpace(clean)
+	return clean, actions
+}
+
+func parseActionBlock(block string) *AgentAction {
+	lines := strings.SplitN(block, "\n", 2)
+	if len(lines) == 0 {
+		return nil
+	}
+
+	header := strings.TrimSpace(lines[0])
+	// header: "ACTION:NOTE title=xxx" or "ACTION:TASK subject=xxx"
+	if !strings.HasPrefix(header, "ACTION:") {
+		return nil
+	}
+	header = header[len("ACTION:"):]
+
+	parts := strings.SplitN(header, " ", 2)
+	actionType := strings.TrimSpace(parts[0])
+
+	params := make(map[string]string)
+	if len(parts) > 1 {
+		paramStr := parts[1]
+		// Parse key=value pairs; handle start= and end= with ISO timestamps
+		for _, p := range parseActionParams(paramStr) {
+			params[p.key] = p.value
 		}
 	}
-	return false
+
+	body := ""
+	if len(lines) > 1 {
+		body = strings.TrimSuffix(lines[1], "END_ACTION")
+		body = strings.TrimSpace(body)
+	}
+
+	return &AgentAction{
+		Type:   actionType,
+		Params: params,
+		Body:   body,
+	}
+}
+
+// parseActionParams parses "title=xxx start=2026-01-01T10:00:00Z end=2026-01-01T11:00:00Z"
+func parseActionParams(s string) []keyValue {
+	var result []keyValue
+	// Split by known keys to handle values with spaces
+	keys := []string{"title", "subject", "start", "end"}
+	remaining := s
+	for len(remaining) > 0 {
+		remaining = strings.TrimSpace(remaining)
+		matched := false
+		for _, key := range keys {
+			prefix := key + "="
+			if strings.HasPrefix(remaining, prefix) {
+				remaining = remaining[len(prefix):]
+				// Find next key= or end of string
+				nextIdx := len(remaining)
+				for _, k := range keys {
+					idx := strings.Index(remaining, " "+k+"=")
+					if idx >= 0 && idx < nextIdx {
+						nextIdx = idx
+					}
+				}
+				value := strings.TrimSpace(remaining[:nextIdx])
+				result = append(result, keyValue{key: key, value: value})
+				remaining = remaining[nextIdx:]
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			break
+		}
+	}
+	return result
+}
+
+// ExecuteAgentActions executes parsed actions against the RC API.
+func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID string, actions []AgentAction) []string {
+	var results []string
+	for _, a := range actions {
+		switch a.Type {
+		case "NOTE":
+			title := a.Params["title"]
+			if title == "" {
+				title = "Note"
+			}
+			note, err := client.CreateNote(ctx, chatID, &ringcentral.CreateNoteRequest{
+				Title: title,
+				Body:  a.Body,
+			})
+			if err != nil {
+				slog.Error("action: create note failed", "error", err)
+				results = append(results, fmt.Sprintf("Failed to create note: %v", err))
+				continue
+			}
+			if pubErr := client.PublishNote(ctx, note.ID); pubErr != nil {
+				slog.Error("action: publish note failed", "noteID", note.ID, "error", pubErr)
+			}
+			results = append(results, fmt.Sprintf("Note created: `%s` — %s", note.ID, title))
+			slog.Info("action: created note", "noteID", note.ID, "chatID", chatID, "title", title)
+
+		case "TASK":
+			subject := a.Params["subject"]
+			if subject == "" {
+				continue
+			}
+			task, err := client.CreateTask(ctx, chatID, &ringcentral.CreateTaskRequest{Subject: subject})
+			if err != nil {
+				slog.Error("action: create task failed", "error", err)
+				results = append(results, fmt.Sprintf("Failed to create task: %v", err))
+				continue
+			}
+			results = append(results, fmt.Sprintf("Task created: `%s` — %s", task.ID, subject))
+			slog.Info("action: created task", "taskID", task.ID, "chatID", chatID, "subject", subject)
+
+		case "EVENT":
+			title := a.Params["title"]
+			startTime := a.Params["start"]
+			endTime := a.Params["end"]
+			if title == "" || startTime == "" || endTime == "" {
+				continue
+			}
+			event, err := client.CreateEvent(ctx, &ringcentral.CreateEventRequest{
+				Title:     title,
+				StartTime: startTime,
+				EndTime:   endTime,
+			})
+			if err != nil {
+				slog.Error("action: create event failed", "error", err)
+				results = append(results, fmt.Sprintf("Failed to create event: %v", err))
+				continue
+			}
+			results = append(results, fmt.Sprintf("Event created: `%s` — %s", event.ID, title))
+			slog.Info("action: created event", "eventID", event.ID, "title", title)
+		}
+	}
+	return results
 }
 
 func formatActionHelp(cmd string) string {

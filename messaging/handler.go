@@ -235,6 +235,18 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			reply = fmt.Sprintf("Error: %v", err)
 		}
 
+		// Parse and execute any ACTION blocks from the agent's response
+		cleanReply, actions := ParseAgentActions(reply)
+		if len(actions) > 0 {
+			reply = cleanReply
+			results := ExecuteAgentActions(ctx, client, chatID, actions)
+			if len(results) > 0 {
+				defer func() {
+					_ = SendTextReply(ctx, client, chatID, strings.Join(results, "\n"))
+				}()
+			}
+		}
+
 		// Extract image URLs from markdown
 		imageURLs := ExtractImageURLs(reply)
 
@@ -460,24 +472,15 @@ func (h *Handler) handleSummarize(ctx context.Context, client *ringcentral.Clien
 		return
 	}
 
-	sendReply(wrapAnswer(reply))
+	// Parse and execute any ACTION blocks from the agent's response
+	cleanReply, actions := ParseAgentActions(reply)
+	sendReply(wrapAnswer(cleanReply))
 
-	// If user requested note output, create a Note in the target chat
-	if wantsNoteOutput(text) {
-		noteTitle := fmt.Sprintf("Summary: %s", req.ChatName)
-		note, noteErr := client.CreateNote(ctx, req.ChatID, &ringcentral.CreateNoteRequest{
-			Title: noteTitle,
-			Body:  reply,
-		})
-		if noteErr != nil {
-			slog.Error("failed to create note", "component", "handler", "error", noteErr)
-			_ = SendTextReply(ctx, client, chatID, fmt.Sprintf("Summary sent, but failed to create Note: %v", noteErr))
-			return
+	if len(actions) > 0 {
+		targetChatID := req.ChatID
+		results := ExecuteAgentActions(ctx, client, targetChatID, actions)
+		if len(results) > 0 {
+			_ = SendTextReply(ctx, client, chatID, strings.Join(results, "\n"))
 		}
-		if pubErr := client.PublishNote(ctx, note.ID); pubErr != nil {
-			slog.Error("failed to publish note", "component", "handler", "noteID", note.ID, "error", pubErr)
-		}
-		_ = SendTextReply(ctx, client, chatID, fmt.Sprintf("Note created in %s: `%s`", req.ChatName, note.ID))
-		slog.Info("created summary note", "component", "handler", "noteID", note.ID, "chatID", req.ChatID)
 	}
 }
