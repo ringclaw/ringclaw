@@ -12,9 +12,12 @@ import (
 // IsActionCommand checks if text starts with /task, /note, or /event.
 func IsActionCommand(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
-	return strings.HasPrefix(lower, "/task") ||
-		strings.HasPrefix(lower, "/note") ||
-		strings.HasPrefix(lower, "/event")
+	for _, cmd := range []string{"/task", "/note", "/event"} {
+		if lower == cmd || strings.HasPrefix(lower, cmd+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 // HandleActionCommand routes /task, /note, /event commands.
