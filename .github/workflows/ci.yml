@@ -71,7 +71,7 @@ jobs:
         run: |
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
-          go build -trimpath -ldflags="-s -w -X github.com/ringclaw/ringclaw/cmd.Version=${{ steps.version.outputs.version }}" \
+          go build -trimpath -ldflags="-s -w -X github.com/ringclaw/ringclaw/cmd.Version=${{ steps.version.outputs.version }} -X github.com/ringclaw/ringclaw/cmd.Commit=${{ github.sha }}" \
             -o ringclaw_${{ matrix.goos }}_${{ matrix.goarch }}${EXT} .
 
       - uses: actions/upload-artifact@v4
