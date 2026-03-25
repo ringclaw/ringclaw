@@ -219,12 +219,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 				slog.Error("agent not available", "component", "handler", "agent", agentName, "error", agErr)
 				reply = fmt.Sprintf("Agent %q is not available: %v", agentName, agErr)
 			} else {
-				reply, err = h.chatWithAgent(ctx, ag, post.CreatorID, message)
+				reply, err = h.chatWithAgent(ctx, ag, post.CreatorID, message+ActionPrompt)
 			}
 		} else {
 			ag := h.getDefaultAgent()
 			if ag != nil {
-				reply, err = h.chatWithAgent(ctx, ag, post.CreatorID, text)
+				reply, err = h.chatWithAgent(ctx, ag, post.CreatorID, text+ActionPrompt)
 			} else {
 				slog.Warn("agent not ready, using echo mode", "component", "handler", "creatorID", post.CreatorID)
 				reply = "[echo] " + text
