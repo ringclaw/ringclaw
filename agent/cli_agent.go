@@ -68,6 +68,14 @@ func (a *CLIAgent) Info() AgentInfo {
 	}
 }
 
+// ChatWithImages falls back to text-only for CLI agents.
+func (a *CLIAgent) ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error) {
+	if len(images) > 0 {
+		message += fmt.Sprintf("\n\n[Note: %d image(s) were attached but CLI agents do not support image input.]", len(images))
+	}
+	return a.Chat(ctx, conversationID, message)
+}
+
 // Chat sends a message to the CLI agent and returns the response.
 func (a *CLIAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
 	switch a.name {

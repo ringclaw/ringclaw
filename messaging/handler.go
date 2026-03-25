@@ -213,18 +213,27 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
 		}
 
+		// Download image attachments if present
+		images := extractImageAttachments(ctx, client, post)
+
 		if agentName != "" {
 			ag, agErr := h.getAgent(ctx, agentName)
 			if agErr != nil {
 				slog.Error("agent not available", "component", "handler", "agent", agentName, "error", agErr)
 				reply = fmt.Sprintf("Agent %q is not available: %v", agentName, agErr)
+			} else if len(images) > 0 {
+				reply, err = h.chatWithAgentImages(ctx, ag, post.CreatorID, message+ActionPrompt, images)
 			} else {
 				reply, err = h.chatWithAgent(ctx, ag, post.CreatorID, message+ActionPrompt)
 			}
 		} else {
 			ag := h.getDefaultAgent()
 			if ag != nil {
-				reply, err = h.chatWithAgent(ctx, ag, post.CreatorID, text+ActionPrompt)
+				if len(images) > 0 {
+					reply, err = h.chatWithAgentImages(ctx, ag, post.CreatorID, text+ActionPrompt, images)
+				} else {
+					reply, err = h.chatWithAgent(ctx, ag, post.CreatorID, text+ActionPrompt)
+				}
 			} else {
 				slog.Warn("agent not ready, using echo mode", "component", "handler", "creatorID", post.CreatorID)
 				reply = "[echo] " + text
@@ -303,6 +312,88 @@ func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, mes
 
 	slog.Info("agent replied", "component", "handler", "info", info, "elapsed", elapsed, "reply", truncate(reply, 100))
 	return reply, nil
+}
+
+// chatWithAgentImages sends a message with images to the agent.
+func (h *Handler) chatWithAgentImages(ctx context.Context, ag agent.Agent, userID, message string, images []agent.ImageAttachment) (string, error) {
+	info := ag.Info()
+	slog.Info("dispatching to agent with images", "component", "handler", "info", info, "userID", userID, "images", len(images))
+
+	start := time.Now()
+	reply, err := ag.ChatWithImages(ctx, userID, message, images)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		slog.Error("agent error", "component", "handler", "info", info, "elapsed", elapsed, "error", err)
+		return "", err
+	}
+
+	slog.Info("agent replied", "component", "handler", "info", info, "elapsed", elapsed, "reply", truncate(reply, 100))
+	return reply, nil
+}
+
+const maxImages = 5
+
+var imageMediaTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+	"image/jpg":  true,
+}
+
+// extractImageAttachments downloads image attachments from a post.
+func extractImageAttachments(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) []agent.ImageAttachment {
+	var images []agent.ImageAttachment
+	for _, att := range post.Attachments {
+		if len(images) >= maxImages {
+			break
+		}
+		if att.ContentURI == "" {
+			continue
+		}
+		// Check media type from attachment or infer from name
+		mt := att.MediaType
+		if mt == "" {
+			mt = inferMediaType(att.Name)
+		}
+		if !imageMediaTypes[mt] {
+			continue
+		}
+		data, detectedMT, err := client.DownloadAttachment(ctx, att.ContentURI)
+		if err != nil {
+			slog.Error("failed to download attachment", "component", "handler", "id", att.ID, "error", err)
+			continue
+		}
+		if detectedMT != "" && !imageMediaTypes[detectedMT] {
+			continue
+		}
+		if detectedMT != "" {
+			mt = detectedMT
+		}
+		images = append(images, agent.ImageAttachment{
+			Data:      data,
+			MediaType: mt,
+			Name:      att.Name,
+		})
+		slog.Info("downloaded image attachment", "component", "handler", "id", att.ID, "name", att.Name, "size", len(data))
+	}
+	return images
+}
+
+func inferMediaType(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".png"):
+		return "image/png"
+	case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(lower, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(lower, ".webp"):
+		return "image/webp"
+	}
+	return ""
 }
 
 // switchDefault switches the default agent.
