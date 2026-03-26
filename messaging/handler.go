@@ -220,6 +220,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			slog.Error("failed to send reply", "component", "handler", "error", err)
 		}
 		return
+	} else if text == "/new" || text == "/clear" {
+		reply := h.resetDefaultSession(ctx, post.CreatorID)
+		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
+			slog.Error("failed to send reply", "component", "handler", "error", err)
+		}
+		return
 	} else if text == "/help" {
 		reply := buildHelpText()
 		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
@@ -462,6 +468,24 @@ func (h *Handler) switchDefault(ctx context.Context, name string) string {
 	info := ag.Info()
 	slog.Info("switched default agent", "component", "handler", "from", old, "to", name, "info", info)
 	return fmt.Sprintf("switch to %s", name)
+}
+
+// resetDefaultSession resets the session for the given userID on the default agent.
+func (h *Handler) resetDefaultSession(ctx context.Context, userID string) string {
+	ag := h.getDefaultAgent()
+	if ag == nil {
+		return "No agent running."
+	}
+	name := ag.Info().Name
+	sessionID, err := ag.ResetSession(ctx, userID)
+	if err != nil {
+		slog.Error("reset session failed", "component", "handler", "userID", userID, "error", err)
+		return fmt.Sprintf("Failed to reset session: %v", err)
+	}
+	if sessionID != "" {
+		return fmt.Sprintf("New %s session created\n%s", name, sessionID)
+	}
+	return fmt.Sprintf("New %s session created", name)
 }
 
 func (h *Handler) buildStatus() string {
