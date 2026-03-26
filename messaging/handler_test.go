@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -135,7 +136,7 @@ func TestBuildHelpText(t *testing.T) {
 	if text == "" {
 		t.Error("help text is empty")
 	}
-	if !containsStr(text, "/info") {
+	if !strings.Contains(text, "/info") {
 		t.Error("help text should mention /info")
 	}
 }
