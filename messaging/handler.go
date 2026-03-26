@@ -166,14 +166,14 @@ func (h *Handler) resolveAlias(name string) string {
 	return name
 }
 
-// parseCommand checks if text starts with "/" or "@" followed by agent name(s).
-// Supports multiple agents: "@cc @cx hello" returns (["claude","codex"], "hello").
+// parseCommand checks if text starts with "/" followed by agent name(s).
+// Supports multiple agents: "/cc /cx hello" returns (["claude","codex"], "hello").
 // Returns (agentNames, actualMessage). Aliases are resolved automatically.
 // If no command prefix, returns (nil, originalText).
 //
 // Ported from github.com/fastclaw-ai/weclaw commits 9ea72a1 + 981d58c.
 func (h *Handler) parseCommand(text string) ([]string, string) {
-	if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "@") {
+	if !strings.HasPrefix(text, "/") {
 		return nil, text
 	}
 
@@ -181,17 +181,17 @@ func (h *Handler) parseCommand(text string) ([]string, string) {
 	rest := text
 	for {
 		rest = strings.TrimSpace(rest)
-		if !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, "@") {
+		if !strings.HasPrefix(rest, "/") {
 			break
 		}
 
 		after := rest[1:]
-		idx := strings.IndexAny(after, " /@")
+		idx := strings.IndexAny(after, " /")
 		var token string
 		if idx < 0 {
 			token = after
 			rest = ""
-		} else if after[idx] == '/' || after[idx] == '@' {
+		} else if after[idx] == '/' {
 			token = after[:idx]
 			rest = after[idx:]
 		} else {
@@ -274,7 +274,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
-	// Route: "/agent msg", "@agent msg", or "@a @b msg" -> agent(s)
+	// Route: "/agent msg" or "/a /b msg" -> agent(s)
 	agentNames, message := h.parseCommand(text)
 
 	// No command prefix -> send to default agent
@@ -643,9 +643,9 @@ func formatDuration(d time.Duration) string {
 
 func buildHelpText() string {
 	return `Available commands:
-@agent or /agent - Switch default agent
-@agent msg or /agent msg - Send to a specific agent
-@a @b msg - Broadcast to multiple agents
+/agent - Switch default agent
+/agent msg - Send to a specific agent
+/a /b msg - Broadcast to multiple agents
 /new or /clear - Start a new session
 /cwd /path - Switch workspace directory
 /info - Show current agent info

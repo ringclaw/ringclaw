@@ -100,8 +100,7 @@ Send these as messages in your RingCentral chat:
 | `hello` | Send to default agent |
 | `/codex write a function` | Send to a specific agent |
 | `/cc explain this code` | Send to agent by alias |
-| `@claude explain this` | @ prefix — same as `/claude explain this` |
-| `@cc @cx explain this` | Broadcast to multiple agents in parallel |
+| `/cc /cx explain this` | Broadcast to multiple agents in parallel |
 | `/claude` | Switch default agent to Claude |
 | `/new` or `/clear` | Reset current agent session |
 | `/cwd /path/to/project` | Switch workspace directory for all agents |
@@ -134,16 +133,15 @@ Unknown `/commands` (e.g. `/status`, `/compact`) are forwarded to the default ag
 
 Switching default agent is persisted to config — survives restarts.
 
-### @ Prefix and Multi-Agent Broadcast
+### Multi-Agent Broadcast
 
-The `@` prefix is an alternative to `/` for directing messages:
+Send the same message to multiple agents in parallel:
 
 ```
-@claude explain this code        # same as /claude explain this code
-@cc @cx review this function     # broadcast to Claude and Codex in parallel
+/cc /cx review this function     # broadcast to Claude and Codex in parallel
 ```
 
-When broadcasting, each agent replies in a separate message prefixed with `[agent-name]`.
+Each agent replies in a separate message prefixed with `[agent-name]`.
 
 ### Custom Aliases
 
@@ -159,7 +157,7 @@ You can define custom trigger aliases per agent in `config.json`:
 }
 ```
 
-Then `/gpt hello` or `@ai hello` will route to Claude. RingClaw warns on startup if custom aliases conflict with built-in aliases or other agents.
+Then `/gpt hello` will route to Claude. RingClaw warns on startup if custom aliases conflict with built-in aliases or other agents.
 
 ### Session Management
 

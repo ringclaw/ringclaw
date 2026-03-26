@@ -33,20 +33,9 @@ func TestParseCommand_SlashWithAgent(t *testing.T) {
 	}
 }
 
-func TestParseCommand_AtPrefix(t *testing.T) {
-	h := newTestHandler()
-	names, msg := h.parseCommand("@claude explain this code")
-	if len(names) != 1 || names[0] != "claude" {
-		t.Errorf("expected [claude], got %v", names)
-	}
-	if msg != "explain this code" {
-		t.Errorf("expected 'explain this code', got %q", msg)
-	}
-}
-
 func TestParseCommand_MultiAgent(t *testing.T) {
 	h := newTestHandler()
-	names, msg := h.parseCommand("@cc @cx hello")
+	names, msg := h.parseCommand("/cc /cx hello")
 	if len(names) != 2 || names[0] != "claude" || names[1] != "codex" {
 		t.Errorf("expected [claude codex], got %v", names)
 	}
@@ -57,7 +46,7 @@ func TestParseCommand_MultiAgent(t *testing.T) {
 
 func TestParseCommand_MultiAgentDedup(t *testing.T) {
 	h := newTestHandler()
-	names, msg := h.parseCommand("@cc @cc hello")
+	names, msg := h.parseCommand("/cc /cc hello")
 	if len(names) != 1 || names[0] != "claude" {
 		t.Errorf("expected [claude] (deduped), got %v", names)
 	}
