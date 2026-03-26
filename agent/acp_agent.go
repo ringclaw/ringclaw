@@ -40,6 +40,7 @@ type ACPAgent struct {
 
 	stderr         *acpStderrWriter // captures stderr for error reporting
 	droppedUpdates atomic.Int64     // counter for dropped notification updates
+	loggedMethods  sync.Map         // tracks already-logged unhandled methods
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
@@ -461,11 +462,14 @@ func (a *ACPAgent) readLoop() {
 
 		default:
 			if msg.Method != "" {
-				raw := line
-				if len(raw) > 200 {
-					raw = raw[:200]
+				// Only log each unhandled method once to avoid noise
+				if _, loaded := a.loggedMethods.LoadOrStore(msg.Method, true); !loaded {
+					raw := line
+					if len(raw) > 200 {
+						raw = raw[:200]
+					}
+					slog.Debug("unhandled method", "component", "acp", "method", msg.Method, "raw", raw)
 				}
-				slog.Debug("unhandled method", "component", "acp", "method", msg.Method, "raw", raw)
 			}
 		}
 	}
