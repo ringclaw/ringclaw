@@ -178,6 +178,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			Command:      agCfg.Command,
 			Args:         agCfg.Args,
 			Cwd:          agCfg.Cwd,
+			Env:          agCfg.Env,
 			Model:        agCfg.Model,
 			SystemPrompt: agCfg.SystemPrompt,
 		})
@@ -193,6 +194,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			Command:      agCfg.Command,
 			Args:         agCfg.Args,
 			Cwd:          agCfg.Cwd,
+			Env:          agCfg.Env,
 			Model:        agCfg.Model,
 			SystemPrompt: agCfg.SystemPrompt,
 		})
