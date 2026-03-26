@@ -3,7 +3,7 @@ set -e
 
 REPO="ringclaw/ringclaw"
 BINARY="ringclaw"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 CHANNEL="${1:-}" # alpha, beta, or empty for stable
 
 # Detect OS
