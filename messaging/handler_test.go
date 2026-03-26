@@ -168,3 +168,39 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestInferMediaType(t *testing.T) {
+	tests := []struct {
+		name, want string
+	}{
+		{"photo.png", "image/png"},
+		{"photo.PNG", "image/png"},
+		{"photo.jpg", "image/jpeg"},
+		{"photo.jpeg", "image/jpeg"},
+		{"photo.gif", "image/gif"},
+		{"photo.webp", "image/webp"},
+		{"document.pdf", ""},
+		{"file.txt", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := inferMediaType(tt.name); got != tt.want {
+			t.Errorf("inferMediaType(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestImageMediaTypes(t *testing.T) {
+	supported := []string{"image/png", "image/jpeg", "image/gif", "image/webp", "image/jpg"}
+	for _, mt := range supported {
+		if !imageMediaTypes[mt] {
+			t.Errorf("expected %q to be supported", mt)
+		}
+	}
+	unsupported := []string{"image/bmp", "application/pdf", "text/plain", ""}
+	for _, mt := range unsupported {
+		if imageMediaTypes[mt] {
+			t.Errorf("expected %q to NOT be supported", mt)
+		}
+	}
+}

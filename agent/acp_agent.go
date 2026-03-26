@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -109,8 +110,10 @@ type promptParams struct {
 }
 
 type promptEntry struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type      string `json:"type"`                // "text" or "image"
+	Text      string `json:"text,omitempty"`
+	Data      string `json:"data,omitempty"`       // base64 encoded image data
+	MediaType string `json:"mediaType,omitempty"`  // e.g. "image/png"
 }
 
 type promptResult struct {
@@ -366,6 +369,104 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 			result := strings.TrimSpace(strings.Join(textParts, ""))
 			if result == "" {
 				// Try extracting from prompt result (some agents return content here)
+				result = extractPromptResultText(done.result)
+			}
+			if result == "" {
+				return "", fmt.Errorf("agent returned empty response")
+			}
+			return result, nil
+		}
+	}
+}
+
+// ChatWithImages sends a message with image attachments to the agent.
+func (a *ACPAgent) ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error) {
+	a.mu.Lock()
+	if !a.started {
+		if err := a.Start(ctx); err != nil {
+			a.mu.Unlock()
+			return "", err
+		}
+	}
+	a.mu.Unlock()
+
+	sessionID, isNew, err := a.getOrCreateSession(ctx, conversationID)
+	if err != nil {
+		return "", fmt.Errorf("session error: %w", err)
+	}
+
+	pid := a.cmd.Process.Pid
+	if isNew {
+		slog.Info("new session created", "component", "acp", "pid", pid, "session", sessionID, "conversation", conversationID)
+	} else {
+		slog.Info("reusing session", "component", "acp", "pid", pid, "session", sessionID, "conversation", conversationID)
+	}
+
+	notifyCh := make(chan *sessionUpdate, 256)
+	a.notifyMu.Lock()
+	a.notifyCh[sessionID] = notifyCh
+	a.notifyMu.Unlock()
+	defer func() {
+		a.notifyMu.Lock()
+		delete(a.notifyCh, sessionID)
+		a.notifyMu.Unlock()
+	}()
+
+	// Build prompt entries: text first, then images
+	entries := []promptEntry{{Type: "text", Text: message}}
+	for _, img := range images {
+		entries = append(entries, promptEntry{
+			Type:      "image",
+			Data:      base64.StdEncoding.EncodeToString(img.Data),
+			MediaType: img.MediaType,
+		})
+	}
+
+	type promptDoneMsg struct {
+		result json.RawMessage
+		err    error
+	}
+	promptDone := make(chan promptDoneMsg, 1)
+	go func() {
+		result, err := a.call(ctx, "session/prompt", promptParams{
+			SessionID: sessionID,
+			Prompt:    entries,
+		})
+		promptDone <- promptDoneMsg{result: result, err: err}
+	}()
+
+	var textParts []string
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case update := <-notifyCh:
+			if update.SessionUpdate == "agent_message_chunk" {
+				text := extractChunkText(update)
+				if text != "" {
+					textParts = append(textParts, text)
+				}
+			}
+		case done := <-promptDone:
+			for {
+				select {
+				case update := <-notifyCh:
+					if update.SessionUpdate == "agent_message_chunk" {
+						text := extractChunkText(update)
+						if text != "" {
+							textParts = append(textParts, text)
+						}
+					}
+				default:
+					goto drainedImages
+				}
+			}
+		drainedImages:
+			if done.err != nil {
+				return "", fmt.Errorf("prompt error: %w", done.err)
+			}
+			result := strings.TrimSpace(strings.Join(textParts, ""))
+			if result == "" {
 				result = extractPromptResultText(done.result)
 			}
 			if result == "" {

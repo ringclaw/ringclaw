@@ -151,6 +151,15 @@ func (a *HTTPAgent) Chat(ctx context.Context, conversationID string, message str
 	return reply, nil
 }
 
+// ChatWithImages falls back to text-only for HTTP agents.
+func (a *HTTPAgent) ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error) {
+	if len(images) > 0 {
+		message += "\n\n[Note: This agent does not support image analysis. " +
+			fmt.Sprintf("%d image(s) were attached but cannot be processed.]", len(images))
+	}
+	return a.Chat(ctx, conversationID, message)
+}
+
 func (a *HTTPAgent) buildMessages(conversationID string, message string) []ChatMessage {
 	var messages []ChatMessage
 	if a.systemPrompt != "" {
