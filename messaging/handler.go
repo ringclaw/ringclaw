@@ -422,8 +422,11 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		}
 	}
 
-	// Extract image URLs from markdown
+	// Extract image URLs from markdown (before conversion strips image syntax)
 	imageURLs := ExtractImageURLs(reply)
+
+	// Convert full markdown to RingCentral Mini-Markdown
+	reply = MarkdownToMiniMarkdown(reply)
 
 	// Wrap reply with answer markers
 	reply = wrapAnswer(reply)
