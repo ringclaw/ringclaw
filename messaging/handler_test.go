@@ -5,30 +5,60 @@ import (
 	"time"
 )
 
-func TestParseCommand_NoSlash(t *testing.T) {
-	name, msg := parseCommand("hello world")
-	if name != "" {
-		t.Errorf("expected empty name, got %q", name)
+func TestParseCommand_NoPrefix(t *testing.T) {
+	names, msg := parseCommand("hello world")
+	if len(names) != 0 {
+		t.Errorf("expected nil names, got %v", names)
 	}
 	if msg != "hello world" {
 		t.Errorf("expected full text, got %q", msg)
 	}
 }
 
-func TestParseCommand_WithAgent(t *testing.T) {
-	name, msg := parseCommand("/claude explain this code")
-	if name != "claude" {
-		t.Errorf("expected claude, got %q", name)
+func TestParseCommand_SlashWithAgent(t *testing.T) {
+	names, msg := parseCommand("/claude explain this code")
+	if len(names) != 1 || names[0] != "claude" {
+		t.Errorf("expected [claude], got %v", names)
 	}
 	if msg != "explain this code" {
 		t.Errorf("expected 'explain this code', got %q", msg)
 	}
 }
 
+func TestParseCommand_AtPrefix(t *testing.T) {
+	names, msg := parseCommand("@claude explain this code")
+	if len(names) != 1 || names[0] != "claude" {
+		t.Errorf("expected [claude], got %v", names)
+	}
+	if msg != "explain this code" {
+		t.Errorf("expected 'explain this code', got %q", msg)
+	}
+}
+
+func TestParseCommand_MultiAgent(t *testing.T) {
+	names, msg := parseCommand("@cc @cx hello")
+	if len(names) != 2 || names[0] != "claude" || names[1] != "codex" {
+		t.Errorf("expected [claude codex], got %v", names)
+	}
+	if msg != "hello" {
+		t.Errorf("expected 'hello', got %q", msg)
+	}
+}
+
+func TestParseCommand_MultiAgentDedup(t *testing.T) {
+	names, msg := parseCommand("@cc @cc hello")
+	if len(names) != 1 || names[0] != "claude" {
+		t.Errorf("expected [claude] (deduped), got %v", names)
+	}
+	if msg != "hello" {
+		t.Errorf("expected 'hello', got %q", msg)
+	}
+}
+
 func TestParseCommand_SwitchOnly(t *testing.T) {
-	name, msg := parseCommand("/claude")
-	if name != "claude" {
-		t.Errorf("expected claude, got %q", name)
+	names, msg := parseCommand("/claude")
+	if len(names) != 1 || names[0] != "claude" {
+		t.Errorf("expected [claude], got %v", names)
 	}
 	if msg != "" {
 		t.Errorf("expected empty message, got %q", msg)
@@ -36,9 +66,9 @@ func TestParseCommand_SwitchOnly(t *testing.T) {
 }
 
 func TestParseCommand_Alias(t *testing.T) {
-	name, msg := parseCommand("/cc write a function")
-	if name != "claude" {
-		t.Errorf("expected claude from /cc alias, got %q", name)
+	names, msg := parseCommand("/cc write a function")
+	if len(names) != 1 || names[0] != "claude" {
+		t.Errorf("expected [claude] from /cc alias, got %v", names)
 	}
 	if msg != "write a function" {
 		t.Errorf("expected 'write a function', got %q", msg)
@@ -85,8 +115,8 @@ func TestBuildHelpText(t *testing.T) {
 	if text == "" {
 		t.Error("help text is empty")
 	}
-	if !containsStr(text, "/status") {
-		t.Error("help text should mention /status")
+	if !containsStr(text, "@agent") {
+		t.Error("help text should mention @agent")
 	}
 }
 
