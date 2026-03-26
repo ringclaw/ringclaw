@@ -42,6 +42,8 @@ That's it. On first start, RingClaw will:
 3. Create a JWT credential under your app
 4. Find the chat ID of the conversation you want the bot to listen in (use the [API Explorer](https://developers.ringcentral.com/api-reference/Chats/listGlipChatsNew) to list chats)
 
+> **macOS note:** The installer and `ringclaw update` automatically clear Gatekeeper quarantine attributes (`com.apple.quarantine`, `com.apple.provenance`), so the binary won't be killed after download.
+
 ### Other install methods
 
 ```bash
@@ -90,9 +92,15 @@ Send these as messages in your RingCentral chat:
 | `hello` | Send to default agent |
 | `/codex write a function` | Send to a specific agent |
 | `/cc explain this code` | Send to agent by alias |
+| `@claude explain this` | @ prefix — same as `/claude explain this` |
+| `@cc @cx explain this` | Broadcast to multiple agents in parallel |
 | `/claude` | Switch default agent to Claude |
-| `/status` | Show current agent info |
+| `/new` or `/clear` | Reset current agent session |
+| `/cwd /path/to/project` | Switch workspace directory for all agents |
+| `/info` | Show current agent info (alias: `/status`) |
 | `/help` | Show help message |
+
+Unknown `/commands` (e.g. `/status`, `/compact`) are forwarded to the default agent, so agent-specific slash commands work transparently.
 
 ### Aliases
 
@@ -113,6 +121,49 @@ Send these as messages in your RingCentral chat:
 | `/qw` | qwen |
 
 Switching default agent is persisted to config — survives restarts.
+
+### @ Prefix and Multi-Agent Broadcast
+
+The `@` prefix is an alternative to `/` for directing messages:
+
+```
+@claude explain this code        # same as /claude explain this code
+@cc @cx review this function     # broadcast to Claude and Codex in parallel
+```
+
+When broadcasting, each agent replies in a separate message prefixed with `[agent-name]`.
+
+### Custom Aliases
+
+You can define custom trigger aliases per agent in `config.json`:
+
+```json
+{
+  "claude": {
+    "type": "acp",
+    "command": "/usr/local/bin/claude-agent-acp",
+    "aliases": ["gpt", "ai"]
+  }
+}
+```
+
+Then `/gpt hello` or `@ai hello` will route to Claude. RingClaw warns on startup if custom aliases conflict with built-in aliases or other agents.
+
+### Session Management
+
+| Command | Description |
+|---------|-------------|
+| `/new`   | Reset the default agent's session and start fresh |
+| `/clear` | Same as `/new` |
+
+### Dynamic Workspace
+
+```bash
+/cwd ~/projects/my-app    # switch all agents to this directory
+/cwd                       # show current workspace info
+```
+
+Tilde (`~`) is expanded to the home directory. The new working directory applies to all running agents immediately.
 
 ## Media Messages
 
@@ -191,7 +242,11 @@ Config file: `~/.ringclaw/config.json`
     "claude": {
       "type": "acp",
       "command": "/usr/local/bin/claude-agent-acp",
-      "model": "sonnet"
+      "model": "sonnet",
+      "aliases": ["ai"],
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-xxx"
+      }
     },
     "codex": {
       "type": "acp",
