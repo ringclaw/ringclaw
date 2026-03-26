@@ -29,14 +29,15 @@ type AgentMeta struct {
 
 // Handler processes incoming RingCentral messages and dispatches replies.
 type Handler struct {
-	mu          sync.RWMutex
-	defaultName string
-	agents      map[string]agent.Agent // name -> running agent
-	agentMetas  []AgentMeta            // all configured agents (for /status)
-	factory     AgentFactory
-	saveDefault SaveDefaultFunc
-	version     string
-	startTime   time.Time
+	mu            sync.RWMutex
+	defaultName   string
+	agents        map[string]agent.Agent // name -> running agent
+	agentMetas    []AgentMeta            // all configured agents (for /status)
+	customAliases map[string]string      // custom alias -> agent name (from config)
+	factory       AgentFactory
+	saveDefault   SaveDefaultFunc
+	version       string
+	startTime     time.Time
 }
 
 // NewHandler creates a new message handler.
@@ -48,6 +49,13 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc, version strin
 		version:     version,
 		startTime:   time.Now(),
 	}
+}
+
+// SetCustomAliases sets custom alias mappings from config.
+func (h *Handler) SetCustomAliases(aliases map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.customAliases = aliases
 }
 
 // SetAgentMetas sets the list of all configured agents (for /status).
@@ -140,7 +148,16 @@ var agentAliases = map[string]string{
 }
 
 // resolveAlias returns the full agent name for an alias, or the original name if no alias matches.
-func resolveAlias(name string) string {
+// Checks custom aliases (from config) first, then built-in aliases.
+func (h *Handler) resolveAlias(name string) string {
+	h.mu.RLock()
+	custom := h.customAliases
+	h.mu.RUnlock()
+	if custom != nil {
+		if full, ok := custom[name]; ok {
+			return full
+		}
+	}
 	if full, ok := agentAliases[name]; ok {
 		return full
 	}
@@ -153,7 +170,7 @@ func resolveAlias(name string) string {
 // If no command prefix, returns (nil, originalText).
 //
 // Ported from github.com/fastclaw-ai/weclaw commits 9ea72a1 + 981d58c.
-func parseCommand(text string) ([]string, string) {
+func (h *Handler) parseCommand(text string) ([]string, string) {
 	if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "@") {
 		return nil, text
 	}
@@ -181,7 +198,7 @@ func parseCommand(text string) ([]string, string) {
 		}
 
 		if token != "" {
-			names = append(names, resolveAlias(token))
+			names = append(names, h.resolveAlias(token))
 		}
 
 		if rest == "" {
@@ -250,7 +267,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	}
 
 	// Route: "/agent msg", "@agent msg", or "@a @b msg" -> agent(s)
-	agentNames, message := parseCommand(text)
+	agentNames, message := h.parseCommand(text)
 
 	// No command prefix -> send to default agent
 	if len(agentNames) == 0 {

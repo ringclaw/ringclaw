@@ -3,10 +3,17 @@ package messaging
 import (
 	"testing"
 	"time"
+
+	"github.com/ringclaw/ringclaw/agent"
 )
 
+func newTestHandler() *Handler {
+	return &Handler{agents: make(map[string]agent.Agent)}
+}
+
 func TestParseCommand_NoPrefix(t *testing.T) {
-	names, msg := parseCommand("hello world")
+	h := newTestHandler()
+	names, msg := h.parseCommand("hello world")
 	if len(names) != 0 {
 		t.Errorf("expected nil names, got %v", names)
 	}
@@ -16,7 +23,8 @@ func TestParseCommand_NoPrefix(t *testing.T) {
 }
 
 func TestParseCommand_SlashWithAgent(t *testing.T) {
-	names, msg := parseCommand("/claude explain this code")
+	h := newTestHandler()
+	names, msg := h.parseCommand("/claude explain this code")
 	if len(names) != 1 || names[0] != "claude" {
 		t.Errorf("expected [claude], got %v", names)
 	}
@@ -26,7 +34,8 @@ func TestParseCommand_SlashWithAgent(t *testing.T) {
 }
 
 func TestParseCommand_AtPrefix(t *testing.T) {
-	names, msg := parseCommand("@claude explain this code")
+	h := newTestHandler()
+	names, msg := h.parseCommand("@claude explain this code")
 	if len(names) != 1 || names[0] != "claude" {
 		t.Errorf("expected [claude], got %v", names)
 	}
@@ -36,7 +45,8 @@ func TestParseCommand_AtPrefix(t *testing.T) {
 }
 
 func TestParseCommand_MultiAgent(t *testing.T) {
-	names, msg := parseCommand("@cc @cx hello")
+	h := newTestHandler()
+	names, msg := h.parseCommand("@cc @cx hello")
 	if len(names) != 2 || names[0] != "claude" || names[1] != "codex" {
 		t.Errorf("expected [claude codex], got %v", names)
 	}
@@ -46,7 +56,8 @@ func TestParseCommand_MultiAgent(t *testing.T) {
 }
 
 func TestParseCommand_MultiAgentDedup(t *testing.T) {
-	names, msg := parseCommand("@cc @cc hello")
+	h := newTestHandler()
+	names, msg := h.parseCommand("@cc @cc hello")
 	if len(names) != 1 || names[0] != "claude" {
 		t.Errorf("expected [claude] (deduped), got %v", names)
 	}
@@ -56,7 +67,8 @@ func TestParseCommand_MultiAgentDedup(t *testing.T) {
 }
 
 func TestParseCommand_SwitchOnly(t *testing.T) {
-	names, msg := parseCommand("/claude")
+	h := newTestHandler()
+	names, msg := h.parseCommand("/claude")
 	if len(names) != 1 || names[0] != "claude" {
 		t.Errorf("expected [claude], got %v", names)
 	}
@@ -66,7 +78,8 @@ func TestParseCommand_SwitchOnly(t *testing.T) {
 }
 
 func TestParseCommand_Alias(t *testing.T) {
-	names, msg := parseCommand("/cc write a function")
+	h := newTestHandler()
+	names, msg := h.parseCommand("/cc write a function")
 	if len(names) != 1 || names[0] != "claude" {
 		t.Errorf("expected [claude] from /cc alias, got %v", names)
 	}
@@ -75,7 +88,20 @@ func TestParseCommand_Alias(t *testing.T) {
 	}
 }
 
+func TestParseCommand_CustomAlias(t *testing.T) {
+	h := newTestHandler()
+	h.customAliases = map[string]string{"ai": "claude", "c": "claude"}
+	names, msg := h.parseCommand("/ai hello")
+	if len(names) != 1 || names[0] != "claude" {
+		t.Errorf("expected [claude] from custom alias, got %v", names)
+	}
+	if msg != "hello" {
+		t.Errorf("expected 'hello', got %q", msg)
+	}
+}
+
 func TestResolveAlias(t *testing.T) {
+	h := newTestHandler()
 	tests := map[string]string{
 		"cc":  "claude",
 		"cx":  "codex",
@@ -92,14 +118,19 @@ func TestResolveAlias(t *testing.T) {
 		"qw":  "qwen",
 	}
 	for alias, want := range tests {
-		got := resolveAlias(alias)
+		got := h.resolveAlias(alias)
 		if got != want {
 			t.Errorf("resolveAlias(%q) = %q, want %q", alias, got, want)
 		}
 	}
 	// Unknown alias returns itself
-	if got := resolveAlias("unknown"); got != "unknown" {
+	if got := h.resolveAlias("unknown"); got != "unknown" {
 		t.Errorf("resolveAlias(unknown) = %q, want %q", got, "unknown")
+	}
+	// Custom alias takes priority over built-in
+	h.customAliases = map[string]string{"cc": "custom-claude"}
+	if got := h.resolveAlias("cc"); got != "custom-claude" {
+		t.Errorf("resolveAlias(cc) with custom = %q, want custom-claude", got)
 	}
 }
 

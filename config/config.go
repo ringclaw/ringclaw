@@ -29,6 +29,7 @@ type AgentConfig struct {
 	Type         string            `json:"type"`                    // "acp", "cli", or "http"
 	Command      string            `json:"command,omitempty"`       // binary path (cli/acp type)
 	Args         []string          `json:"args,omitempty"`          // extra args for command (e.g. ["acp"] for cursor)
+	Aliases      []string          `json:"aliases,omitempty"`       // custom trigger commands (e.g. ["gpt", "4o"])
 	Cwd          string            `json:"cwd,omitempty"`           // working directory (workspace)
 	Env          map[string]string `json:"env,omitempty"`           // extra environment variables (cli/acp type)
 	Model        string            `json:"model,omitempty"`         // model name
@@ -36,6 +37,17 @@ type AgentConfig struct {
 	Endpoint     string            `json:"endpoint,omitempty"`      // API endpoint (http type)
 	APIKey       string            `json:"api_key,omitempty"`       // API key (http type)
 	MaxHistory   int               `json:"max_history,omitempty"`   // max history (http type)
+}
+
+// BuildAliasMap builds a map from custom alias to agent name from all agent configs.
+func BuildAliasMap(agents map[string]AgentConfig) map[string]string {
+	m := make(map[string]string)
+	for name, cfg := range agents {
+		for _, alias := range cfg.Aliases {
+			m[alias] = name
+		}
+	}
+	return m
 }
 
 // DefaultConfig returns an empty configuration.

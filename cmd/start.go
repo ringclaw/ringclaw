@@ -124,6 +124,13 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	handler.SetAgentMetas(metas)
 
+	// Load custom aliases from agent configs and check for conflicts
+	customAliases := config.BuildAliasMap(cfg.Agents)
+	if len(customAliases) > 0 {
+		handler.SetCustomAliases(customAliases)
+		checkAliasConflicts(cfg, customAliases)
+	}
+
 	// Start default agent in background
 	go func() {
 		if cfg.DefaultAgent == "" {
@@ -217,6 +224,27 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 	default:
 		slog.Warn("unknown agent type", "component", "agent", "type", agCfg.Type, "name", name)
 		return nil
+	}
+}
+
+// checkAliasConflicts warns about alias conflicts at startup.
+// Ported from github.com/fastclaw-ai/weclaw commit 9f5c458.
+func checkAliasConflicts(cfg *config.Config, aliases map[string]string) {
+	reserved := map[string]bool{"status": true, "help": true, "new": true, "clear": true, "info": true}
+
+	seen := make(map[string]string) // alias -> first agent that claimed it
+	for alias, agent := range aliases {
+		if reserved[alias] {
+			slog.Warn("alias conflicts with reserved command", "component", "config", "alias", alias, "agent", agent)
+			continue
+		}
+		if _, ok := cfg.Agents[alias]; ok {
+			slog.Warn("alias shadows agent name", "component", "config", "alias", alias, "agent", agent)
+		}
+		if prev, dup := seen[alias]; dup {
+			slog.Warn("duplicate alias across agents", "component", "config", "alias", alias, "agents", prev+","+agent)
+		}
+		seen[alias] = agent
 	}
 }
 
