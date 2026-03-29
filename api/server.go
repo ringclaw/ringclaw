@@ -172,6 +172,15 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("sent text", "component", "api", "chatID", chatID, "text", req.Text)
+
+		// Extract and send any markdown images embedded in text
+		for _, imgURL := range messaging.ExtractImageURLs(req.Text) {
+			if err := messaging.SendMediaFromURL(ctx, s.client, chatID, imgURL); err != nil {
+				slog.Error("send extracted image failed", "component", "api", "error", err)
+			} else {
+				slog.Info("sent extracted image", "component", "api", "chatID", chatID, "url", imgURL)
+			}
+		}
 	}
 
 	if req.MediaURL != "" {
