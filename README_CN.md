@@ -272,23 +272,42 @@ graph LR
 
 ### 路由规则
 
-| 消息来源 | 回复客户端 |
-|----------|-----------|
-| Bot 私聊（自动发现） | Bot |
-| `chat_ids` 中的聊天 | Bot |
-| 其他聊天 | Private App |
+不在 `chat_ids` 中的消息会被 monitor 直接丢弃。
+
+| 消息来源 | 回复客户端 | 读取/操作客户端 |
+|----------|-----------|---------------|
+| Bot 私聊（自动发现） | Bot | Private App |
+| `chat_ids` 中的聊天 | Bot | Private App |
+
+未配置 Bot 时，回复和读取均使用 Private App。
 
 ### 群聊行为
 
 - **`bot_mention_only: true`**（默认）— Bot 在群聊中只有被 @mention 时才响应
 - **`bot_mention_only: false`** — Bot 响应允许群中的所有消息
 
-### 安全机制
+### 权限矩阵
 
-- **敏感命令**（`/clear`、`/cwd`、切换 Agent、总结）在群聊中仅限 Bot Owner 使用
-- **总结功能**在 Bot 群聊中完全禁用（防止私聊内容泄露）
-- **跨聊天操作**（ACTION 中的 `chatid` 覆盖）在 Bot 模式下被禁用
-- 群组中其他成员可以正常与 Bot 聊天
+| 操作 | 无 Bot | Bot 私聊 | Bot 群聊 (owner) | Bot 群聊 (非 owner) |
+|---|---|---|---|---|
+| 与 Agent 聊天 | Private App 回复 | Bot 回复 | Bot 回复 | Bot 回复 |
+| 总结 (Summarize) | Private App 读+回复 | Bot 回复, Private App 读 | **禁止** (防泄露) | **禁止** (防泄露) |
+| `/clear`、`/new` | 允许 | 允许 | 允许 | **禁止** (仅 owner) |
+| `/cwd` | 允许 | 允许 | 允许 | **禁止** (仅 owner) |
+| 切换 Agent (`/cc`) | 允许 | 允许 | 允许 | **禁止** (仅 owner) |
+| `/info`、`/help` | 允许 | 允许 | 允许 | 允许 |
+| `/task`、`/note`、`/event` | Private App | Private App 执行, Bot 回复 | Private App 执行, Bot 回复 | Private App 执行, Bot 回复 |
+| ACTION blocks | Private App | Private App | Private App | Private App |
+| ACTION `chatid` 覆盖 | 允许 | 允许 | 允许 | 允许 |
+
+**客户端职责：**
+
+| 职责 | 使用的客户端 | 原因 |
+|------|------------|------|
+| 发送回复和占位消息 | Bot 或 Private App | 与用户交互的身份一致 |
+| 读取聊天和消息 | Private App | Bot 无法访问私聊 |
+| `/task`、`/note`、`/event` API | Private App | Bot 可能没有权限 |
+| ACTION block 执行 | Private App | 需要跨聊天操作能力 |
 
 ## 富媒体消息
 

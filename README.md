@@ -270,23 +270,42 @@ graph LR
 
 ### Routing
 
-| Source chat | Reply client |
-|-------------|-------------|
-| Bot DM (auto-discovered) | Bot |
-| Chat in `chat_ids` | Bot |
-| Other chats | Private App |
+Messages from chats not in `chat_ids` are silently dropped by the monitor.
+
+| Source chat | Reply client | Read/Action client |
+|-------------|-------------|-------------------|
+| Bot DM (auto-discovered) | Bot | Private App |
+| Chat in `chat_ids` | Bot | Private App |
+
+Without a bot configured, both reply and read use the Private App.
 
 ### Group chat behavior
 
 - **`bot_mention_only: true`** (default) — Bot only responds when @mentioned in group chats
 - **`bot_mention_only: false`** — Bot responds to all messages in allowed group chats
 
-### Security
+### Permission matrix
 
-- **Privileged commands** (`/clear`, `/cwd`, agent switch, summarize) are restricted to the bot owner in group chats
-- **Summarize** is blocked entirely in group chats via bot (prevents private chat data from leaking)
-- **Cross-chat actions** (`chatid` override in ACTION blocks) are disabled in bot context
-- Other group members can freely chat with the bot
+| Operation | No Bot | Bot DM | Bot Group (owner) | Bot Group (others) |
+|---|---|---|---|---|
+| Chat with agent | Private App replies | Bot replies | Bot replies | Bot replies |
+| Summarize | Private App read+reply | Bot reply, Private App read | **Blocked** (data leak) | **Blocked** (data leak) |
+| `/clear`, `/new` | Allowed | Allowed | Allowed | **Blocked** (owner only) |
+| `/cwd` | Allowed | Allowed | Allowed | **Blocked** (owner only) |
+| Agent switch (`/cc`) | Allowed | Allowed | Allowed | **Blocked** (owner only) |
+| `/info`, `/help` | Allowed | Allowed | Allowed | Allowed |
+| `/task`, `/note`, `/event` | Private App | Private App exec, Bot reply | Private App exec, Bot reply | Private App exec, Bot reply |
+| ACTION blocks | Private App | Private App | Private App | Private App |
+| ACTION `chatid` override | Allowed | Allowed | Allowed | Allowed |
+
+**Client responsibilities:**
+
+| Role | Client | Why |
+|------|--------|-----|
+| Send replies & placeholders | Bot or Private App | Matches the user-facing identity |
+| Read chats & messages | Private App | Bot cannot access private chats |
+| `/task`, `/note`, `/event` API | Private App | Bot may lack permissions |
+| ACTION block execution | Private App | Needs cross-chat access |
 
 ## Media Messages
 
