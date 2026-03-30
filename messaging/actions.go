@@ -582,7 +582,18 @@ func ParseAgentActions(reply string) (string, []AgentAction) {
 		}
 		endIdx := strings.Index(clean[startIdx:], "END_ACTION")
 		if endIdx < 0 {
-			break
+			// No END_ACTION: treat the single line as a complete action (e.g. EVENT).
+			lineEnd := strings.Index(clean[startIdx:], "\n")
+			if lineEnd < 0 {
+				lineEnd = len(clean) - startIdx
+			}
+			block := clean[startIdx : startIdx+lineEnd]
+			action := parseActionBlock(block)
+			if action != nil {
+				actions = append(actions, *action)
+			}
+			clean = clean[:startIdx] + clean[startIdx+lineEnd:]
+			continue
 		}
 		endIdx += startIdx + len("END_ACTION")
 
