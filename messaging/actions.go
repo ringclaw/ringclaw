@@ -535,7 +535,7 @@ ACTION:NOTE title=<title> [chatid=<target chat ID>]
 <body content>
 END_ACTION
 
-ACTION:TASK subject=<subject> [chatid=<target chat ID>]
+ACTION:TASK subject=<subject> [assignee=<person ID>] [chatid=<target chat ID>]
 END_ACTION
 
 ACTION:EVENT title=<title> start=<ISO8601> end=<ISO8601>
@@ -554,7 +554,8 @@ Rules:
 - Your text reply comes FIRST, then ACTION blocks at the end.
 - When the user asks for cards, rich display, progress, reports, or structured data → use ACTION:CARD.
 - When the user asks to create notes/tasks/events → use the corresponding ACTION block.
-- When the user mentions a target chat via ![:Team](ID) or ![:Person](ID), extract the numeric ID and pass it as chatid=<ID> in the ACTION header.
+- When the user mentions ![:Person](ID), use the numeric ID as assignee=<ID> in TASK to assign the task to that person. The task is created in the current chat.
+- When the user mentions ![:Team](ID), use the numeric ID as chatid=<ID> to target that team chat.
 - If no chatid is specified, the action executes in the current chat.
 - Do NOT create files. Do NOT output raw JSON in your reply. Use ACTION blocks so the system executes them.
 - If no action is needed, reply normally without ACTION blocks.
@@ -639,7 +640,7 @@ func parseActionBlock(block string) *AgentAction {
 func parseActionParams(s string) []keyValue {
 	var result []keyValue
 	// Split by known keys to handle values with spaces
-	keys := []string{"title", "subject", "start", "end", "chatid"}
+	keys := []string{"title", "subject", "start", "end", "chatid", "assignee"}
 	remaining := s
 	for len(remaining) > 0 {
 		remaining = strings.TrimSpace(remaining)
@@ -704,7 +705,11 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 			if subject == "" {
 				continue
 			}
-			task, err := client.CreateTask(ctx, targetChat, &ringcentral.CreateTaskRequest{Subject: subject})
+			req := &ringcentral.CreateTaskRequest{Subject: subject}
+			if aid := a.Params["assignee"]; aid != "" {
+				req.Assignees = []ringcentral.TaskAssignee{{ID: extractChatID(aid)}}
+			}
+			task, err := client.CreateTask(ctx, targetChat, req)
 			if err != nil {
 				slog.Error("action: create task failed", "error", err)
 				results = append(results, fmt.Sprintf("Failed to create task: %v", err))
