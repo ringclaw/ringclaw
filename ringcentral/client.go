@@ -26,6 +26,12 @@ type Client struct {
 	httpClient *http.Client
 	ownerID    string
 	monitor    *Monitor
+	isBot      bool
+}
+
+// IsBot returns true if this client uses a bot token.
+func (c *Client) IsBot() bool {
+	return c.isBot
 }
 
 // SetMonitor links a monitor for tracking sent posts.
@@ -74,6 +80,7 @@ func NewBotClient(serverURL, botToken string) *Client {
 	return &Client{
 		serverURL: serverURL,
 		auth:      auth,
+		isBot:     true,
 		httpClient: &http.Client{
 			Timeout: requestTimeout,
 			Transport: &http.Transport{

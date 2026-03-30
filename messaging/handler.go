@@ -454,8 +454,10 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 	// Convert full markdown to RingCentral Mini-Markdown
 	reply = MarkdownToMiniMarkdown(reply)
 
-	// Wrap reply with answer markers
-	reply = wrapAnswer(reply)
+	// Wrap reply with answer markers (skip for bot client)
+	if !client.IsBot() {
+		reply = wrapAnswer(reply)
+	}
 
 	// Update the placeholder with the real reply, or send a new post
 	if placeholderID != "" {
@@ -879,7 +881,11 @@ func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.
 
 	// Parse and execute any ACTION blocks from the agent's response
 	cleanReply, actions := ParseAgentActions(reply)
-	sendReply(wrapAnswer(cleanReply))
+	if replyClient.IsBot() {
+		sendReply(cleanReply)
+	} else {
+		sendReply(wrapAnswer(cleanReply))
+	}
 
 	if len(actions) > 0 {
 		targetChatID := req.ChatID
