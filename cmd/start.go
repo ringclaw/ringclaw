@@ -181,6 +181,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 				slog.Warn("failed to find bot DM chat with installer", "error", err)
 			} else {
 				botDMChatID = dmChatID
+				botClient.SetDMChatID(dmChatID)
 				slog.Info("bot DM chat resolved", "chatID", botDMChatID)
 			}
 		}

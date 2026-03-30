@@ -27,11 +27,22 @@ type Client struct {
 	ownerID    string
 	monitor    *Monitor
 	isBot      bool
+	dmChatID   string
 }
 
 // IsBot returns true if this client uses a bot token.
 func (c *Client) IsBot() bool {
 	return c.isBot
+}
+
+// SetDMChatID sets the bot's direct message chat ID.
+func (c *Client) SetDMChatID(id string) {
+	c.dmChatID = id
+}
+
+// IsBotDM returns true if the given chatID is the bot's DM chat.
+func (c *Client) IsBotDM(chatID string) bool {
+	return c.isBot && c.dmChatID != "" && chatID == c.dmChatID
 }
 
 // SetMonitor links a monitor for tracking sent posts.
