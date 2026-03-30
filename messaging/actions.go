@@ -676,11 +676,7 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 	for _, a := range actions {
 		targetChat := chatID
 		if cid := a.Params["chatid"]; cid != "" {
-			if client.IsBot() {
-				slog.Warn("ignoring chatid override in bot context", "component", "actions", "requestedChat", cid)
-			} else {
-				targetChat = extractChatID(cid)
-			}
+			targetChat = extractChatID(cid)
 		}
 
 		switch a.Type {

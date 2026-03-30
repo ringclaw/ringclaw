@@ -320,7 +320,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 
 	// No command prefix -> send to default agent
 	if len(agentNames) == 0 {
-		h.sendToDefaultAgent(ctx, client, post, text)
+		h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		return
 	}
 
@@ -337,7 +337,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 				slog.Error("failed to send reply", "component", "handler", "error", err)
 			}
 		} else if len(agentNames) == 1 && !h.isKnownAgent(agentNames[0]) {
-			h.sendToDefaultAgent(ctx, client, post, text)
+			h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		} else {
 			reply := "Usage: specify one agent to switch, or add a message to broadcast"
 			if err := SendTextReply(ctx, client, chatID, reply); err != nil {
@@ -355,20 +355,20 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		}
 	}
 	if len(knownNames) == 0 {
-		h.sendToDefaultAgent(ctx, client, post, text)
+		h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		return
 	}
 
 	if len(knownNames) == 1 {
-		h.sendToNamedAgent(ctx, client, post, knownNames[0], message)
+		h.sendToNamedAgent(ctx, client, readClient, post, knownNames[0], message)
 	} else {
 		// Multi-agent broadcast: parallel dispatch
-		h.broadcastToAgents(ctx, client, post, knownNames, message)
+		h.broadcastToAgents(ctx, client, readClient, post, knownNames, message)
 	}
 }
 
 // sendToDefaultAgent sends the message to the default agent and replies.
-func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, post ringcentral.Post, text string) {
+func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string) {
 	chatID := post.GroupID
 
 	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
@@ -389,11 +389,11 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Cl
 		reply = "[echo] " + text
 	}
 
-	h.sendReplyWithActions(ctx, client, post, reply, placeholderID)
+	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
 }
 
 // sendToNamedAgent sends the message to a specific agent and replies.
-func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Client, post ringcentral.Post, name, message string) {
+func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, name, message string) {
 	chatID := post.GroupID
 
 	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
@@ -416,12 +416,12 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 		reply = fmt.Sprintf("Error: %v", err)
 	}
 
-	h.sendReplyWithActions(ctx, client, post, reply, placeholderID)
+	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
 }
 
 // broadcastToAgents sends the message to multiple agents in parallel.
 // Each reply is sent as a separate message with the agent name prefix.
-func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, post ringcentral.Post, names []string, message string) {
+func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, names []string, message string) {
 	type result struct {
 		name  string
 		reply string
@@ -448,19 +448,20 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 	for range names {
 		r := <-ch
 		reply := fmt.Sprintf("[%s] %s", r.name, r.reply)
-		h.sendReplyWithActions(ctx, client, post, reply, "")
+		h.sendReplyWithActions(ctx, client, readClient, post, reply, "")
 	}
 }
 
 // sendReplyWithActions processes action blocks and sends the final reply.
-func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, post ringcentral.Post, reply, placeholderID string) {
+// actionClient is used for executing actions (should be private app when available).
+func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, actionClient *ringcentral.Client, post ringcentral.Post, reply, placeholderID string) {
 	chatID := post.GroupID
 
 	// Parse and execute any ACTION blocks from the agent's response
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
 		reply = cleanReply
-		results := ExecuteAgentActions(ctx, client, chatID, actions)
+		results := ExecuteAgentActions(ctx, actionClient, chatID, actions)
 		if len(results) > 0 {
 			defer func() {
 				_ = SendTextReply(ctx, client, chatID, strings.Join(results, "\n"))
