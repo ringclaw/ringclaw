@@ -335,9 +335,18 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 		return
 	}
 
+	replyClient := m.chooseClient(event.Body.GroupID)
+
+	// In group chats routed to the bot, only respond when the bot is @mentioned
+	if replyClient == m.botClient && event.Body.GroupID != m.botDMChatID {
+		if !m.isBotMentioned(event.Body.Mentions) {
+			slog.Debug("ignoring group message without bot mention", "component", "monitor", "chatID", event.Body.GroupID)
+			return
+		}
+	}
+
 	slog.Info("received post", "component", "monitor", "creatorID", event.Body.CreatorID, "chatID", event.Body.GroupID, "text", truncate(event.Body.Text, 50))
 
-	replyClient := m.chooseClient(event.Body.GroupID)
 	go m.handler(ctx, replyClient, event.Body)
 }
 
@@ -357,6 +366,20 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// isBotMentioned checks if the bot's extension ID appears in the post mentions.
+func (m *Monitor) isBotMentioned(mentions []Mention) bool {
+	if m.botClient == nil {
+		return false
+	}
+	botID := m.botClient.OwnerID()
+	for _, mention := range mentions {
+		if mention.ID == botID {
+			return true
+		}
+	}
+	return false
 }
 
 func isBotMessage(text string) bool {
