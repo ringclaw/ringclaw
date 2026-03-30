@@ -18,7 +18,6 @@ func newTestActionClient(handler http.HandlerFunc) (*ringcentral.Client, *httpte
 		ClientID:     "id",
 		ClientSecret: "secret",
 		JWTToken:     "jwt",
-		ChatID:       "test-chat",
 		ServerURL:    srv.URL,
 	}
 	client := ringcentral.NewClient(creds)

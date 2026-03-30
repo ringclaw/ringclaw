@@ -54,8 +54,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if cfg.RC.ClientID == "" || cfg.RC.ClientSecret == "" || cfg.RC.JWTToken == "" {
 		return fmt.Errorf("RingCentral credentials not configured. Set RC_CLIENT_ID, RC_CLIENT_SECRET, RC_JWT_TOKEN environment variables or add to config file")
 	}
-	if cfg.RC.ChatID == "" {
-		return fmt.Errorf("RingCentral chat ID not configured. Set RC_CHAT_ID environment variable or add to config file")
+	if len(cfg.RC.ChatIDs) == 0 {
+		return fmt.Errorf("RingCentral chat IDs not configured. Add chat_ids to config file")
 	}
 
 	if config.DetectAndConfigure(cfg) {
@@ -75,7 +75,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 		ClientID:     cfg.RC.ClientID,
 		ClientSecret: cfg.RC.ClientSecret,
 		JWTToken:     cfg.RC.JWTToken,
-		ChatID:       cfg.RC.ChatID,
 		ServerURL:    cfg.RC.ServerURL,
 	}
 	client := ringcentral.NewClient(creds)
@@ -151,18 +150,52 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if apiAddrFlag != "" {
 		apiAddr = apiAddrFlag
 	}
-	apiServer := api.NewServer(client, apiAddr)
+	defaultChatID := ""
+	if len(cfg.RC.ChatIDs) > 0 {
+		defaultChatID = cfg.RC.ChatIDs[0]
+	}
+	apiServer := api.NewServer(client, apiAddr, defaultChatID)
 	go func() {
 		if err := apiServer.Run(ctx); err != nil {
 			slog.Error("API server error", "error", err)
 		}
 	}()
 
+	// Initialize bot client if configured
+	var botClient *ringcentral.Client
+	var botDMChatID string
+	if cfg.RC.BotToken != "" {
+		slog.Info("initializing bot client...")
+		botClient = ringcentral.NewBotClient(cfg.RC.ServerURL, cfg.RC.BotToken)
+		botOwnerID, err := botClient.GetExtensionInfo(ctx)
+		if err != nil {
+			slog.Warn("failed to get bot extension info", "error", err)
+		} else {
+			botClient.SetOwnerID(botOwnerID)
+			slog.Info("bot extension ID resolved", "botOwnerID", botOwnerID)
+		}
+		// Find the DM chat between the bot and the installer (private app user)
+		if ownerID != "" {
+			dmChatID, err := botClient.FindDirectChat(ctx, ownerID)
+			if err != nil {
+				slog.Warn("failed to find bot DM chat with installer", "error", err)
+			} else {
+				botDMChatID = dmChatID
+				botClient.SetDMChatID(dmChatID)
+				slog.Info("bot DM chat resolved", "chatID", botDMChatID)
+			}
+		}
+	}
+
 	// Start WebSocket monitor
-	slog.Info("starting message bridge", "chatID", cfg.RC.ChatID)
+	slog.Info("starting message bridge", "chatIDs", cfg.RC.ChatIDs)
 
 	// Monitor.Run handles reconnection with backoff internally
-	monitor := ringcentral.NewMonitor(client, handler.HandleMessage)
+	monitor := ringcentral.NewMonitor(client, handler.HandleMessage, cfg.RC.ChatIDs)
+	if botClient != nil {
+		monitor.SetBotClient(botClient, botDMChatID, cfg.RC.IsBotMentionOnly())
+		botClient.SetMonitor(monitor)
+	}
 	client.SetMonitor(monitor)
 	if err := monitor.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("monitor stopped unexpectedly", "component", "monitor", "error", err)

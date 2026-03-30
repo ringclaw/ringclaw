@@ -23,7 +23,6 @@ irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 export RC_CLIENT_ID="your_client_id"
 export RC_CLIENT_SECRET="your_client_secret"
 export RC_JWT_TOKEN="your_jwt_token"
-export RC_CHAT_ID="your_chat_id"
 
 # Start
 ringclaw start
@@ -40,7 +39,8 @@ That's it. On first start, RingClaw will:
 1. Go to [RingCentral Developer Portal](https://developers.ringcentral.com/) and register an app
 2. Enable the `Team Messaging` and `WebSocketsSubscription` scopes
 3. Create a JWT credential under your app
-4. Find the chat ID of the conversation you want the bot to listen in (use the [API Explorer](https://developers.ringcentral.com/api-reference/Chats/listGlipChatsNew) to list chats)
+4. Find the chat IDs of the conversations you want the bot to monitor (use the [API Explorer](https://developers.ringcentral.com/api-reference/Chats/listGlipChatsNew) to list chats)
+5. (Optional) Create a **Bot App** for group interactions — see [Bot Client](#bot-client) below
 
 **Install channels:**
 
@@ -61,7 +61,7 @@ go install github.com/ringclaw/ringclaw@latest
 # Via Docker
 docker run -it -v ~/.ringclaw:/root/.ringclaw \
   -e RC_CLIENT_ID=xxx -e RC_CLIENT_SECRET=xxx \
-  -e RC_JWT_TOKEN=xxx -e RC_CHAT_ID=xxx \
+  -e RC_JWT_TOKEN=xxx \
   ghcr.io/ringclaw/ringclaw start
 ```
 
@@ -108,6 +108,7 @@ Send these as messages in your RingCentral chat:
 | `/note list\|create\|get\|update\|delete` | Manage notes |
 | `/event list\|create\|get\|update\|delete` | Manage calendar events |
 | `/card get\|delete` | Manage adaptive cards |
+| `summarize my chat with John` | Summarize a conversation |
 | `/info` | Show current agent info (alias: `/status`) |
 | `/help` | Show help message |
 
@@ -222,7 +223,89 @@ ACTION:EVENT title=Sprint Review start=2026-04-01T14:00:00Z end=2026-04-01T15:00
 END_ACTION
 ```
 
-Actions can target a different chat via `chatid=<id>` parameter. No configuration needed — the action prompt is injected automatically.
+Actions can target a different chat via `chatid=<id>` parameter (disabled in bot context for security). No configuration needed — the action prompt is injected automatically.
+
+## Chat Summarization
+
+Summarize conversations from any chat:
+
+```
+summarize my chat with John           # summarize today's chat with John
+summarize my chat with Raye from Monday  # summarize since Monday
+```
+
+RingClaw resolves the target chat by name, fetches messages using the private app client, and sends the summary to the current chat via an AI agent.
+
+> **Security:** Summarization is blocked in group chats when using a bot client, since the summary would be visible to all group members. Use it in a direct message with the bot instead.
+
+## Bot Client
+
+RingClaw supports a dual-client architecture: a **Private App** for reading messages and a **Bot App** for replying in group chats.
+
+```mermaid
+graph LR
+    RC[RingCentral] -->|WebSocket| PrivateApp[Private App]
+    PrivateApp -->|reads messages| RingClaw
+    RingClaw -->|replies in DM/allowed chats| BotApp[Bot App]
+    RingClaw -->|replies elsewhere| PrivateApp
+```
+
+**Why use a bot?** Private App messages appear as the user who installed it. A Bot App has its own identity, avatar, and name — making it clear which replies come from the AI.
+
+### Setup
+
+1. Create a **Bot App** in the [RingCentral Developer Portal](https://developers.ringcentral.com/)
+2. Install it to your account and copy the bot token
+3. Add to config:
+
+```json
+{
+  "ringcentral": {
+    "chat_ids": ["group-chat-id-1", "group-chat-id-2"],
+    "bot_token": "your_bot_token",
+    "bot_mention_only": true
+  }
+}
+```
+
+### Routing
+
+Messages from chats not in `chat_ids` are silently dropped by the monitor.
+
+| Source chat | Reply client | Read/Action client |
+|-------------|-------------|-------------------|
+| Bot DM (auto-discovered) | Bot | Private App |
+| Chat in `chat_ids` | Bot | Private App |
+
+Without a bot configured, both reply and read use the Private App.
+
+### Group chat behavior
+
+- **`bot_mention_only: true`** (default) — Bot only responds when @mentioned in group chats
+- **`bot_mention_only: false`** — Bot responds to all messages in allowed group chats
+
+### Permission matrix
+
+| Operation | No Bot | Bot DM | Bot Group (owner) | Bot Group (others) |
+|---|---|---|---|---|
+| Chat with agent | Private App replies | Bot replies | Bot replies | Bot replies |
+| Summarize | Private App read+reply | Bot reply, Private App read | **Blocked** (data leak) | **Blocked** (data leak) |
+| `/clear`, `/new` | Allowed | Allowed | Allowed | **Blocked** (owner only) |
+| `/cwd` | Allowed | Allowed | Allowed | **Blocked** (owner only) |
+| Agent switch (`/cc`) | Allowed | Allowed | Allowed | **Blocked** (owner only) |
+| `/info`, `/help` | Allowed | Allowed | Allowed | Allowed |
+| `/task`, `/note`, `/event` | Private App | Private App exec, Bot reply | Private App exec, Bot reply | Private App exec, Bot reply |
+| ACTION blocks | Private App | Private App | Private App | Private App |
+| ACTION `chatid` override | Allowed | Allowed | Allowed | Allowed |
+
+**Client responsibilities:**
+
+| Role | Client | Why |
+|------|--------|-----|
+| Send replies & placeholders | Bot or Private App | Matches the user-facing identity |
+| Read chats & messages | Private App | Bot cannot access private chats |
+| `/task`, `/note`, `/event` API | Private App | Bot may lack permissions |
+| ACTION block execution | Private App | Needs cross-chat access |
 
 ## Media Messages
 
@@ -308,8 +391,10 @@ Config file: `~/.ringclaw/config.json`
     "client_id": "your_client_id",
     "client_secret": "your_client_secret",
     "jwt_token": "your_jwt_token",
-    "chat_id": "your_chat_id",
-    "server_url": "https://platform.ringcentral.com"
+    "chat_ids": ["chat_id_1", "chat_id_2"],
+    "server_url": "https://platform.ringcentral.com",
+    "bot_token": "",
+    "bot_mention_only": true
   },
   "agents": {
     "claude": {
@@ -339,7 +424,6 @@ Environment variables:
 - `RC_CLIENT_ID` — RingCentral app client ID
 - `RC_CLIENT_SECRET` — RingCentral app client secret
 - `RC_JWT_TOKEN` — RingCentral JWT credential
-- `RC_CHAT_ID` — Target chat ID to listen and post to
 - `RC_SERVER_URL` — RingCentral server URL (default: `https://platform.ringcentral.com`)
 - `RINGCLAW_DEFAULT_AGENT` — override default agent
 - `OPENCLAW_GATEWAY_URL` — OpenClaw HTTP fallback endpoint
@@ -423,7 +507,6 @@ docker run -d --name ringclaw \
   -e RC_CLIENT_ID=xxx \
   -e RC_CLIENT_SECRET=xxx \
   -e RC_JWT_TOKEN=xxx \
-  -e RC_CHAT_ID=xxx \
   ringclaw
 
 # With HTTP agent
@@ -432,7 +515,6 @@ docker run -d --name ringclaw \
   -e RC_CLIENT_ID=xxx \
   -e RC_CLIENT_SECRET=xxx \
   -e RC_JWT_TOKEN=xxx \
-  -e RC_CHAT_ID=xxx \
   -e OPENCLAW_GATEWAY_URL=https://api.example.com \
   -e OPENCLAW_GATEWAY_TOKEN=sk-xxx \
   ringclaw

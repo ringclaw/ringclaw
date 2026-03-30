@@ -33,7 +33,7 @@ func TestLoadFromFile(t *testing.T) {
 			ClientID:     "test-id",
 			ClientSecret: "test-secret",
 			JWTToken:     "test-jwt",
-			ChatID:       "test-chat",
+			ChatIDs:      []string{"test-chat"},
 		},
 	}
 	data, _ := json.MarshalIndent(testCfg, "", "  ")
@@ -68,7 +68,6 @@ func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("RC_CLIENT_ID", "from-env")
 	t.Setenv("RC_CLIENT_SECRET", "env-secret")
 	t.Setenv("RC_JWT_TOKEN", "env-jwt")
-	t.Setenv("RC_CHAT_ID", "env-chat")
 
 	loadEnv(cfg)
 

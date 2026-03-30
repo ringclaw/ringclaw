@@ -22,11 +22,27 @@ const (
 // Client is a RingCentral Team Messaging REST API client.
 type Client struct {
 	serverURL  string
-	chatID     string
 	auth       *Auth
 	httpClient *http.Client
 	ownerID    string
 	monitor    *Monitor
+	isBot      bool
+	dmChatID   string
+}
+
+// IsBot returns true if this client uses a bot token.
+func (c *Client) IsBot() bool {
+	return c.isBot
+}
+
+// SetDMChatID sets the bot's direct message chat ID.
+func (c *Client) SetDMChatID(id string) {
+	c.dmChatID = id
+}
+
+// IsBotDM returns true if the given chatID is the bot's DM chat.
+func (c *Client) IsBotDM(chatID string) bool {
+	return c.isBot && c.dmChatID != "" && chatID == c.dmChatID
 }
 
 // SetMonitor links a monitor for tracking sent posts.
@@ -50,8 +66,32 @@ func NewClient(creds *Credentials) *Client {
 	auth := NewAuth(creds.ClientID, creds.ClientSecret, creds.JWTToken, serverURL)
 	return &Client{
 		serverURL: serverURL,
-		chatID:    creds.ChatID,
 		auth:      auth,
+		httpClient: &http.Client{
+			Timeout: requestTimeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
+	}
+}
+
+// NewBotClient creates a Client that uses a static bot access token
+// (obtained from the RC Developer Console when installing a private bot).
+// Bot tokens are long-lived and don't require JWT refresh.
+func NewBotClient(serverURL, botToken string) *Client {
+	if serverURL == "" {
+		serverURL = defaultServerURL
+	}
+	auth := NewAuth("", "", "", serverURL)
+	// Set the bot token with a far-future expiry so AccessToken() never triggers refresh
+	auth.SetTokenForTest(botToken, time.Now().Add(365*24*time.Hour))
+	return &Client{
+		serverURL: serverURL,
+		auth:      auth,
+		isBot:     true,
 		httpClient: &http.Client{
 			Timeout: requestTimeout,
 			Transport: &http.Transport{
@@ -66,11 +106,6 @@ func NewClient(creds *Credentials) *Client {
 // Authenticate performs JWT authentication. Must be called before other methods.
 func (c *Client) Authenticate() error {
 	return c.auth.Authenticate()
-}
-
-// ChatID returns the configured chat ID.
-func (c *Client) ChatID() string {
-	return c.chatID
 }
 
 // Auth returns the auth manager (used by monitor for WS token).
@@ -134,6 +169,13 @@ func (c *Client) UpdatePost(ctx context.Context, chatID, postID, text string) (*
 		return nil, fmt.Errorf("parse update response: %w", err)
 	}
 	return &post, nil
+}
+
+// DeletePost deletes a post by ID.
+func (c *Client) DeletePost(ctx context.Context, chatID, postID string) error {
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts/%s", chatID, postID)
+	_, err := c.doRequest(ctx, http.MethodDelete, path, "", nil)
+	return err
 }
 
 // UploadFile uploads a file to a chat.
@@ -284,6 +326,16 @@ func (c *Client) GetExtensionInfo(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("parse extension info: %w", err)
 	}
 	return fmt.Sprintf("%d", info.ID), nil
+}
+
+// FindDirectChat finds or creates a Direct (1:1) chat between the current
+// user and the given person. Returns the chat ID.
+func (c *Client) FindDirectChat(ctx context.Context, personID string) (string, error) {
+	chat, err := c.CreateConversation(ctx, []string{personID})
+	if err != nil {
+		return "", fmt.Errorf("find direct chat: %w", err)
+	}
+	return chat.ID, nil
 }
 
 // --- Task CRUD ---

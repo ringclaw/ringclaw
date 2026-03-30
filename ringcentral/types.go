@@ -363,5 +363,4 @@ type Credentials struct {
 	ClientSecret string `json:"client_secret"`
 	JWTToken     string `json:"jwt_token"`
 	ServerURL    string `json:"server_url"`
-	ChatID       string `json:"chat_id"`
 }

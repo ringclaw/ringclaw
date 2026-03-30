@@ -235,7 +235,7 @@ func (h *Handler) parseCommand(text string) ([]string, string) {
 }
 
 // HandleMessage processes a single incoming RingCentral post.
-func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) {
+func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
 	text := strings.TrimSpace(post.Text)
 	if text == "" {
 		slog.Debug("received empty message, skipping", "component", "handler", "creatorID", post.CreatorID)
@@ -253,6 +253,16 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 
 	chatID := post.GroupID
 	slog.Info("received message", "component", "handler", "creatorID", post.CreatorID, "chatID", chatID, "text", truncate(text, 80))
+
+	// In bot group chats (not bot DM), restrict privileged commands to the bot owner
+	isBotGroup := client.IsBot() && !client.IsBotDM(chatID)
+	if isBotGroup && isPrivilegedCommand(text) {
+		if post.CreatorID != readClient.OwnerID() {
+			slog.Info("blocked privileged command from non-owner", "component", "handler", "creatorID", post.CreatorID, "command", truncate(text, 30))
+			_ = SendTextReply(ctx, client, chatID, "Only the bot owner can use this command in group chats.")
+			return
+		}
+	}
 
 	// Built-in commands (no typing needed)
 	if text == "/info" || text == "/status" {
@@ -285,15 +295,20 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
-	// Summarize command
+	// Summarize command -- use readClient (private app) for reading other chats
 	if IsSummarizeCommand(text) {
-		h.handleSummarize(ctx, client, post)
+		// Block in bot group chats -- would leak private data to the group
+		if isBotGroup {
+			_ = SendTextReply(ctx, client, chatID, "This command can only be used in a direct message with the bot.")
+			return
+		}
+		h.handleSummarize(ctx, client, readClient, post)
 		return
 	}
 
-	// Action commands: /task, /note, /event
+	// Action commands: /task, /note, /event (use readClient for API access)
 	if IsActionCommand(text) {
-		reply := HandleActionCommand(ctx, client, chatID, text)
+		reply := HandleActionCommand(ctx, readClient, chatID, text)
 		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
 			slog.Error("failed to send action reply", "component", "handler", "error", err)
 		}
@@ -305,19 +320,24 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 
 	// No command prefix -> send to default agent
 	if len(agentNames) == 0 {
-		h.sendToDefaultAgent(ctx, client, post, text)
+		h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		return
 	}
 
 	// No message -> switch default agent (only first name)
 	if message == "" {
 		if len(agentNames) == 1 && h.isKnownAgent(agentNames[0]) {
+			// Block agent switch from non-owner in bot group chats
+			if isBotGroup && post.CreatorID != readClient.OwnerID() {
+				_ = SendTextReply(ctx, client, chatID, "Only the bot owner can switch agents in group chats.")
+				return
+			}
 			reply := h.switchDefault(ctx, agentNames[0])
 			if err := SendTextReply(ctx, client, chatID, reply); err != nil {
 				slog.Error("failed to send reply", "component", "handler", "error", err)
 			}
 		} else if len(agentNames) == 1 && !h.isKnownAgent(agentNames[0]) {
-			h.sendToDefaultAgent(ctx, client, post, text)
+			h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		} else {
 			reply := "Usage: specify one agent to switch, or add a message to broadcast"
 			if err := SendTextReply(ctx, client, chatID, reply); err != nil {
@@ -335,20 +355,20 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		}
 	}
 	if len(knownNames) == 0 {
-		h.sendToDefaultAgent(ctx, client, post, text)
+		h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		return
 	}
 
 	if len(knownNames) == 1 {
-		h.sendToNamedAgent(ctx, client, post, knownNames[0], message)
+		h.sendToNamedAgent(ctx, client, readClient, post, knownNames[0], message)
 	} else {
 		// Multi-agent broadcast: parallel dispatch
-		h.broadcastToAgents(ctx, client, post, knownNames, message)
+		h.broadcastToAgents(ctx, client, readClient, post, knownNames, message)
 	}
 }
 
 // sendToDefaultAgent sends the message to the default agent and replies.
-func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, post ringcentral.Post, text string) {
+func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string) {
 	chatID := post.GroupID
 
 	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
@@ -369,11 +389,11 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Cl
 		reply = "[echo] " + text
 	}
 
-	h.sendReplyWithActions(ctx, client, post, reply, placeholderID)
+	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
 }
 
 // sendToNamedAgent sends the message to a specific agent and replies.
-func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Client, post ringcentral.Post, name, message string) {
+func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, name, message string) {
 	chatID := post.GroupID
 
 	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
@@ -396,12 +416,12 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 		reply = fmt.Sprintf("Error: %v", err)
 	}
 
-	h.sendReplyWithActions(ctx, client, post, reply, placeholderID)
+	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
 }
 
 // broadcastToAgents sends the message to multiple agents in parallel.
 // Each reply is sent as a separate message with the agent name prefix.
-func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, post ringcentral.Post, names []string, message string) {
+func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, names []string, message string) {
 	type result struct {
 		name  string
 		reply string
@@ -428,19 +448,20 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 	for range names {
 		r := <-ch
 		reply := fmt.Sprintf("[%s] %s", r.name, r.reply)
-		h.sendReplyWithActions(ctx, client, post, reply, "")
+		h.sendReplyWithActions(ctx, client, readClient, post, reply, "")
 	}
 }
 
 // sendReplyWithActions processes action blocks and sends the final reply.
-func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, post ringcentral.Post, reply, placeholderID string) {
+// actionClient is used for executing actions (should be private app when available).
+func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, actionClient *ringcentral.Client, post ringcentral.Post, reply, placeholderID string) {
 	chatID := post.GroupID
 
 	// Parse and execute any ACTION blocks from the agent's response
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
 		reply = cleanReply
-		results := ExecuteAgentActions(ctx, client, chatID, actions)
+		results := ExecuteAgentActions(ctx, actionClient, chatID, actions)
 		if len(results) > 0 {
 			defer func() {
 				_ = SendTextReply(ctx, client, chatID, strings.Join(results, "\n"))
@@ -454,11 +475,22 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 	// Convert full markdown to RingCentral Mini-Markdown
 	reply = MarkdownToMiniMarkdown(reply)
 
-	// Wrap reply with answer markers
-	reply = wrapAnswer(reply)
+	// Wrap reply with answer markers (skip for bot client)
+	if !client.IsBot() {
+		reply = wrapAnswer(reply)
+	}
 
 	// Update the placeholder with the real reply, or send a new post
-	if placeholderID != "" {
+	if strings.TrimSpace(reply) == "" {
+		// No text reply -- delete the placeholder instead of leaving it empty
+		if placeholderID != "" {
+			if delErr := client.DeletePost(ctx, chatID, placeholderID); delErr != nil {
+				slog.Error("failed to delete empty placeholder", "component", "handler", "error", delErr)
+			} else {
+				slog.Info("deleted empty placeholder", "component", "handler", "postID", placeholderID)
+			}
+		}
+	} else if placeholderID != "" {
 		if updateErr := UpdatePostText(ctx, client, chatID, placeholderID, reply); updateErr != nil {
 			slog.Error("failed to update placeholder, sending new post", "component", "handler", "error", updateErr)
 			if sendErr := SendTextReply(ctx, client, chatID, reply); sendErr != nil {
@@ -828,28 +860,43 @@ func wrapAnswer(text string) string {
 	return "--------answer--------\n" + text + "\n---------end----------"
 }
 
-func (h *Handler) handleSummarize(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) {
+// isPrivilegedCommand returns true for commands that should be restricted
+// to the bot owner in group chats (agent switch, session reset, cwd, summarize).
+func isPrivilegedCommand(text string) bool {
+	if IsSummarizeCommand(text) {
+		return true
+	}
+	if text == "/new" || text == "/clear" {
+		return true
+	}
+	if strings.HasPrefix(text, "/cwd") {
+		return true
+	}
+	return false
+}
+
+func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
 	chatID := post.GroupID
 	text := strings.TrimSpace(post.Text)
 
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
+	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, replyClient, chatID)
 	if placeholderErr != nil {
 		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
 	}
 
 	sendReply := func(reply string) {
 		if placeholderID != "" {
-			if err := UpdatePostText(ctx, client, chatID, placeholderID, reply); err != nil {
+			if err := UpdatePostText(ctx, replyClient, chatID, placeholderID, reply); err != nil {
 				slog.Error("failed to update placeholder", "component", "handler", "error", err)
-				_ = SendTextReply(ctx, client, chatID, reply)
+				_ = SendTextReply(ctx, replyClient, chatID, reply)
 			}
 		} else {
-			_ = SendTextReply(ctx, client, chatID, reply)
+			_ = SendTextReply(ctx, replyClient, chatID, reply)
 		}
 	}
 
-	// Resolve target chat
-	req, err := ResolveChatTarget(ctx, client, text, post.Mentions)
+	// Resolve target chat using readClient (private app has access to all chats)
+	req, err := ResolveChatTarget(ctx, readClient, text, post.Mentions)
 	if err != nil {
 		sendReply(fmt.Sprintf("Error: %v", err))
 		return
@@ -857,8 +904,8 @@ func (h *Handler) handleSummarize(ctx context.Context, client *ringcentral.Clien
 
 	slog.Info("summarize target chat", "component", "summarize", "chatName", req.ChatName, "chatID", req.ChatID, "from", req.TimeFrom.Format(time.RFC3339))
 
-	// Build prompt from chat messages
-	prompt, err := BuildSummaryPrompt(ctx, client, req)
+	// Build prompt using readClient (private app can read any chat's messages)
+	prompt, err := BuildSummaryPrompt(ctx, readClient, req)
 	if err != nil {
 		sendReply(fmt.Sprintf("Error: %v", err))
 		return
@@ -879,13 +926,17 @@ func (h *Handler) handleSummarize(ctx context.Context, client *ringcentral.Clien
 
 	// Parse and execute any ACTION blocks from the agent's response
 	cleanReply, actions := ParseAgentActions(reply)
-	sendReply(wrapAnswer(cleanReply))
+	if replyClient.IsBot() {
+		sendReply(cleanReply)
+	} else {
+		sendReply(wrapAnswer(cleanReply))
+	}
 
 	if len(actions) > 0 {
-		targetChatID := req.ChatID
-		results := ExecuteAgentActions(ctx, client, targetChatID, actions)
+		// Execute actions in the current chat (not the summarized chat) using readClient
+		results := ExecuteAgentActions(ctx, readClient, chatID, actions)
 		if len(results) > 0 {
-			_ = SendTextReply(ctx, client, chatID, strings.Join(results, "\n"))
+			_ = SendTextReply(ctx, replyClient, chatID, strings.Join(results, "\n"))
 		}
 	}
 }

@@ -16,11 +16,10 @@ func newTestServer() *Server {
 		ClientID:     "id",
 		ClientSecret: "secret",
 		JWTToken:     "jwt",
-		ChatID:       "default-chat",
 		ServerURL:    "https://example.com",
 	}
 	client := ringcentral.NewClient(creds)
-	return NewServer(client, "127.0.0.1:0")
+	return NewServer(client, "127.0.0.1:0", "default-chat")
 }
 
 func newTestServerWithBackend(backend *httptest.Server) *Server {
@@ -28,13 +27,12 @@ func newTestServerWithBackend(backend *httptest.Server) *Server {
 		ClientID:     "id",
 		ClientSecret: "secret",
 		JWTToken:     "jwt",
-		ChatID:       "default-chat",
 		ServerURL:    backend.URL,
 	}
 	client := ringcentral.NewClient(creds)
 	// Pre-set a valid token so auth doesn't need to call the real endpoint
 	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
-	return NewServer(client, "127.0.0.1:0")
+	return NewServer(client, "127.0.0.1:0", "default-chat")
 }
 
 func TestHealthEndpoint(t *testing.T) {

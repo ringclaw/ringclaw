@@ -535,11 +535,12 @@ ACTION:NOTE title=<title> [chatid=<target chat ID>]
 <body content>
 END_ACTION
 
-ACTION:TASK subject=<subject> [chatid=<target chat ID>]
+ACTION:TASK subject=<subject> [assignee=<person ID>] [chatid=<target chat ID>]
 END_ACTION
 
 ACTION:EVENT title=<title> start=<ISO8601> end=<ISO8601>
 END_ACTION
+Example: ACTION:EVENT title=Team Meeting start=2026-03-30T14:00:00Z end=2026-03-30T15:00:00Z
 
 ACTION:CARD [chatid=<target chat ID>]
 <Adaptive Card JSON, version 1.3>
@@ -554,7 +555,8 @@ Rules:
 - Your text reply comes FIRST, then ACTION blocks at the end.
 - When the user asks for cards, rich display, progress, reports, or structured data → use ACTION:CARD.
 - When the user asks to create notes/tasks/events → use the corresponding ACTION block.
-- When the user mentions a target chat via ![:Team](ID) or ![:Person](ID), extract the numeric ID and pass it as chatid=<ID> in the ACTION header.
+- When the user mentions ![:Person](ID), use the numeric ID as assignee=<ID> in TASK to assign the task to that person. The task is created in the current chat.
+- When the user mentions ![:Team](ID), use the numeric ID as chatid=<ID> to target that team chat.
 - If no chatid is specified, the action executes in the current chat.
 - Do NOT create files. Do NOT output raw JSON in your reply. Use ACTION blocks so the system executes them.
 - If no action is needed, reply normally without ACTION blocks.
@@ -580,7 +582,18 @@ func ParseAgentActions(reply string) (string, []AgentAction) {
 		}
 		endIdx := strings.Index(clean[startIdx:], "END_ACTION")
 		if endIdx < 0 {
-			break
+			// No END_ACTION: treat the single line as a complete action (e.g. EVENT).
+			lineEnd := strings.Index(clean[startIdx:], "\n")
+			if lineEnd < 0 {
+				lineEnd = len(clean) - startIdx
+			}
+			block := clean[startIdx : startIdx+lineEnd]
+			action := parseActionBlock(block)
+			if action != nil {
+				actions = append(actions, *action)
+			}
+			clean = clean[:startIdx] + clean[startIdx+lineEnd:]
+			continue
 		}
 		endIdx += startIdx + len("END_ACTION")
 
@@ -639,7 +652,7 @@ func parseActionBlock(block string) *AgentAction {
 func parseActionParams(s string) []keyValue {
 	var result []keyValue
 	// Split by known keys to handle values with spaces
-	keys := []string{"title", "subject", "start", "end", "chatid"}
+	keys := []string{"title", "subject", "start", "end", "chatid", "assignee"}
 	remaining := s
 	for len(remaining) > 0 {
 		remaining = strings.TrimSpace(remaining)
@@ -674,7 +687,6 @@ func parseActionParams(s string) []keyValue {
 func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID string, actions []AgentAction) []string {
 	var results []string
 	for _, a := range actions {
-		// Allow each action to override the target chat via chatid param
 		targetChat := chatID
 		if cid := a.Params["chatid"]; cid != "" {
 			targetChat = extractChatID(cid)
@@ -698,7 +710,6 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 			if pubErr := client.PublishNote(ctx, note.ID); pubErr != nil {
 				slog.Error("action: publish note failed", "noteID", note.ID, "error", pubErr)
 			}
-			results = append(results, fmt.Sprintf("Note created: `%s` — %s", note.ID, title))
 			slog.Info("action: created note", "noteID", note.ID, "chatID", targetChat, "title", title)
 
 		case "TASK":
@@ -706,13 +717,16 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 			if subject == "" {
 				continue
 			}
-			task, err := client.CreateTask(ctx, targetChat, &ringcentral.CreateTaskRequest{Subject: subject})
+			req := &ringcentral.CreateTaskRequest{Subject: subject}
+			if aid := a.Params["assignee"]; aid != "" {
+				req.Assignees = []ringcentral.TaskAssignee{{ID: extractChatID(aid)}}
+			}
+			task, err := client.CreateTask(ctx, targetChat, req)
 			if err != nil {
 				slog.Error("action: create task failed", "error", err)
 				results = append(results, fmt.Sprintf("Failed to create task: %v", err))
 				continue
 			}
-			results = append(results, fmt.Sprintf("Task created: `%s` — %s", task.ID, subject))
 			slog.Info("action: created task", "taskID", task.ID, "chatID", targetChat, "subject", subject)
 
 		case "EVENT":
@@ -732,7 +746,6 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 				results = append(results, fmt.Sprintf("Failed to create event: %v", err))
 				continue
 			}
-			results = append(results, fmt.Sprintf("Event created: `%s` — %s", event.ID, title))
 			slog.Info("action: created event", "eventID", event.ID, "title", title)
 
 		case "CARD":
@@ -751,7 +764,6 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 				results = append(results, fmt.Sprintf("Failed to create card: %v", err))
 				continue
 			}
-			results = append(results, fmt.Sprintf("Adaptive Card created: `%s` in chat `%s`", card.ID, targetChat))
 			slog.Info("action: created adaptive card", "cardID", card.ID, "chatID", targetChat)
 		}
 	}

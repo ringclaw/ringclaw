@@ -19,7 +19,6 @@ func newTestClientWithServer(handler http.HandlerFunc) (*Client, *httptest.Serve
 	}
 	client := &Client{
 		serverURL:  srv.URL,
-		chatID:     "test-chat",
 		auth:       auth,
 		httpClient: &http.Client{},
 	}

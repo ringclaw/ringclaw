@@ -18,9 +18,10 @@ const maxRequestBodyBytes = 1 << 20 // 1MB
 
 // Server provides an HTTP API for sending messages.
 type Server struct {
-	client  *ringcentral.Client
-	addr    string
-	limiter *rateLimiter
+	client        *ringcentral.Client
+	defaultChatID string
+	addr          string
+	limiter       *rateLimiter
 }
 
 // rateLimiter is a simple token bucket per-IP rate limiter.
@@ -73,14 +74,15 @@ func (rl *rateLimiter) allow(ip string) bool {
 }
 
 // NewServer creates an API server.
-func NewServer(client *ringcentral.Client, addr string) *Server {
+func NewServer(client *ringcentral.Client, addr string, defaultChatID string) *Server {
 	if addr == "" {
 		addr = "127.0.0.1:18011"
 	}
 	return &Server{
-		client:  client,
-		addr:    addr,
-		limiter: newRateLimiter(60, 1*time.Minute), // 60 req/min per IP
+		client:        client,
+		defaultChatID: defaultChatID,
+		addr:          addr,
+		limiter:       newRateLimiter(60, 1*time.Minute), // 60 req/min per IP
 	}
 }
 
@@ -152,7 +154,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	// Use specified chat ID or fall back to configured default
 	chatID := req.To
 	if chatID == "" {
-		chatID = s.client.ChatID()
+		chatID = s.defaultChatID
 	}
 	if chatID == "" {
 		http.Error(w, `"to" is required (no default chat configured)`, http.StatusBadRequest)
@@ -224,7 +226,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		chatID := r.URL.Query().Get("chat_id")
 		if chatID == "" {
-			chatID = s.client.ChatID()
+			chatID = s.defaultChatID
 		}
 		if chatID == "" {
 			s.jsonError(w, "chat_id required", http.StatusBadRequest)
@@ -248,7 +250,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		chatID := req.ChatID
 		if chatID == "" {
-			chatID = s.client.ChatID()
+			chatID = s.defaultChatID
 		}
 		task, err := s.client.CreateTask(ctx, chatID, &req.CreateTaskRequest)
 		if err != nil {
@@ -330,7 +332,7 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		chatID := r.URL.Query().Get("chat_id")
 		if chatID == "" {
-			chatID = s.client.ChatID()
+			chatID = s.defaultChatID
 		}
 		if chatID == "" {
 			s.jsonError(w, "chat_id required", http.StatusBadRequest)
@@ -354,7 +356,7 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		}
 		chatID := req.ChatID
 		if chatID == "" {
-			chatID = s.client.ChatID()
+			chatID = s.defaultChatID
 		}
 		note, err := s.client.CreateNote(ctx, chatID, &req.CreateNoteRequest)
 		if err != nil {
@@ -506,7 +508,7 @@ func (s *Server) handleCards(w http.ResponseWriter, r *http.Request) {
 		}
 		chatID := req.ChatID
 		if chatID == "" {
-			chatID = s.client.ChatID()
+			chatID = s.defaultChatID
 		}
 		if chatID == "" {
 			s.jsonError(w, "chat_id required", http.StatusBadRequest)

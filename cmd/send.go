@@ -48,18 +48,17 @@ var sendCmd = &cobra.Command{
 		}
 
 		chatID := sendTo
-		if chatID == "" {
-			chatID = cfg.RC.ChatID
+		if chatID == "" && len(cfg.RC.ChatIDs) > 0 {
+			chatID = cfg.RC.ChatIDs[0]
 		}
 		if chatID == "" {
-			return fmt.Errorf("no chat ID specified. Use --to or set RC_CHAT_ID")
+			return fmt.Errorf("no chat ID specified. Use --to or add chat_ids to config file")
 		}
 
 		creds := &ringcentral.Credentials{
 			ClientID:     cfg.RC.ClientID,
 			ClientSecret: cfg.RC.ClientSecret,
 			JWTToken:     cfg.RC.JWTToken,
-			ChatID:       chatID,
 			ServerURL:    cfg.RC.ServerURL,
 		}
 		client := ringcentral.NewClient(creds)

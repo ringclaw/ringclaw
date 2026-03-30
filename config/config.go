@@ -17,11 +17,22 @@ type Config struct {
 
 // RCConfig holds RingCentral connection configuration.
 type RCConfig struct {
-	ClientID     string `json:"client_id,omitempty"`
-	ClientSecret string `json:"client_secret,omitempty"`
-	JWTToken     string `json:"jwt_token,omitempty"`
-	ChatID       string `json:"chat_id,omitempty"`
-	ServerURL    string `json:"server_url,omitempty"`
+	ClientID       string   `json:"client_id,omitempty"`
+	ClientSecret   string   `json:"client_secret,omitempty"`
+	JWTToken       string   `json:"jwt_token,omitempty"`
+	ChatIDs        []string `json:"chat_ids,omitempty"`
+	ServerURL      string   `json:"server_url,omitempty"`
+	BotToken       string   `json:"bot_token,omitempty"`
+	BotMentionOnly *bool    `json:"bot_mention_only,omitempty"`
+}
+
+// IsBotMentionOnly returns whether the bot requires @mention in group chats.
+// Defaults to true if not explicitly set.
+func (rc RCConfig) IsBotMentionOnly() bool {
+	if rc.BotMentionOnly == nil {
+		return true
+	}
+	return *rc.BotMentionOnly
 }
 
 // AgentConfig holds configuration for a single agent.
@@ -112,11 +123,11 @@ func loadEnv(cfg *Config) {
 	if v := os.Getenv("RC_JWT_TOKEN"); v != "" {
 		cfg.RC.JWTToken = v
 	}
-	if v := os.Getenv("RC_CHAT_ID"); v != "" {
-		cfg.RC.ChatID = v
-	}
 	if v := os.Getenv("RC_SERVER_URL"); v != "" {
 		cfg.RC.ServerURL = v
+	}
+	if v := os.Getenv("RC_BOT_TOKEN"); v != "" {
+		cfg.RC.BotToken = v
 	}
 }
 
