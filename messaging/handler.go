@@ -254,6 +254,15 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	chatID := post.GroupID
 	slog.Info("received message", "component", "handler", "creatorID", post.CreatorID, "chatID", chatID, "text", truncate(text, 80))
 
+	// In bot group chats, restrict privileged commands to the bot owner
+	if client.IsBot() && readClient != client && isPrivilegedCommand(text) {
+		if post.CreatorID != readClient.OwnerID() {
+			slog.Info("blocked privileged command from non-owner", "component", "handler", "creatorID", post.CreatorID, "command", truncate(text, 30))
+			_ = SendTextReply(ctx, client, chatID, "Only the bot owner can use this command in group chats.")
+			return
+		}
+	}
+
 	// Built-in commands (no typing needed)
 	if text == "/info" || text == "/status" {
 		cardJSON := h.buildStatusCard()
@@ -317,6 +326,11 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	// No message -> switch default agent (only first name)
 	if message == "" {
 		if len(agentNames) == 1 && h.isKnownAgent(agentNames[0]) {
+			// Block agent switch from non-owner in bot group chats
+			if client.IsBot() && readClient != client && post.CreatorID != readClient.OwnerID() {
+				_ = SendTextReply(ctx, client, chatID, "Only the bot owner can switch agents in group chats.")
+				return
+			}
 			reply := h.switchDefault(ctx, agentNames[0])
 			if err := SendTextReply(ctx, client, chatID, reply); err != nil {
 				slog.Error("failed to send reply", "component", "handler", "error", err)
@@ -833,6 +847,21 @@ Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) 
 
 func wrapAnswer(text string) string {
 	return "--------answer--------\n" + text + "\n---------end----------"
+}
+
+// isPrivilegedCommand returns true for commands that should be restricted
+// to the bot owner in group chats (agent switch, session reset, cwd, summarize).
+func isPrivilegedCommand(text string) bool {
+	if IsSummarizeCommand(text) {
+		return true
+	}
+	if text == "/new" || text == "/clear" {
+		return true
+	}
+	if strings.HasPrefix(text, "/cwd") {
+		return true
+	}
+	return false
 }
 
 func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {

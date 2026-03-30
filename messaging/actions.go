@@ -674,10 +674,13 @@ func parseActionParams(s string) []keyValue {
 func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID string, actions []AgentAction) []string {
 	var results []string
 	for _, a := range actions {
-		// Allow each action to override the target chat via chatid param
 		targetChat := chatID
 		if cid := a.Params["chatid"]; cid != "" {
-			targetChat = extractChatID(cid)
+			if client.IsBot() {
+				slog.Warn("ignoring chatid override in bot context", "component", "actions", "requestedChat", cid)
+			} else {
+				targetChat = extractChatID(cid)
+			}
 		}
 
 		switch a.Type {
