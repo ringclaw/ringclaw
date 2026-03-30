@@ -751,7 +751,6 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 				results = append(results, fmt.Sprintf("Failed to create card: %v", err))
 				continue
 			}
-			results = append(results, fmt.Sprintf("Adaptive Card created: `%s` in chat `%s`", card.ID, targetChat))
 			slog.Info("action: created adaptive card", "cardID", card.ID, "chatID", targetChat)
 		}
 	}
