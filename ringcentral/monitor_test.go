@@ -82,17 +82,12 @@ func TestIsBotMessage(t *testing.T) {
 }
 
 func newTestMonitor(chatIDs string, handler MessageHandler) *Monitor {
-	creds := &Credentials{
-		ClientID:     "id",
-		ClientSecret: "secret",
-		JWTToken:     "jwt",
-	}
-	client := NewClient(creds)
+	bot := NewBotClient("", "fake-bot-token")
 	var ids []string
 	if chatIDs != "" {
 		ids = []string{chatIDs}
 	}
-	return NewMonitor(client, handler, ids)
+	return NewMonitor(bot, handler, ids, false)
 }
 
 func makeWSMessage(post Post) []byte {
@@ -238,64 +233,38 @@ func TestMonitor_HandleWSMessage_IgnoreSentPost(t *testing.T) {
 	}
 }
 
-func TestMonitor_ChooseClient_NoBotClient(t *testing.T) {
+func TestMonitor_ReadClient_NoPrivateClient(t *testing.T) {
 	m := newTestMonitor("", func(ctx context.Context, client *Client, _ *Client, post Post) {})
-	got := m.chooseClient("any-chat")
+	got := m.readClient()
 	if got != m.client {
-		t.Error("without bot client, should always return private client")
+		t.Error("without private client, readClient should return bot client")
 	}
 }
 
-func TestMonitor_ChooseClient_BotDM(t *testing.T) {
+func TestMonitor_ReadClient_WithPrivateClient(t *testing.T) {
 	m := newTestMonitor("", func(ctx context.Context, client *Client, _ *Client, post Post) {})
-	bot := NewBotClient("", "fake-bot-token")
-	m.SetBotClient(bot, "dm-chat-123", true)
-
-	got := m.chooseClient("dm-chat-123")
-	if got != bot {
-		t.Error("bot DM chat should use bot client")
-	}
-
-	got = m.chooseClient("other-chat")
-	if got != m.client {
-		t.Error("non-DM chat should use private client")
-	}
-}
-
-func TestMonitor_ChooseClient_AllowedChats(t *testing.T) {
 	creds := &Credentials{ClientID: "id", ClientSecret: "secret", JWTToken: "jwt"}
-	client := NewClient(creds)
-	handler := func(ctx context.Context, c *Client, _ *Client, p Post) {}
-	m := NewMonitor(client, handler, []string{"group-1", "group-2"})
+	private := NewClient(creds)
+	m.SetPrivateClient(private)
 
-	bot := NewBotClient("", "fake-bot-token")
-	m.SetBotClient(bot, "dm-chat-123", true)
-
-	if m.chooseClient("group-1") != bot {
-		t.Error("group-1 should use bot client")
-	}
-	if m.chooseClient("group-2") != bot {
-		t.Error("group-2 should use bot client")
-	}
-	if m.chooseClient("group-3") != m.client {
-		t.Error("group-3 should use private client")
-	}
-	if m.chooseClient("dm-chat-123") != bot {
-		t.Error("bot DM should use bot client")
+	got := m.readClient()
+	if got != private {
+		t.Error("with private client, readClient should return private client")
 	}
 }
 
 func TestMonitor_HandleWSMessage_IgnoreBotClientPost(t *testing.T) {
 	var mu sync.Mutex
 	var called bool
-	m := newTestMonitor("", func(ctx context.Context, client *Client, _ *Client, post Post) {
+
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-ext-123")
+	bot.SetDMChatID("dm-chat")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
 		mu.Lock()
 		called = true
 		mu.Unlock()
-	})
-	bot := NewBotClient("", "fake-bot-token")
-	bot.SetOwnerID("bot-ext-123")
-	m.SetBotClient(bot, "dm-chat", true)
+	}, []string{"dm-chat"}, true)
 
 	msg := makeWSMessage(Post{
 		ID:        "p99",
@@ -319,17 +288,15 @@ func TestMonitor_HandleWSMessage_IgnoreBotClientPost(t *testing.T) {
 func TestMonitor_HandleWSMessage_BotRouting(t *testing.T) {
 	var mu sync.Mutex
 	var receivedClient *Client
-	creds := &Credentials{ClientID: "id", ClientSecret: "secret", JWTToken: "jwt"}
-	client := NewClient(creds)
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-ext-123")
+	bot.SetDMChatID("dm-chat")
 	handler := func(ctx context.Context, c *Client, _ *Client, p Post) {
 		mu.Lock()
 		receivedClient = c
 		mu.Unlock()
 	}
-	m := NewMonitor(client, handler, []string{"dm-chat", "group-1"})
-	bot := NewBotClient("", "fake-bot-token")
-	bot.SetOwnerID("bot-ext-123")
-	m.SetBotClient(bot, "dm-chat", true)
+	m := NewMonitor(bot, handler, []string{"dm-chat", "group-1"}, true)
 
 	// Message in bot DM -> should route to bot client
 	msg := makeWSMessage(Post{
@@ -386,22 +353,23 @@ func TestMonitor_HandleWSMessage_BotRouting(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestMonitor_HandleWSMessage_PrivateOwnerFiltered(t *testing.T) {
+func TestMonitor_HandleWSMessage_BotOwnerFiltered(t *testing.T) {
 	var mu sync.Mutex
 	var called bool
-	m := newTestMonitor("", func(ctx context.Context, client *Client, _ *Client, post Post) {
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-ext-456")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
 		mu.Lock()
 		called = true
 		mu.Unlock()
-	})
-	m.client.SetOwnerID("private-ext-456")
+	}, []string{"any-chat"}, false)
 
 	msg := makeWSMessage(Post{
 		ID:        "p200",
 		GroupID:   "any-chat",
 		Type:      "TextMessage",
-		Text:      "--------answer--------\nhello\n---------end----------",
-		CreatorID: "private-ext-456",
+		Text:      "bot reply",
+		CreatorID: "bot-ext-456",
 		EventType: "PostAdded",
 	})
 	m.handleWSMessage(context.Background(), msg)
@@ -410,30 +378,30 @@ func TestMonitor_HandleWSMessage_PrivateOwnerFiltered(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if called {
-		t.Error("handler should not be called for private app's own bot messages")
+		t.Error("handler should not be called for bot's own messages")
 	}
 }
 
-func TestMonitor_SetBotClient_NoChatIDs(t *testing.T) {
+func TestMonitor_SetPrivateClient(t *testing.T) {
 	m := newTestMonitor("", func(ctx context.Context, client *Client, _ *Client, post Post) {})
-	bot := NewBotClient("", "fake-token")
-	m.SetBotClient(bot, "dm-chat", true)
-
-	if m.chooseClient("dm-chat") != bot {
-		t.Error("DM should route to bot")
+	if m.readClient() != m.client {
+		t.Error("without private client, readClient should be bot client")
 	}
-	if m.chooseClient("other") != m.client {
-		t.Error("other should route to private")
+
+	creds := &Credentials{ClientID: "id", ClientSecret: "secret", JWTToken: "jwt"}
+	private := NewClient(creds)
+	m.SetPrivateClient(private)
+
+	if m.readClient() != private {
+		t.Error("with private client, readClient should return private client")
 	}
 }
 
 func newBotMonitorWithGroups(groups []string, mentionOnly bool, handler MessageHandler) (*Monitor, *Client) {
-	creds := &Credentials{ClientID: "id", ClientSecret: "secret", JWTToken: "jwt"}
-	client := NewClient(creds)
-	m := NewMonitor(client, handler, groups)
 	bot := NewBotClient("", "fake-bot-token")
 	bot.SetOwnerID("bot-ext-123")
-	m.SetBotClient(bot, "dm-chat", mentionOnly)
+	bot.SetDMChatID("dm-chat")
+	m := NewMonitor(bot, handler, groups, mentionOnly)
 	return m, bot
 }
 

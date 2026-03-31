@@ -43,10 +43,6 @@ var sendCmd = &cobra.Command{
 			return fmt.Errorf("load config: %w", err)
 		}
 
-		if cfg.RC.ClientID == "" || cfg.RC.ClientSecret == "" || cfg.RC.JWTToken == "" {
-			return fmt.Errorf("RingCentral credentials not configured")
-		}
-
 		chatID := sendTo
 		if chatID == "" && len(cfg.RC.ChatIDs) > 0 {
 			chatID = cfg.RC.ChatIDs[0]
@@ -55,16 +51,22 @@ var sendCmd = &cobra.Command{
 			return fmt.Errorf("no chat ID specified. Use --to or add chat_ids to config file")
 		}
 
-		creds := &ringcentral.Credentials{
-			ClientID:     cfg.RC.ClientID,
-			ClientSecret: cfg.RC.ClientSecret,
-			JWTToken:     cfg.RC.JWTToken,
-			ServerURL:    cfg.RC.ServerURL,
-		}
-		client := ringcentral.NewClient(creds)
-
-		if err := client.Authenticate(); err != nil {
-			return fmt.Errorf("authentication failed: %w", err)
+		var client *ringcentral.Client
+		if cfg.RC.BotToken != "" {
+			client = ringcentral.NewBotClient(cfg.RC.ServerURL, cfg.RC.BotToken)
+		} else if cfg.RC.HasPrivateApp() {
+			creds := &ringcentral.Credentials{
+				ClientID:     cfg.RC.ClientID,
+				ClientSecret: cfg.RC.ClientSecret,
+				JWTToken:     cfg.RC.JWTToken,
+				ServerURL:    cfg.RC.ServerURL,
+			}
+			client = ringcentral.NewClient(creds)
+			if err := client.Authenticate(); err != nil {
+				return fmt.Errorf("authentication failed: %w", err)
+			}
+		} else {
+			return fmt.Errorf("no credentials configured. Set RC_BOT_TOKEN or run 'ringclaw setup'")
 		}
 
 		if sendText != "" {

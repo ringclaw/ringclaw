@@ -79,6 +79,27 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 }
 
+func TestHasPrivateApp(t *testing.T) {
+	tests := []struct {
+		name   string
+		rc     RCConfig
+		expect bool
+	}{
+		{"all set", RCConfig{ClientID: "id", ClientSecret: "secret", JWTToken: "jwt"}, true},
+		{"missing client_id", RCConfig{ClientSecret: "secret", JWTToken: "jwt"}, false},
+		{"missing client_secret", RCConfig{ClientID: "id", JWTToken: "jwt"}, false},
+		{"missing jwt_token", RCConfig{ClientID: "id", ClientSecret: "secret"}, false},
+		{"all empty", RCConfig{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.rc.HasPrivateApp(); got != tt.expect {
+				t.Errorf("HasPrivateApp() = %v, want %v", got, tt.expect)
+			}
+		})
+	}
+}
+
 func TestSaveAndReload(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.json")

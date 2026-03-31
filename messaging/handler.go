@@ -257,7 +257,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	// In bot group chats (not bot DM), restrict privileged commands to the bot owner
 	isBotGroup := client.IsBot() && !client.IsBotDM(chatID)
 	if isBotGroup && isPrivilegedCommand(text) {
-		if post.CreatorID != readClient.OwnerID() {
+		if post.CreatorID != client.OwnerID() {
 			slog.Info("blocked privileged command from non-owner", "component", "handler", "creatorID", post.CreatorID, "command", truncate(text, 30))
 			_ = SendTextReply(ctx, client, chatID, "Only the bot owner can use this command in group chats.")
 			return
@@ -295,8 +295,13 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
-	// Summarize command -- use readClient (private app) for reading other chats
+	// Summarize command -- requires private app (readClient) for reading other chats
 	if IsSummarizeCommand(text) {
+		if readClient == client {
+			// No private app configured — bot can't read other users' chats
+			_ = SendTextReply(ctx, client, chatID, "Summarize requires a Private App to be configured. Run 'ringclaw setup' to add one.")
+			return
+		}
 		// Block in bot group chats -- would leak private data to the group
 		if isBotGroup {
 			_ = SendTextReply(ctx, client, chatID, "This command can only be used in a direct message with the bot.")
@@ -328,7 +333,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	if message == "" {
 		if len(agentNames) == 1 && h.isKnownAgent(agentNames[0]) {
 			// Block agent switch from non-owner in bot group chats
-			if isBotGroup && post.CreatorID != readClient.OwnerID() {
+			if isBotGroup && post.CreatorID != client.OwnerID() {
 				_ = SendTextReply(ctx, client, chatID, "Only the bot owner can switch agents in group chats.")
 				return
 			}

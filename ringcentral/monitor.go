@@ -28,13 +28,13 @@ const (
 type MessageHandler func(ctx context.Context, replyClient *Client, readClient *Client, post Post)
 
 // Monitor manages the WebSocket connection for receiving messages.
-// Monitor manages the WebSocket connection for receiving messages.
+// The bot client is required and used for WS connection and replies.
+// The private client is optional and used for reading other chats.
 type Monitor struct {
-	client         *Client
-	botClient      *Client
-	botDMChatID    string
+	client         *Client // bot client (required)
+	privateClient  *Client // private app client (optional)
 	botMentionOnly bool
-	allowedChatIDs map[string]bool // combined chat filter + bot routing
+	allowedChatIDs map[string]bool
 	handler        MessageHandler
 	failures       int
 	sentPosts      map[string]time.Time // post ID -> timestamp
@@ -84,45 +84,37 @@ func (m *Monitor) IsSentPost(id string) bool {
 }
 
 // NewMonitor creates a new WebSocket monitor.
+// botClient is used for WS connection and replies.
 // chatIDs limits which chats are monitored; empty means no chats.
-func NewMonitor(client *Client, handler MessageHandler, chatIDs []string) *Monitor {
+// mentionOnly controls whether group chats require @mention.
+func NewMonitor(botClient *Client, handler MessageHandler, chatIDs []string, mentionOnly bool) *Monitor {
 	allowed := make(map[string]bool, len(chatIDs))
 	for _, id := range chatIDs {
 		allowed[id] = true
 	}
+	// Ensure bot DM is always in the allowed list
+	if botClient.dmChatID != "" {
+		allowed[botClient.dmChatID] = true
+	}
 	return &Monitor{
-		client:         client,
+		client:         botClient,
+		botMentionOnly: mentionOnly,
 		handler:        handler,
 		allowedChatIDs: allowed,
 		sentPosts:      make(map[string]time.Time),
 	}
 }
 
-// SetBotClient configures a bot client for routing replies.
-// dmChatID is the default DM chat between the bot and the installer.
-// mentionOnly controls whether group chats require @mention (default true).
-// The bot's DM chat is automatically added to the allowed chat list.
-func (m *Monitor) SetBotClient(bot *Client, dmChatID string, mentionOnly bool) {
-	m.botClient = bot
-	m.botDMChatID = dmChatID
-	m.botMentionOnly = mentionOnly
-	// Ensure bot DM is always in the allowed list
-	if dmChatID != "" {
-		m.allowedChatIDs[dmChatID] = true
-	}
+// SetPrivateClient configures an optional private app client for reading
+// other chats and cross-chat actions (e.g. summarize).
+func (m *Monitor) SetPrivateClient(c *Client) {
+	m.privateClient = c
 }
 
-// chooseClient returns the bot client if the chat is in the bot's
-// allowed list, otherwise returns the private app client.
-func (m *Monitor) chooseClient(chatID string) *Client {
-	if m.botClient == nil {
-		return m.client
-	}
-	if chatID == m.botDMChatID {
-		return m.botClient
-	}
-	if m.allowedChatIDs[chatID] {
-		return m.botClient
+// readClient returns the private client if available, otherwise the bot client.
+func (m *Monitor) readClient() *Client {
+	if m.privateClient != nil {
+		return m.privateClient
 	}
 	return m.client
 }
@@ -341,15 +333,13 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 	}
 
 	// Skip messages from the bot's own extension
-	if m.botClient != nil && event.Body.CreatorID == m.botClient.OwnerID() {
-		slog.Debug("ignoring bot client's own post", "component", "monitor", "postID", event.Body.ID)
+	if m.client.OwnerID() != "" && event.Body.CreatorID == m.client.OwnerID() {
+		slog.Debug("ignoring bot's own post", "component", "monitor", "postID", event.Body.ID)
 		return
 	}
 
-	replyClient := m.chooseClient(event.Body.GroupID)
-
-	// In group chats routed to the bot, only respond when the bot is @mentioned (if enabled)
-	if m.botMentionOnly && replyClient == m.botClient && event.Body.GroupID != m.botDMChatID {
+	// In group chats, only respond when the bot is @mentioned (if enabled)
+	if m.botMentionOnly && !m.client.IsBotDM(event.Body.GroupID) {
 		if !m.isBotMentioned(event.Body.Mentions) {
 			slog.Debug("ignoring group message without bot mention", "component", "monitor", "chatID", event.Body.GroupID)
 			return
@@ -358,7 +348,7 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 
 	slog.Info("received post", "component", "monitor", "creatorID", event.Body.CreatorID, "chatID", event.Body.GroupID, "text", truncate(event.Body.Text, 50))
 
-	go m.handler(ctx, replyClient, m.client, event.Body)
+	go m.handler(ctx, m.client, m.readClient(), event.Body)
 }
 
 func (m *Monitor) calcBackoff() time.Duration {
@@ -381,10 +371,10 @@ func truncate(s string, n int) string {
 
 // isBotMentioned checks if the bot's extension ID appears in the post mentions.
 func (m *Monitor) isBotMentioned(mentions []Mention) bool {
-	if m.botClient == nil {
+	botID := m.client.OwnerID()
+	if botID == "" {
 		return false
 	}
-	botID := m.botClient.OwnerID()
 	for _, mention := range mentions {
 		if mention.ID == botID {
 			return true

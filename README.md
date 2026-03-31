@@ -19,28 +19,67 @@ curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | 
 # One-line install (Windows PowerShell)
 irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
-# Set RingCentral credentials
-export RC_CLIENT_ID="your_client_id"
-export RC_CLIENT_SECRET="your_client_secret"
-export RC_JWT_TOKEN="your_jwt_token"
+# Set bot token (required)
+export RC_BOT_TOKEN="your_bot_token"
 
 # Start
 ringclaw start
 ```
 
 That's it. On first start, RingClaw will:
-1. Authenticate with RingCentral via JWT
+1. Connect to RingCentral via the Bot App's WebSocket
 2. Auto-detect installed AI agents (Claude, Codex, Gemini, etc.)
 3. Save config to `~/.ringclaw/config.json`
-4. Connect to RingCentral via WebSocket and start receiving messages
+4. Start receiving and replying to messages
 
 ### RingCentral Setup
 
-1. Go to [RingCentral Developer Portal](https://developers.ringcentral.com/) and register an app
-2. Enable the `Team Messaging` and `WebSocketsSubscription` scopes
-3. Create a JWT credential under your app
-4. Find the chat IDs of the conversations you want the bot to monitor (use the [API Explorer](https://developers.ringcentral.com/api-reference/Chats/listGlipChatsNew) to list chats)
-5. (Optional) Create a **Bot App** for group interactions — see [Bot Client](#bot-client) below
+> **Tip:** After creating your apps, run `ringclaw setup` for an interactive wizard that collects credentials, validates them, and saves the config file.
+
+#### Step 1: Create a Bot App (Required)
+
+1. Go to [RingCentral Developer Console](https://developers.ringcentral.com/console) and sign in
+2. Click **Register App** → select **Bot Add-in (No UI)**
+3. Configure the app:
+   - **Security** → App Scopes: check **ReadAccounts**, **TeamMessaging**, **WebSocketsSubscription**
+   - **Access**: Private (only your own account)
+4. Click **Create**
+5. Go to the **Bot** tab → click **Add** to install the bot to your account
+6. Copy the **Bot Token** shown on the Bot tab
+
+#### Step 2: Find Chat IDs
+
+1. Open [API Explorer → List Chats](https://developers.ringcentral.com/api-reference/Chats/listGlipChatsNew)
+2. Sign in and click **Try It Out**
+3. Find the chat you want to monitor and copy its `id` field
+
+#### Step 3: Create a Private App (Optional)
+
+A Private App (REST API with JWT) enables additional features:
+- **Summarize** conversations from other chats
+- **Cross-chat actions** (read messages, create tasks in other chats)
+
+1. In the Developer Console, click **Register App** → select **REST API App**
+2. Configure the app:
+   - **Auth**: JWT auth flow
+   - **Security** → App Scopes: check **ReadAccounts**, **TeamMessaging**, **WebSocketsSubscription**
+   - **Access**: Private
+3. Click **Create** — you'll get a **Client ID** and **Client Secret**
+4. Go to **Credentials** tab → **JWT Credentials** → click **Create JWT Token**
+5. Copy the JWT token
+
+#### Interactive Setup
+
+```bash
+ringclaw setup
+```
+
+The wizard will:
+- Prompt for Bot Token (required)
+- Prompt for chat IDs to monitor
+- Optionally configure Private App credentials (Client ID, Secret, JWT Token)
+- Validate credentials against the RingCentral API
+- Save everything to `~/.ringclaw/config.json`
 
 **Install channels:**
 
@@ -60,8 +99,7 @@ go install github.com/ringclaw/ringclaw@latest
 
 # Via Docker
 docker run -it -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_CLIENT_ID=xxx -e RC_CLIENT_SECRET=xxx \
-  -e RC_JWT_TOKEN=xxx \
+  -e RC_BOT_TOKEN=xxx \
   ghcr.io/ringclaw/ringclaw start
 ```
 
@@ -238,34 +276,16 @@ RingClaw resolves the target chat by name, fetches messages using the private ap
 
 > **Security:** Summarization is blocked in group chats when using a bot client, since the summary would be visible to all group members. Use it in a direct message with the bot instead.
 
-## Bot Client
+## Architecture
 
-RingClaw supports a dual-client architecture: a **Private App** for reading messages and a **Bot App** for replying in group chats.
+RingClaw uses a **Bot App** (required) for messaging and an optional **Private App** for advanced features.
 
 ```mermaid
 graph LR
-    RC[RingCentral] -->|WebSocket| PrivateApp[Private App]
-    PrivateApp -->|reads messages| RingClaw
-    RingClaw -->|replies in DM/allowed chats| BotApp[Bot App]
-    RingClaw -->|replies elsewhere| PrivateApp
-```
-
-**Why use a bot?** Private App messages appear as the user who installed it. A Bot App has its own identity, avatar, and name — making it clear which replies come from the AI.
-
-### Setup
-
-1. Create a **Bot App** in the [RingCentral Developer Portal](https://developers.ringcentral.com/)
-2. Install it to your account and copy the bot token
-3. Add to config:
-
-```json
-{
-  "ringcentral": {
-    "chat_ids": ["group-chat-id-1", "group-chat-id-2"],
-    "bot_token": "your_bot_token",
-    "bot_mention_only": true
-  }
-}
+    RC[RingCentral] -->|WebSocket| BotApp[Bot App]
+    BotApp -->|receives messages| RingClaw
+    RingClaw -->|replies| BotApp
+    RingClaw -.->|reads other chats| PrivateApp[Private App<br/>optional]
 ```
 
 ### Routing
@@ -274,10 +294,8 @@ Messages from chats not in `chat_ids` are silently dropped by the monitor.
 
 | Source chat | Reply client | Read/Action client |
 |-------------|-------------|-------------------|
-| Bot DM (auto-discovered) | Bot | Private App |
-| Chat in `chat_ids` | Bot | Private App |
-
-Without a bot configured, both reply and read use the Private App.
+| Bot DM (auto-discovered) | Bot | Private App (if configured) or Bot |
+| Chat in `chat_ids` | Bot | Private App (if configured) or Bot |
 
 ### Group chat behavior
 
@@ -286,26 +304,27 @@ Without a bot configured, both reply and read use the Private App.
 
 ### Permission matrix
 
-| Operation | No Bot | Bot DM | Bot Group (owner) | Bot Group (others) |
-|---|---|---|---|---|
-| Chat with agent | Private App replies | Bot replies | Bot replies | Bot replies |
-| Summarize | Private App read+reply | Bot reply, Private App read | **Blocked** (data leak) | **Blocked** (data leak) |
-| `/clear`, `/new` | Allowed | Allowed | Allowed | **Blocked** (owner only) |
-| `/cwd` | Allowed | Allowed | Allowed | **Blocked** (owner only) |
-| Agent switch (`/cc`) | Allowed | Allowed | Allowed | **Blocked** (owner only) |
-| `/info`, `/help` | Allowed | Allowed | Allowed | Allowed |
-| `/task`, `/note`, `/event` | Private App | Private App exec, Bot reply | Private App exec, Bot reply | Private App exec, Bot reply |
-| ACTION blocks | Private App | Private App | Private App | Private App |
-| ACTION `chatid` override | Allowed | Allowed | Allowed | Allowed |
+| Operation | Bot DM | Bot Group (owner) | Bot Group (others) |
+|---|---|---|---|
+| Chat with agent | Bot replies | Bot replies | Bot replies |
+| Summarize | Private App read, Bot reply | **Blocked** (data leak) | **Blocked** (data leak) |
+| Summarize (no Private App) | **Disabled** | **Disabled** | **Disabled** |
+| `/clear`, `/new` | Allowed | Allowed | **Blocked** (owner only) |
+| `/cwd` | Allowed | Allowed | **Blocked** (owner only) |
+| Agent switch (`/cc`) | Allowed | Allowed | **Blocked** (owner only) |
+| `/info`, `/help` | Allowed | Allowed | Allowed |
+| `/task`, `/note`, `/event` | Private App (or Bot) | Private App (or Bot) | Private App (or Bot) |
+| ACTION blocks | Private App (or Bot) | Private App (or Bot) | Private App (or Bot) |
 
 **Client responsibilities:**
 
 | Role | Client | Why |
 |------|--------|-----|
-| Send replies & placeholders | Bot or Private App | Matches the user-facing identity |
-| Read chats & messages | Private App | Bot cannot access private chats |
-| `/task`, `/note`, `/event` API | Private App | Bot may lack permissions |
-| ACTION block execution | Private App | Needs cross-chat access |
+| WebSocket connection | Bot App | Bot token drives WS |
+| Send replies & placeholders | Bot App | Bot identity in all chats |
+| Read other chats & summarize | Private App (optional) | Bot cannot access private chats |
+| `/task`, `/note`, `/event` API | Private App if available, else Bot | Broader access with Private App |
+| ACTION block execution | Private App if available, else Bot | Cross-chat access needs Private App |
 
 ## Media Messages
 
@@ -388,13 +407,13 @@ Config file: `~/.ringclaw/config.json`
 {
   "default_agent": "claude",
   "ringcentral": {
-    "client_id": "your_client_id",
-    "client_secret": "your_client_secret",
-    "jwt_token": "your_jwt_token",
+    "bot_token": "your_bot_token",
     "chat_ids": ["chat_id_1", "chat_id_2"],
+    "bot_mention_only": true,
     "server_url": "https://platform.ringcentral.com",
-    "bot_token": "",
-    "bot_mention_only": true
+    "client_id": "",
+    "client_secret": "",
+    "jwt_token": ""
   },
   "agents": {
     "claude": {
@@ -421,9 +440,10 @@ Config file: `~/.ringclaw/config.json`
 ```
 
 Environment variables:
-- `RC_CLIENT_ID` — RingCentral app client ID
-- `RC_CLIENT_SECRET` — RingCentral app client secret
-- `RC_JWT_TOKEN` — RingCentral JWT credential
+- `RC_BOT_TOKEN` — Bot App token (required)
+- `RC_CLIENT_ID` — Private App client ID (optional, enables summarize)
+- `RC_CLIENT_SECRET` — Private App client secret (optional)
+- `RC_JWT_TOKEN` — Private App JWT credential (optional)
 - `RC_SERVER_URL` — RingCentral server URL (default: `https://platform.ringcentral.com`)
 - `RINGCLAW_DEFAULT_AGENT` — override default agent
 - `OPENCLAW_GATEWAY_URL` — OpenClaw HTTP fallback endpoint
@@ -501,17 +521,16 @@ sudo systemctl enable --now ringclaw
 # Build
 docker build -t ringclaw .
 
-# Start with RingCentral credentials
+# Start with bot token
 docker run -d --name ringclaw \
   -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_CLIENT_ID=xxx \
-  -e RC_CLIENT_SECRET=xxx \
-  -e RC_JWT_TOKEN=xxx \
+  -e RC_BOT_TOKEN=xxx \
   ringclaw
 
-# With HTTP agent
+# With Private App (enables summarize) and HTTP agent
 docker run -d --name ringclaw \
   -v ~/.ringclaw:/root/.ringclaw \
+  -e RC_BOT_TOKEN=xxx \
   -e RC_CLIENT_ID=xxx \
   -e RC_CLIENT_SECRET=xxx \
   -e RC_JWT_TOKEN=xxx \

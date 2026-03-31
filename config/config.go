@@ -26,6 +26,11 @@ type RCConfig struct {
 	BotMentionOnly *bool    `json:"bot_mention_only,omitempty"`
 }
 
+// HasPrivateApp returns true if all private app credentials are configured.
+func (rc RCConfig) HasPrivateApp() bool {
+	return rc.ClientID != "" && rc.ClientSecret != "" && rc.JWTToken != ""
+}
+
 // IsBotMentionOnly returns whether the bot requires @mention in group chats.
 // Defaults to true if not explicitly set.
 func (rc RCConfig) IsBotMentionOnly() bool {
