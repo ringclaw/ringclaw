@@ -190,6 +190,33 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
+	// Start cron scheduler
+	cronStorePath, _ := messaging.DefaultCronStorePath()
+	cronStore := messaging.NewCronStore(cronStorePath)
+	if err := cronStore.Load(); err != nil {
+		slog.Warn("failed to load cron jobs", "error", err)
+	}
+	handler.SetCronStore(cronStore)
+
+	cronScheduler := messaging.NewCronScheduler(cronStore, botClient, defaultChatID, func(name string) agent.Agent {
+		if name == "" {
+			return handler.GetDefaultAgent()
+		}
+		ag, _ := handler.GetAgent(ctx, name)
+		return ag
+	})
+	go cronScheduler.Start(ctx)
+
+	// Start heartbeat runner
+	if cfg.Heartbeat.Enabled {
+		hbRunner, err := messaging.NewHeartbeatRunner(cfg.Heartbeat, botClient, defaultChatID, handler.GetDefaultAgent)
+		if err != nil {
+			slog.Error("failed to start heartbeat runner", "error", err)
+		} else {
+			go hbRunner.Start(ctx)
+		}
+	}
+
 	// Start WebSocket monitor (bot client drives WS connection)
 	slog.Info("starting message bridge", "chatIDs", cfg.RC.ChatIDs)
 
