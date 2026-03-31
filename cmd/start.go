@@ -245,35 +245,26 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			slog.Warn("HTTP agent has no endpoint", "component", "agent", "name", name)
 			return nil
 		}
-		ag := agent.NewHTTPAgent(agent.HTTPAgentConfig{
-			Endpoint:     agCfg.Endpoint,
-			APIKey:       agCfg.APIKey,
-			Headers:      agCfg.Headers,
-			Model:        agCfg.Model,
-			SystemPrompt: agCfg.SystemPrompt,
-			MaxHistory:   agCfg.MaxHistory,
-		})
-		slog.Info("created HTTP agent", "component", "agent", "name", name, "endpoint", agCfg.Endpoint, "model", agCfg.Model)
-		return ag
-	case "nanoclaw":
 		var timeout time.Duration
 		if agCfg.Timeout > 0 {
 			timeout = time.Duration(agCfg.Timeout) * time.Second
 		}
-		ag := agent.NewNanoClawAgent(agent.NanoClawAgentConfig{
+		ag := agent.NewHTTPAgent(agent.HTTPAgentConfig{
 			Name:         name,
 			Endpoint:     agCfg.Endpoint,
 			APIKey:       agCfg.APIKey,
 			Headers:      agCfg.Headers,
 			Model:        agCfg.Model,
 			SystemPrompt: agCfg.SystemPrompt,
+			MaxHistory:   agCfg.MaxHistory,
+			Format:       agCfg.Format,
 			Cwd:          agCfg.Cwd,
-			GroupJID:     agCfg.NanoclawGroupJID,
-			Sender:       agCfg.NanoclawSender,
-			ContextMode:  agCfg.NanoclawContextMode,
+			Sender:       agCfg.Sender,
+			ContextMode:  agCfg.ContextMode,
+			GroupJID:     agCfg.GroupJID,
 			Timeout:      timeout,
 		})
-		slog.Info("created NanoClaw agent", "component", "agent", "name", name, "endpoint", agCfg.Endpoint, "timeout", timeout, "group_jid", agCfg.NanoclawGroupJID)
+		slog.Info("created HTTP agent", "component", "agent", "name", name, "endpoint", agCfg.Endpoint, "model", agCfg.Model, "format", agCfg.Format)
 		return ag
 	default:
 		slog.Warn("unknown agent type", "component", "agent", "type", agCfg.Type, "name", name)
@@ -422,10 +413,6 @@ func verifyAgents(cfg *config.Config) {
 				r.ok = true
 				r.cmd = agCfg.Endpoint
 				r.detail = "http endpoint"
-			case "nanoclaw":
-				r.ok = true
-				r.cmd = agCfg.Endpoint
-				r.detail = "nanoclaw bridge"
 			default:
 				r.ok = false
 				r.detail = "unknown type"
