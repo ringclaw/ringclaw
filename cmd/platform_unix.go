@@ -29,3 +29,7 @@ func processExists(pid int) bool {
 func signalTerminate(p *os.Process) error {
 	return p.Signal(syscall.SIGTERM)
 }
+
+func killByName(exePath string) {
+	_ = exec.Command("pkill", "-f", exePath+" start").Run()
+}

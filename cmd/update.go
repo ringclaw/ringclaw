@@ -183,17 +183,30 @@ func replaceBinary(src, dst string) error {
 		return nil
 	}
 
-	// Try with sudo on Unix
-	if runtime.GOOS != "windows" {
-		fmt.Printf("Installing to %s (requires sudo)...\n", dst)
-		cmd := exec.Command("sudo", "cp", src, dst)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
+	if runtime.GOOS == "windows" {
+		// On Windows the running binary is locked. Move it aside first,
+		// then place the new binary. The old file will be cleaned up on
+		// next restart or can be deleted manually.
+		old := dst + ".old"
+		os.Remove(old)
+		if err := os.Rename(dst, old); err != nil {
+			return fmt.Errorf("cannot move old binary aside: %w", err)
+		}
+		if err := os.Rename(src, dst); err != nil {
+			// Restore old binary on failure
+			os.Rename(old, dst)
+			return fmt.Errorf("cannot install new binary: %w", err)
+		}
+		return nil
 	}
 
-	return fmt.Errorf("cannot write to %s", dst)
+	// Try with sudo on Unix
+	fmt.Printf("Installing to %s (requires sudo)...\n", dst)
+	cmd := exec.Command("sudo", "cp", src, dst)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func resolveSymlink(path string) (string, error) {

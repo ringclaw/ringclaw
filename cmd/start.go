@@ -464,6 +464,6 @@ func stopAllRingclaw() {
 	if err != nil {
 		return
 	}
-	_ = exec.Command("pkill", "-f", exe+" start").Run()
+	killByName(exe)
 	time.Sleep(500 * time.Millisecond)
 }

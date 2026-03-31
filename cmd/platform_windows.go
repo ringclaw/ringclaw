@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 )
 
@@ -29,4 +30,8 @@ func processExists(pid int) bool {
 
 func signalTerminate(p *os.Process) error {
 	return p.Kill()
+}
+
+func killByName(exePath string) {
+	_ = exec.Command("taskkill", "/F", "/IM", filepath.Base(exePath)).Run()
 }
