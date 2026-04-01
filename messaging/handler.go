@@ -42,6 +42,7 @@ type Handler struct {
 	version       string
 	startTime     time.Time
 	seenMsgs      sync.Map // map[string]time.Time — dedup by post ID
+	cronStore     *CronStore
 }
 
 // NewHandler creates a new message handler.
@@ -71,6 +72,11 @@ func (h *Handler) SetCustomAliases(aliases map[string]string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.customAliases = aliases
+}
+
+// SetCronStore sets the cron job store for /cron commands.
+func (h *Handler) SetCronStore(store *CronStore) {
+	h.cronStore = store
 }
 
 // SetAgentMetas sets the list of all configured agents (for /status).
@@ -143,6 +149,16 @@ func (h *Handler) getDefaultAgent() agent.Agent {
 		return nil
 	}
 	return h.agents[h.defaultName]
+}
+
+// GetDefaultAgent returns the default agent (exported for cron/heartbeat).
+func (h *Handler) GetDefaultAgent() agent.Agent {
+	return h.getDefaultAgent()
+}
+
+// GetAgent returns a running agent by name (exported for cron).
+func (h *Handler) GetAgent(ctx context.Context, name string) (agent.Agent, error) {
+	return h.getAgent(ctx, name)
 }
 
 // agentAliases maps short aliases to agent config names.
@@ -291,6 +307,16 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		reply := buildHelpText()
 		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
 			slog.Error("failed to send reply", "component", "handler", "error", err)
+		}
+		return
+	} else if strings.HasPrefix(text, "/cron") {
+		if h.cronStore == nil {
+			_ = SendTextReply(ctx, client, chatID, "Cron is not configured.")
+			return
+		}
+		reply := HandleCronCommand(h.cronStore, text)
+		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
+			slog.Error("failed to send cron reply", "component", "handler", "error", err)
 		}
 		return
 	}

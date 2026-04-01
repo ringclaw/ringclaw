@@ -145,6 +145,7 @@ Send these as messages in your RingCentral chat:
 | `/event list\|create\|get\|update\|delete` | Manage calendar events |
 | `/card get\|delete` | Manage adaptive cards |
 | `summarize my chat with John` | Summarize a conversation |
+| `/cron list\|add\|delete\|enable\|disable` | Manage scheduled tasks |
 | `/info` | Show current agent info (alias: `/status`) |
 | `/help` | Show help message |
 
@@ -273,6 +274,66 @@ summarize my chat with Raye from Monday  # summarize since Monday
 RingClaw resolves the target chat by name, fetches messages using the private app client, and sends the summary to the current chat via an AI agent.
 
 > **Security:** Summarization is blocked in group chats when using a bot client, since the summary would be visible to all group members. Use it in a direct message with the bot instead.
+
+## Cron (Scheduled Tasks)
+
+Schedule recurring or one-shot tasks that send messages to AI agents on a timer:
+
+```
+/cron add "standup" every:24h "summarize yesterday's work"
+/cron add "check" */30 * * * * "check for new PRs"
+/cron add "reminder" at:2026-04-01T09:00:00 "sprint review today"
+/cron list
+/cron enable <id>
+/cron disable <id>
+/cron delete <id>
+```
+
+**Schedule formats:**
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| `every:<duration>` | `every:5m`, `every:24h` | Fixed interval |
+| Cron expression | `*/30 * * * *`, `0 9 * * 1-5` | Standard 5-field cron |
+| `at:<time>` | `at:2026-04-01T09:00:00` | One-shot (auto-disables after run) |
+
+Jobs are persisted to `~/.ringclaw/cron/jobs.json` and survive restarts. Each job can optionally target a specific agent or chat.
+
+## Heartbeat
+
+Periodic agent check-in driven by a user-authored checklist. Create `~/.ringclaw/HEARTBEAT.md`:
+
+```markdown
+# Heartbeat checklist
+- Check if any urgent emails arrived
+- Scan for open PRs needing review
+- Check CI pipeline status
+```
+
+RingClaw reads this file on each heartbeat interval, sends it to the default agent, and:
+- Agent replies `HEARTBEAT_OK` → suppressed (nothing to report)
+- Agent replies with content → delivered to the default chat with `[Heartbeat]` prefix
+- Duplicate replies within 24h are suppressed to avoid noise
+
+**Config:**
+
+```json
+{
+  "heartbeat": {
+    "enabled": true,
+    "interval": "30m",
+    "active_hours": "09:00-18:00",
+    "timezone": "Asia/Shanghai"
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `false` | Enable heartbeat runner |
+| `interval` | `30m` | Time between heartbeat checks |
+| `active_hours` | — | Only run during these hours (e.g. `09:00-18:00`) |
+| `timezone` | local | IANA timezone for active hours |
 
 ## Architecture
 
@@ -433,6 +494,12 @@ Config file: `~/.ringclaw/config.json`
       "api_key": "sk-xxx",
       "model": "openclaw:main"
     }
+  },
+  "heartbeat": {
+    "enabled": true,
+    "interval": "30m",
+    "active_hours": "09:00-18:00",
+    "timezone": "Asia/Shanghai"
   }
 }
 ```
