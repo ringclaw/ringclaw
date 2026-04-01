@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,20 @@ func newTestActionClient(handler http.HandlerFunc) (*ringcentral.Client, *httpte
 	client := ringcentral.NewClient(creds)
 	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
 	return client, srv
+}
+
+func newNamedTestClients(serverURL string) (*ringcentral.Client, *ringcentral.Client) {
+	botClient := ringcentral.NewBotClient(serverURL, "bot-token")
+	botClient.SetDMChatID("dm-chat")
+
+	privateClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID:     "id",
+		ClientSecret: "secret",
+		JWTToken:     "jwt",
+		ServerURL:    serverURL,
+	})
+	privateClient.Auth().SetTokenForTest("private-token", time.Now().Add(1*time.Hour))
+	return botClient, privateClient
 }
 
 func TestHandleActionCommand_TaskList(t *testing.T) {
@@ -532,5 +547,123 @@ END_ACTION`
 	}
 	if actions[0].Params["chatid"] != "137158549510" {
 		t.Errorf("expected chatid '137158549510', got %q", actions[0].Params["chatid"])
+	}
+}
+
+func TestExecuteAgentActions_CardUsesBotClientInDM(t *testing.T) {
+	var mu sync.Mutex
+	var authHeaders []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "ac1",
+			"type":    "AdaptiveCard",
+			"version": "1.3",
+		})
+	}))
+	defer srv.Close()
+
+	botClient, privateClient := newNamedTestClients(srv.URL)
+	actions := []AgentAction{{
+		Type: "CARD",
+		Body: `{"type":"AdaptiveCard","version":"1.3","body":[]}`,
+	}}
+
+	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "dm-chat", actions)
+	if len(results) != 0 {
+		t.Fatalf("expected no action errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(authHeaders) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(authHeaders))
+	}
+	if authHeaders[0] != "Bearer bot-token" {
+		t.Fatalf("expected bot token, got %q", authHeaders[0])
+	}
+}
+
+func TestExecuteAgentActions_CardUsesPrivateClientInGroup(t *testing.T) {
+	var mu sync.Mutex
+	var authHeaders []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "ac1",
+			"type":    "AdaptiveCard",
+			"version": "1.3",
+		})
+	}))
+	defer srv.Close()
+
+	botClient, privateClient := newNamedTestClients(srv.URL)
+	actions := []AgentAction{{
+		Type: "CARD",
+		Body: `{"type":"AdaptiveCard","version":"1.3","body":[]}`,
+	}}
+
+	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "group-chat", actions)
+	if len(results) != 0 {
+		t.Fatalf("expected no action errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// No ListChats call — only the card creation request
+	if len(authHeaders) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(authHeaders))
+	}
+	if authHeaders[0] != "Bearer private-token" {
+		t.Fatalf("expected private token for card create, got %q", authHeaders[0])
+	}
+}
+
+func TestExecuteAgentActions_CardFallsBackToBotWithoutPrivateClient(t *testing.T) {
+	var mu sync.Mutex
+	var authHeaders []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "ac1",
+			"type":    "AdaptiveCard",
+			"version": "1.3",
+		})
+	}))
+	defer srv.Close()
+
+	botClient := ringcentral.NewBotClient(srv.URL, "bot-token")
+	actions := []AgentAction{{
+		Type: "CARD",
+		Body: `{"type":"AdaptiveCard","version":"1.3","body":[]}`,
+	}}
+
+	results := ExecuteAgentActions(context.Background(), botClient, botClient, "group-chat", actions)
+	if len(results) != 0 {
+		t.Fatalf("expected no action errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(authHeaders) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(authHeaders))
+	}
+	if authHeaders[0] != "Bearer bot-token" {
+		t.Fatalf("expected bot token fallback, got %q", authHeaders[0])
 	}
 }

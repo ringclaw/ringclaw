@@ -504,7 +504,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
 		reply = cleanReply
-		results := ExecuteAgentActions(ctx, actionClient, chatID, actions)
+		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions)
 		if len(results) > 0 {
 			defer func() {
 				_ = SendTextReply(ctx, client, chatID, strings.Join(results, "\n"))
@@ -980,7 +980,7 @@ func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.
 
 	if len(actions) > 0 {
 		// Execute actions in the current chat (not the summarized chat) using readClient
-		results := ExecuteAgentActions(ctx, readClient, chatID, actions)
+		results := ExecuteAgentActions(ctx, replyClient, readClient, chatID, actions)
 		if len(results) > 0 {
 			_ = SendTextReply(ctx, replyClient, chatID, strings.Join(results, "\n"))
 		}
