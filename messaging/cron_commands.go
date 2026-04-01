@@ -21,7 +21,8 @@ Schedule formats:
   0 9 * * 1-5                 — cron expression (weekdays 9am)`
 
 // HandleCronCommand processes /cron subcommands.
-func HandleCronCommand(store *CronStore, text string) string {
+// chatID is recorded on newly created jobs so results go back to the originating chat.
+func HandleCronCommand(store *CronStore, text, chatID string) string {
 	parts := strings.Fields(text)
 	if len(parts) < 2 {
 		return cronUsage
@@ -32,7 +33,7 @@ func HandleCronCommand(store *CronStore, text string) string {
 	case "list":
 		return cronList(store)
 	case "add":
-		return cronAdd(store, text)
+		return cronAdd(store, text, chatID)
 	case "delete", "del", "rm":
 		if len(parts) < 3 {
 			return "Usage: /cron delete <id>"
@@ -82,8 +83,7 @@ func cronList(store *CronStore) string {
 }
 
 // cronAdd parses: /cron add "name" schedule "message"
-func cronAdd(store *CronStore, text string) string {
-	// Extract quoted strings and remaining tokens
+func cronAdd(store *CronStore, text, chatID string) string {
 	name, schedule, message, err := parseCronAddArgs(text)
 	if err != nil {
 		return fmt.Sprintf("Error: %v\n\n%s", err, cronUsage)
@@ -94,6 +94,7 @@ func cronAdd(store *CronStore, text string) string {
 		Enabled:  true,
 		Schedule: schedule,
 		Message:  message,
+		ChatID:   chatID,
 	}
 
 	// Mark one-shot jobs for auto-disable

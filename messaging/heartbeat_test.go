@@ -3,6 +3,8 @@ package messaging
 import (
 	"testing"
 	"time"
+
+	"github.com/ringclaw/ringclaw/config"
 )
 
 func TestParseActiveHours(t *testing.T) {
@@ -53,6 +55,28 @@ func TestIsEffectivelyEmpty(t *testing.T) {
 		got := isEffectivelyEmpty(tt.content)
 		if got != tt.empty {
 			t.Errorf("isEffectivelyEmpty(%q) = %v, want %v", tt.content, got, tt.empty)
+		}
+	}
+}
+
+func TestNewHeartbeatRunner_RejectsNonPositiveInterval(t *testing.T) {
+	tests := []struct {
+		interval string
+		wantErr  bool
+	}{
+		{"0s", true},
+		{"-1m", true},
+		{"30m", false},
+		{"1h", false},
+	}
+	for _, tt := range tests {
+		cfg := config.HeartbeatConfig{Enabled: true, Interval: tt.interval}
+		_, err := NewHeartbeatRunner(cfg, nil, "", nil)
+		if tt.wantErr && err == nil {
+			t.Errorf("interval %q: expected error", tt.interval)
+		}
+		if !tt.wantErr && err != nil {
+			t.Errorf("interval %q: unexpected error: %v", tt.interval, err)
 		}
 	}
 }

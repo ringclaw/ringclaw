@@ -314,7 +314,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			_ = SendTextReply(ctx, client, chatID, "Cron is not configured.")
 			return
 		}
-		reply := HandleCronCommand(h.cronStore, text)
+		reply := HandleCronCommand(h.cronStore, text, chatID)
 		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
 			slog.Error("failed to send cron reply", "component", "handler", "error", err)
 		}
@@ -913,6 +913,9 @@ func isPrivilegedCommand(text string) bool {
 		return true
 	}
 	if strings.HasPrefix(text, "/cwd") {
+		return true
+	}
+	if strings.HasPrefix(text, "/cron") {
 		return true
 	}
 	return false

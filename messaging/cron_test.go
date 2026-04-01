@@ -203,7 +203,7 @@ func TestHandleCronCommand_List_Empty(t *testing.T) {
 	store := NewCronStore(filepath.Join(dir, "jobs.json"))
 	_ = store.Load()
 
-	reply := HandleCronCommand(store, "/cron list")
+	reply := HandleCronCommand(store, "/cron list", "chat1")
 	if reply != "No cron jobs configured." {
 		t.Fatalf("unexpected reply: %q", reply)
 	}
@@ -214,12 +214,18 @@ func TestHandleCronCommand_AddAndList(t *testing.T) {
 	store := NewCronStore(filepath.Join(dir, "jobs.json"))
 	_ = store.Load()
 
-	reply := HandleCronCommand(store, `/cron add "test" every:1h "hello world"`)
+	reply := HandleCronCommand(store, `/cron add "test" every:1h "hello world"`, "chat1")
 	if !contains(reply, "added") {
 		t.Fatalf("expected 'added' in reply: %q", reply)
 	}
 
-	reply = HandleCronCommand(store, "/cron list")
+	// Verify chatID was recorded on the job
+	jobs := store.List()
+	if len(jobs) != 1 || jobs[0].ChatID != "chat1" {
+		t.Fatalf("expected ChatID 'chat1', got %q", jobs[0].ChatID)
+	}
+
+	reply = HandleCronCommand(store, "/cron list", "chat1")
 	if !contains(reply, "test") {
 		t.Fatalf("expected 'test' in list: %q", reply)
 	}
@@ -230,20 +236,20 @@ func TestHandleCronCommand_DeleteEnableDisable(t *testing.T) {
 	store := NewCronStore(filepath.Join(dir, "jobs.json"))
 	_ = store.Load()
 
-	HandleCronCommand(store, `/cron add "test" every:1h "hello"`)
+	HandleCronCommand(store, `/cron add "test" every:1h "hello"`, "chat1")
 	id := store.List()[0].ID
 
-	reply := HandleCronCommand(store, "/cron disable "+id)
+	reply := HandleCronCommand(store, "/cron disable "+id, "chat1")
 	if !contains(reply, "disabled") {
 		t.Fatalf("unexpected: %q", reply)
 	}
 
-	reply = HandleCronCommand(store, "/cron enable "+id)
+	reply = HandleCronCommand(store, "/cron enable "+id, "chat1")
 	if !contains(reply, "enabled") {
 		t.Fatalf("unexpected: %q", reply)
 	}
 
-	reply = HandleCronCommand(store, "/cron delete "+id)
+	reply = HandleCronCommand(store, "/cron delete "+id, "chat1")
 	if !contains(reply, "deleted") {
 		t.Fatalf("unexpected: %q", reply)
 	}
@@ -254,7 +260,7 @@ func TestHandleCronCommand_Usage(t *testing.T) {
 	store := NewCronStore(filepath.Join(dir, "jobs.json"))
 	_ = store.Load()
 
-	reply := HandleCronCommand(store, "/cron")
+	reply := HandleCronCommand(store, "/cron", "chat1")
 	if !contains(reply, "Usage") {
 		t.Fatalf("expected usage: %q", reply)
 	}
