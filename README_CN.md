@@ -88,6 +88,14 @@ curl -sSL .../install.sh | sh -s -- beta      # beta（最新 main 构建）
 curl -sSL .../install.sh | sh -s -- alpha feature/my-branch  # alpha（指定分支构建）
 ```
 
+**通过 CLI 切换渠道：**
+
+```bash
+ringclaw update                                    # 更新到最新正式版
+ringclaw update --channel beta                     # 切换到 beta 渠道
+ringclaw update --channel alpha --branch feature/foo  # 切换到 alpha 分支
+```
+
 > **macOS 提示：** 安装脚本和 `ringclaw update` 会自动清除 Gatekeeper 隔离属性（`com.apple.quarantine`、`com.apple.provenance`），下载后的二进制文件不会被系统拦截。
 
 ### 其他安装方式
@@ -617,7 +625,8 @@ ringclaw
 ├── restart                            # 重启
 ├── status                             # 检查运行状态
 ├── setup                              # 交互式凭据配置
-├── update / upgrade / version         # 自动更新
+├── update [--channel beta|alpha] [--branch X]  # 自动更新
+├── upgrade / version                  # 别名
 │
 ├── message                            # 消息操作
 │   ├── send <chatId> <text>           # 发送消息
