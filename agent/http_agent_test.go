@@ -253,6 +253,114 @@ func TestHTTPAgent_NanoClaw_ResetSession_Noop(t *testing.T) {
 	}
 }
 
+// --- Dify format tests ---
+
+func TestHTTPAgent_Dify_Chat_StoresConversationID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify Authorization header
+		if got := r.Header.Get("Authorization"); got != "Bearer dify-key" {
+			t.Fatalf("unexpected auth: %q", got)
+		}
+		// Decode request to check conversation_id on second call
+		var req struct {
+			Query          string `json:"query"`
+			ConversationID string `json:"conversation_id"`
+			User           string `json:"user"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"answer":          "hello from dify",
+			"conversation_id": "dify-conv-123",
+			"message_id":      "msg-abc",
+		})
+	}))
+	defer srv.Close()
+
+	ag := NewHTTPAgent(HTTPAgentConfig{
+		Endpoint: srv.URL,
+		APIKey:   "dify-key",
+		Format:   "dify",
+	})
+
+	reply, err := ag.Chat(context.Background(), "rc-conv-1", "hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "hello from dify" {
+		t.Fatalf("unexpected reply: %q", reply)
+	}
+
+	// Verify the dify conversation_id was stored
+	f := ag.format.(*difyFormat)
+	f.mu.Lock()
+	stored := f.convIDs["rc-conv-1"]
+	f.mu.Unlock()
+	if stored != "dify-conv-123" {
+		t.Errorf("expected dify conv_id stored, got %q", stored)
+	}
+}
+
+func TestHTTPAgent_Dify_ResetSession_ClearsConversationID(t *testing.T) {
+	ag := NewHTTPAgent(HTTPAgentConfig{Format: "dify"})
+
+	// Manually prime the conv_id mapping
+	f := ag.format.(*difyFormat)
+	f.mu.Lock()
+	f.convIDs["rc-conv-1"] = "dify-conv-123"
+	f.mu.Unlock()
+
+	ag.ResetSession(context.Background(), "rc-conv-1")
+
+	f.mu.Lock()
+	stored := f.convIDs["rc-conv-1"]
+	f.mu.Unlock()
+	if stored != "" {
+		t.Errorf("expected conv_id cleared after reset, got %q", stored)
+	}
+}
+
+func TestHTTPAgent_Dify_EmptyAnswer_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"answer":          "",
+			"conversation_id": "dify-conv-123",
+		})
+	}))
+	defer srv.Close()
+
+	ag := NewHTTPAgent(HTTPAgentConfig{Endpoint: srv.URL, Format: "dify"})
+	_, err := ag.Chat(context.Background(), "conv-1", "hello")
+	if err == nil {
+		t.Fatal("expected error for empty answer")
+	}
+}
+
+func TestHTTPAgent_Dify_ServerManagesHistory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"answer":          "ok",
+			"conversation_id": "dify-conv-1",
+		})
+	}))
+	defer srv.Close()
+
+	ag := NewHTTPAgent(HTTPAgentConfig{Endpoint: srv.URL, Format: "dify"})
+	for i := 0; i < 5; i++ {
+		if _, err := ag.Chat(context.Background(), "conv-1", "msg"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	ag.mu.Lock()
+	histLen := len(ag.history["conv-1"])
+	ag.mu.Unlock()
+	if histLen != 0 {
+		t.Errorf("dify format should not store local history, got %d entries", histLen)
+	}
+}
+
 func TestHTTPAgent_Info_WithName(t *testing.T) {
 	ag := NewHTTPAgent(HTTPAgentConfig{Name: "andy", Format: "nanoclaw", Model: "test"})
 	info := ag.Info()

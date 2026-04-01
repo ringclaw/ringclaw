@@ -1,0 +1,498 @@
+openapi: 3.0.3
+info:
+  title: RingClaw API
+  description: |
+    HTTP API exposed by the RingClaw bridge (default: http://127.0.0.1:18011).
+
+    Import this spec into Dify as a **Custom Tool** so your chatflow can create and
+    manage RingCentral tasks, notes, events, and send messages.
+
+    **Network note**: RingClaw listens on localhost by default. To reach it from a
+    remote Dify instance, either run them on the same host or set `api_addr` in
+    `~/.ringclaw/config.json` to expose a routable address (e.g. `0.0.0.0:18011`)
+    and protect it with a firewall / reverse proxy.
+  version: "1.0"
+
+servers:
+  - url: http://127.0.0.1:18011
+    description: Local RingClaw instance
+
+paths:
+  /api/send:
+    post:
+      operationId: sendMessage
+      summary: Send a message to a RingCentral chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                to:
+                  type: string
+                  description: Target chat ID. Omit to use the configured default chat.
+                text:
+                  type: string
+                  description: Plain text message to send.
+                media_url:
+                  type: string
+                  description: URL of an image or file to attach.
+              anyOf:
+                - required: [text]
+                - required: [media_url]
+      responses:
+        "200":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # ── Tasks ──────────────────────────────────────────────────────────────────
+
+  /api/tasks:
+    get:
+      operationId: listTasks
+      summary: List tasks in a chat
+      parameters:
+        - name: chat_id
+          in: query
+          description: Chat ID to list tasks for. Omit to use the configured default chat.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskList"
+    post:
+      operationId: createTask
+      summary: Create a task in a chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  properties:
+                    chat_id:
+                      type: string
+                      description: Target chat ID. Omit to use the configured default chat.
+                - $ref: "#/components/schemas/CreateTaskRequest"
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /api/tasks/{id}:
+    get:
+      operationId: getTask
+      summary: Get a task by ID
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+    patch:
+      operationId: updateTask
+      summary: Update a task
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskRequest"
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+    delete:
+      operationId: deleteTask
+      summary: Delete a task
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "204":
+          description: Deleted
+
+  /api/tasks/{id}/complete:
+    post:
+      operationId: completeTask
+      summary: Mark a task as completed
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "200":
+          description: Task completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: completed
+
+  # ── Notes ──────────────────────────────────────────────────────────────────
+
+  /api/notes:
+    get:
+      operationId: listNotes
+      summary: List notes in a chat
+      parameters:
+        - name: chat_id
+          in: query
+          description: Chat ID to list notes for. Omit to use the configured default chat.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Note list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteList"
+    post:
+      operationId: createNote
+      summary: Create and publish a note in a chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  properties:
+                    chat_id:
+                      type: string
+                      description: Target chat ID. Omit to use the configured default chat.
+                - $ref: "#/components/schemas/CreateNoteRequest"
+      responses:
+        "201":
+          description: Note created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+
+  /api/notes/{id}:
+    get:
+      operationId: getNote
+      summary: Get a note by ID
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "200":
+          description: Note
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+    patch:
+      operationId: updateNote
+      summary: Update a note
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateNoteRequest"
+      responses:
+        "200":
+          description: Updated note
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+    delete:
+      operationId: deleteNote
+      summary: Delete a note
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Events ─────────────────────────────────────────────────────────────────
+
+  /api/events:
+    get:
+      operationId: listEvents
+      summary: List calendar events
+      responses:
+        "200":
+          description: Event list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
+    post:
+      operationId: createEvent
+      summary: Create a calendar event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventRequest"
+      responses:
+        "201":
+          description: Event created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+
+  /api/events/{id}:
+    get:
+      operationId: getEvent
+      summary: Get an event by ID
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "200":
+          description: Event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+    put:
+      operationId: updateEvent
+      summary: Update a calendar event
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEventRequest"
+      responses:
+        "200":
+          description: Updated event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+    delete:
+      operationId: deleteEvent
+      summary: Delete a calendar event
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "204":
+          description: Deleted
+
+components:
+  parameters:
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    # ── Task schemas ──────────────────────────────────────────────────────────
+
+    CreateTaskRequest:
+      type: object
+      required: [subject]
+      properties:
+        subject:
+          type: string
+          description: Task title
+        description:
+          type: string
+        due_date:
+          type: string
+          format: date-time
+          description: "ISO 8601, e.g. 2026-04-15T18:00:00.000Z"
+        color:
+          type: string
+          enum: [Black, Red, Orange, Yellow, Green, Blue, Purple, Magenta]
+
+    UpdateTaskRequest:
+      type: object
+      properties:
+        subject:
+          type: string
+        description:
+          type: string
+        due_date:
+          type: string
+          format: date-time
+        color:
+          type: string
+        status:
+          type: string
+          enum: [Pending, InProgress, Completed]
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+        subject:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [Pending, InProgress, Completed]
+        due_date:
+          type: string
+          format: date-time
+        color:
+          type: string
+        creation_time:
+          type: string
+          format: date-time
+
+    TaskList:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+
+    # ── Note schemas ──────────────────────────────────────────────────────────
+
+    CreateNoteRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+          description: Note content (plain text or HTML)
+
+    UpdateNoteRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+
+    Note:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        preview:
+          type: string
+        status:
+          type: string
+          enum: [Active, Draft]
+        creation_time:
+          type: string
+          format: date-time
+
+    NoteList:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/Note"
+
+    # ── Event schemas ─────────────────────────────────────────────────────────
+
+    CreateEventRequest:
+      type: object
+      required: [title, start_time, end_time]
+      properties:
+        title:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+          description: "ISO 8601, e.g. 2026-04-15T09:00:00.000Z"
+        end_time:
+          type: string
+          format: date-time
+        all_day:
+          type: boolean
+          default: false
+        color:
+          type: string
+          enum: [Black, Red, Orange, Yellow, Green, Blue, Purple, Magenta]
+        location:
+          type: string
+        description:
+          type: string
+
+    UpdateEventRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        color:
+          type: string
+        location:
+          type: string
+        description:
+          type: string
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        all_day:
+          type: boolean
+        color:
+          type: string
+        location:
+          type: string
+        description:
+          type: string
+
+    EventList:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"

@@ -21,7 +21,7 @@ type ChatMessage struct {
 // httpFormat abstracts the request/response protocol for different HTTP APIs.
 type httpFormat interface {
 	buildRequest(conversationID, message string, opts formatOpts) ([]byte, error)
-	parseResponse(body []byte) (string, error)
+	parseResponse(body []byte, conversationID string) (string, error)
 	managesHistory() bool
 	supportsCwd() bool
 }
@@ -93,6 +93,8 @@ func NewHTTPAgent(cfg HTTPAgentConfig) *HTTPAgent {
 	switch strings.ToLower(cfg.Format) {
 	case "nanoclaw":
 		f = &nanoclawFormat{}
+	case "dify":
+		f = newDifyFormat()
 	default:
 		f = &openaiFormat{}
 	}
@@ -143,6 +145,13 @@ func (a *HTTPAgent) ResetSession(_ context.Context, conversationID string) (stri
 		delete(a.history, conversationID)
 		a.mu.Unlock()
 	}
+	// For formats that manage sessions server-side (e.g. dify), clear their mapping too.
+	type sessionResetter interface {
+		resetConversation(string)
+	}
+	if r, ok := a.format.(sessionResetter); ok {
+		r.resetConversation(conversationID)
+	}
 	return "", nil
 }
 
@@ -171,7 +180,7 @@ func (a *HTTPAgent) Chat(ctx context.Context, conversationID string, message str
 		return "", err
 	}
 
-	reply, err := a.format.parseResponse(respBody)
+	reply, err := a.format.parseResponse(respBody, conversationID)
 	if err != nil {
 		return "", err
 	}
@@ -243,7 +252,7 @@ func (f *openaiFormat) buildRequest(_, message string, opts formatOpts) ([]byte,
 	})
 }
 
-func (f *openaiFormat) parseResponse(body []byte) (string, error) {
+func (f *openaiFormat) parseResponse(body []byte, _ string) (string, error) {
 	var result struct {
 		Choices []struct {
 			Message struct {
@@ -288,7 +297,7 @@ func (f *nanoclawFormat) buildRequest(conversationID, message string, opts forma
 	return json.Marshal(payload)
 }
 
-func (f *nanoclawFormat) parseResponse(body []byte) (string, error) {
+func (f *nanoclawFormat) parseResponse(body []byte, _ string) (string, error) {
 	var parsed struct {
 		Reply string `json:"reply"`
 	}
@@ -300,6 +309,69 @@ func (f *nanoclawFormat) parseResponse(body []byte) (string, error) {
 		return "", fmt.Errorf("empty response")
 	}
 	return trimmed, nil
+}
+
+// --- Dify format ---
+
+// difyFormat implements the Dify chatflow API.
+// Dify manages conversation history server-side, identified by its own conversation_id.
+// We map each RingClaw conversationID to the corresponding Dify conversation_id.
+type difyFormat struct {
+	mu      sync.Mutex
+	convIDs map[string]string // ringclawConvID -> difyConvID
+}
+
+func newDifyFormat() *difyFormat {
+	return &difyFormat{convIDs: make(map[string]string)}
+}
+
+func (f *difyFormat) managesHistory() bool { return true }
+func (f *difyFormat) supportsCwd() bool    { return false }
+
+func (f *difyFormat) buildRequest(conversationID, message string, opts formatOpts) ([]byte, error) {
+	f.mu.Lock()
+	difyConvID := f.convIDs[conversationID]
+	f.mu.Unlock()
+
+	user := opts.Sender
+	if user == "" {
+		user = conversationID
+	}
+
+	return json.Marshal(map[string]interface{}{
+		"inputs":          map[string]interface{}{},
+		"query":           message,
+		"response_mode":   "blocking",
+		"conversation_id": difyConvID,
+		"user":            user,
+	})
+}
+
+func (f *difyFormat) parseResponse(body []byte, conversationID string) (string, error) {
+	var result struct {
+		Answer         string `json:"answer"`
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("parse dify response: %w", err)
+	}
+	if strings.TrimSpace(result.Answer) == "" {
+		return "", fmt.Errorf("empty answer in dify response")
+	}
+	if result.ConversationID != "" && conversationID != "" {
+		f.mu.Lock()
+		f.convIDs[conversationID] = result.ConversationID
+		f.mu.Unlock()
+	}
+	return strings.TrimSpace(result.Answer), nil
+}
+
+// resetConversation clears the Dify conversation_id for the given conversationID so
+// the next message starts a fresh Dify conversation.
+func (f *difyFormat) resetConversation(conversationID string) {
+	f.mu.Lock()
+	delete(f.convIDs, conversationID)
+	f.mu.Unlock()
 }
 
 // --- Helpers ---
