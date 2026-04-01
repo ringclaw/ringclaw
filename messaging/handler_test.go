@@ -1,11 +1,16 @@
 package messaging
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ringclaw/ringclaw/agent"
+	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
 func newTestHandler() *Handler {
@@ -156,5 +161,49 @@ func TestFormatDuration(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
 		}
+	}
+}
+
+func TestHandleChatInfo_CurrentChat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.Chat{
+			ID: "c1", Name: "General", Type: "Team",
+			Members: []ringcentral.ChatMember{{ID: "u1"}, {ID: "u2"}, {ID: "u3"}},
+		})
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewBotClient(srv.URL, "token")
+	result := handleChatInfo(context.Background(), client, "c1", "/chatinfo")
+	if !strings.Contains(result, "General") || !strings.Contains(result, "Team") || !strings.Contains(result, "3") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestHandleChatInfo_SpecificChat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.Chat{
+			ID: "c2", Name: "Backend", Type: "Group",
+			Members: []ringcentral.ChatMember{{ID: "u1"}},
+		})
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewBotClient(srv.URL, "token")
+	result := handleChatInfo(context.Background(), client, "c1", "/chatinfo c2")
+	if !strings.Contains(result, "Backend") || !strings.Contains(result, "c2") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestBuildHelpText_IncludesChatinfo(t *testing.T) {
+	help := buildHelpText()
+	if !strings.Contains(help, "/chatinfo") {
+		t.Error("help text should include /chatinfo")
+	}
+	if !strings.Contains(help, "lock") {
+		t.Error("help text should include lock for notes")
 	}
 }

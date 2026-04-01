@@ -532,3 +532,136 @@ func TestInferContentType(t *testing.T) {
 		}
 	}
 }
+
+func TestGetChat_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Chat{
+			ID: "c1", Name: "Dev Team", Type: "Team",
+			Members: []ChatMember{{ID: "u1"}, {ID: "u2"}},
+		})
+	})
+	defer srv.Close()
+
+	chat, err := client.GetChat(context.Background(), "c1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if chat.Name != "Dev Team" || chat.Type != "Team" || len(chat.Members) != 2 {
+		t.Errorf("unexpected chat: %+v", chat)
+	}
+}
+
+func TestGetPost_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Post{ID: "p1", Text: "hello world", CreatorID: "u1"})
+	})
+	defer srv.Close()
+
+	post, err := client.GetPost(context.Background(), "c1", "p1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.Text != "hello world" {
+		t.Errorf("expected 'hello world', got %q", post.Text)
+	}
+}
+
+func TestLockNote_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer srv.Close()
+
+	err := client.LockNote(context.Background(), "n1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUnlockNote_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer srv.Close()
+
+	err := client.UnlockNote(context.Background(), "n1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetPresence_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PresenceInfo{
+			UserStatus:      "Available",
+			DndStatus:       "TakeAllCalls",
+			TelephonyStatus: "NoCall",
+		})
+	})
+	defer srv.Close()
+
+	info, err := client.GetPresence(context.Background(), "12345")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.UserStatus != "Available" {
+		t.Errorf("expected Available, got %s", info.UserStatus)
+	}
+}
+
+func TestListRecentChats_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChatList{
+			Records: []Chat{{ID: "c1", Name: "Recent Chat"}},
+		})
+	})
+	defer srv.Close()
+
+	list, err := client.ListRecentChats(context.Background(), "Direct", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list.Records) != 1 || list.Records[0].Name != "Recent Chat" {
+		t.Errorf("unexpected result: %+v", list)
+	}
+}
+
+func TestListGroupEvents_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(EventList{
+			Records: []Event{{ID: "e1", Title: "Sprint Review"}},
+		})
+	})
+	defer srv.Close()
+
+	list, err := client.ListGroupEvents(context.Background(), "g1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list.Records) != 1 || list.Records[0].Title != "Sprint Review" {
+		t.Errorf("unexpected result: %+v", list)
+	}
+}

@@ -616,6 +616,103 @@ func (c *Client) DeleteAdaptiveCard(ctx context.Context, cardID string) error {
 	return err
 }
 
+// --- Additional API methods ---
+
+// GetChat returns information about a specific chat.
+func (c *Client) GetChat(ctx context.Context, chatID string) (*Chat, error) {
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s", chatID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var chat Chat
+	if err := json.Unmarshal(resp, &chat); err != nil {
+		return nil, fmt.Errorf("parse chat: %w", err)
+	}
+	return &chat, nil
+}
+
+// GetPost returns a specific post by ID.
+func (c *Client) GetPost(ctx context.Context, chatID, postID string) (*Post, error) {
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts/%s", chatID, postID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var post Post
+	if err := json.Unmarshal(resp, &post); err != nil {
+		return nil, fmt.Errorf("parse post: %w", err)
+	}
+	return &post, nil
+}
+
+// LockNote locks a note for exclusive editing (up to 5 hours).
+func (c *Client) LockNote(ctx context.Context, noteID string) error {
+	path := fmt.Sprintf("/team-messaging/v1/notes/%s/lock", noteID)
+	_, err := c.doRequest(ctx, http.MethodPost, path, "", nil)
+	return err
+}
+
+// UnlockNote releases a lock on a note.
+func (c *Client) UnlockNote(ctx context.Context, noteID string) error {
+	path := fmt.Sprintf("/team-messaging/v1/notes/%s/unlock", noteID)
+	_, err := c.doRequest(ctx, http.MethodPost, path, "", nil)
+	return err
+}
+
+// GetPresence returns the presence status of an extension.
+// Requires ReadPresence permission (Private App only).
+func (c *Client) GetPresence(ctx context.Context, extensionID string) (*PresenceInfo, error) {
+	path := fmt.Sprintf("/restapi/v1.0/account/~/extension/%s/presence", extensionID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var info PresenceInfo
+	if err := json.Unmarshal(resp, &info); err != nil {
+		return nil, fmt.Errorf("parse presence: %w", err)
+	}
+	return &info, nil
+}
+
+// ListRecentChats returns chats sorted by lastModifiedTime (most recently active first).
+func (c *Client) ListRecentChats(ctx context.Context, chatType string, recordCount int) (*ChatList, error) {
+	params := url.Values{}
+	if chatType != "" {
+		params.Set("type", chatType)
+	}
+	if recordCount > 0 {
+		params.Set("recordCount", fmt.Sprintf("%d", recordCount))
+	}
+	path := "/team-messaging/v1/recent/chats"
+	if len(params) > 0 {
+		path += "?" + params.Encode()
+	}
+	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var list ChatList
+	if err := json.Unmarshal(resp, &list); err != nil {
+		return nil, fmt.Errorf("parse recent chats: %w", err)
+	}
+	return &list, nil
+}
+
+// ListGroupEvents returns calendar events for a specific chat/group.
+func (c *Client) ListGroupEvents(ctx context.Context, groupID string) (*EventList, error) {
+	path := fmt.Sprintf("/team-messaging/v1/groups/%s/events", groupID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var list EventList
+	if err := json.Unmarshal(resp, &list); err != nil {
+		return nil, fmt.Errorf("parse group events: %w", err)
+	}
+	return &list, nil
+}
+
 func (c *Client) doRequest(ctx context.Context, method, path, contentType string, body io.Reader) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()

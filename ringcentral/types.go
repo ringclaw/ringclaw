@@ -357,6 +357,14 @@ type AdaptiveCard struct {
 	ChatIDs          []string `json:"chatIds"`
 }
 
+// PresenceInfo represents a user's presence/availability status.
+type PresenceInfo struct {
+	UserStatus      string `json:"userStatus"`      // Available, Busy, DoNotDisturb, Offline
+	DndStatus       string `json:"dndStatus"`       // TakeAllCalls, DoNotAcceptDepartmentCalls, TakeDepartmentCallsOnly, DoNotAcceptAnyCalls
+	TelephonyStatus string `json:"telephonyStatus"` // NoCall, CallConnected, Ringing, OnHold, ParkedCall
+	Message         string `json:"message"`
+}
+
 // Credentials stores RC session data.
 type Credentials struct {
 	ClientID     string `json:"client_id"`

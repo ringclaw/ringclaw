@@ -667,3 +667,75 @@ func TestExecuteAgentActions_CardFallsBackToBotWithoutPrivateClient(t *testing.T
 		t.Fatalf("expected bot token fallback, got %q", authHeaders[0])
 	}
 }
+
+func TestHandleActionCommand_NoteLock(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/lock") {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/note lock n123")
+	if !strings.Contains(result, "locked") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestHandleActionCommand_NoteUnlock(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/unlock") {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/note unlock n123")
+	if !strings.Contains(result, "unlocked") || !strings.Contains(result, "n123") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestHandleActionCommand_NoteLockMissingID(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/note lock")
+	if !strings.Contains(result, "Usage") {
+		t.Errorf("expected usage text, got: %s", result)
+	}
+}
+
+func TestHandleActionCommand_EventListGroup(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"records": []map[string]string{{"id": "e1", "title": "Team Standup", "startTime": "2026-04-01T09:00:00Z"}},
+		})
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/event list chat123")
+	if !strings.Contains(result, "e1") || !strings.Contains(result, "Team Standup") {
+		t.Errorf("unexpected result: %s", result)
+	}
+	if !strings.Contains(result, "chat123") {
+		t.Errorf("expected group ID in output: %s", result)
+	}
+}
+
+func TestFormatActionHelp_NoteIncludesLockUnlock(t *testing.T) {
+	result := HandleActionCommand(context.Background(), nil, "c1", "/note")
+	if !strings.Contains(result, "lock") || !strings.Contains(result, "unlock") {
+		t.Errorf("note help should mention lock/unlock: %s", result)
+	}
+}
+
+func TestFormatActionHelp_EventIncludesChatId(t *testing.T) {
+	result := HandleActionCommand(context.Background(), nil, "c1", "/event")
+	if !strings.Contains(result, "chatId") {
+		t.Errorf("event help should mention chatId: %s", result)
+	}
+}

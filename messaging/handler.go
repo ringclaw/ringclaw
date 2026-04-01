@@ -319,6 +319,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			slog.Error("failed to send cron reply", "component", "handler", "error", err)
 		}
 		return
+	} else if strings.HasPrefix(text, "/chatinfo") {
+		reply := handleChatInfo(ctx, readClient, chatID, text)
+		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
+			slog.Error("failed to send chatinfo reply", "component", "handler", "error", err)
+		}
+		return
 	}
 
 	// Summarize command -- requires private app (readClient) for reading other chats
@@ -892,11 +898,40 @@ func buildHelpText() string {
 /help - Show this help message
 
 /task list|create|get|update|delete|complete
-/note list|create|get|update|delete
+/note list|create|get|update|delete|lock|unlock
 /event list|create|get|update|delete
 /card get|delete
+/chatinfo [chatId] - Show chat details
 
 Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)`
+}
+
+// handleChatInfo returns information about a chat.
+func handleChatInfo(ctx context.Context, client *ringcentral.Client, currentChatID, text string) string {
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/chatinfo"))
+	targetID := currentChatID
+	if arg != "" {
+		targetID = arg
+	}
+
+	chat, err := client.GetChat(ctx, targetID)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**Chat** `%s`\n", chat.ID))
+	sb.WriteString(fmt.Sprintf("- Name: %s\n", chat.Name))
+	sb.WriteString(fmt.Sprintf("- Type: %s\n", chat.Type))
+	if chat.Description != "" {
+		sb.WriteString(fmt.Sprintf("- Description: %s\n", chat.Description))
+	}
+	sb.WriteString(fmt.Sprintf("- Members: %d\n", len(chat.Members)))
+	if chat.Status != "" {
+		sb.WriteString(fmt.Sprintf("- Status: %s\n", chat.Status))
+	}
+	sb.WriteString(fmt.Sprintf("- Created: %s\n", chat.CreationTime))
+	return sb.String()
 }
 
 func wrapAnswer(text string) string {

@@ -203,6 +203,16 @@ func handleNote(ctx context.Context, client *ringcentral.Client, chatID, action 
 			return "Usage: /note delete <id>"
 		}
 		return noteDelete(ctx, client, args[0])
+	case "lock":
+		if len(args) == 0 {
+			return "Usage: /note lock <id>"
+		}
+		return noteLock(ctx, client, args[0])
+	case "unlock":
+		if len(args) == 0 {
+			return "Usage: /note unlock <id>"
+		}
+		return noteUnlock(ctx, client, args[0])
 	default:
 		return formatActionHelp("/note")
 	}
@@ -284,11 +294,28 @@ func noteDelete(ctx context.Context, client *ringcentral.Client, noteID string) 
 	return fmt.Sprintf("Note `%s` deleted.", noteID)
 }
 
+func noteLock(ctx context.Context, client *ringcentral.Client, noteID string) string {
+	if err := client.LockNote(ctx, noteID); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return fmt.Sprintf("Note `%s` locked for editing.", noteID)
+}
+
+func noteUnlock(ctx context.Context, client *ringcentral.Client, noteID string) string {
+	if err := client.UnlockNote(ctx, noteID); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return fmt.Sprintf("Note `%s` unlocked.", noteID)
+}
+
 // --- Event handlers ---
 
 func handleEvent(ctx context.Context, client *ringcentral.Client, chatID, action string, args []string, raw string) string {
 	switch action {
 	case "list":
+		if len(args) > 0 {
+			return eventListGroup(ctx, client, args[0])
+		}
 		return eventList(ctx, client)
 	case "create":
 		if len(args) < 3 {
@@ -330,6 +357,27 @@ func eventList(ctx context.Context, client *ringcentral.Client) string {
 	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**Events** (%d)\n", len(list.Records)))
+	for _, e := range list.Records {
+		start := ""
+		if len(e.StartTime) >= 16 {
+			start = e.StartTime[:16]
+		}
+		sb.WriteString(fmt.Sprintf("- `%s` **%s** %s\n", e.ID, e.Title, start))
+	}
+	return sb.String()
+}
+
+func eventListGroup(ctx context.Context, client *ringcentral.Client, groupID string) string {
+	list, err := client.ListGroupEvents(ctx, groupID)
+	if err != nil {
+		slog.Error("list group events failed", "error", err)
+		return fmt.Sprintf("Error: %v", err)
+	}
+	if len(list.Records) == 0 {
+		return fmt.Sprintf("No events found in chat `%s`.", groupID)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**Events in chat %s** (%d)\n", groupID, len(list.Records)))
 	for _, e := range list.Records {
 		start := ""
 		if len(e.StartTime) >= 16 {
@@ -908,9 +956,9 @@ func formatActionHelp(cmd string) string {
 	case "/task":
 		return "Usage:\n- /task list\n- /task create <subject>\n- /task get <id>\n- /task update <id> subject=<value>\n- /task delete <id>\n- /task complete <id>"
 	case "/note":
-		return "Usage:\n- /note list\n- /note create <title> | <body>\n- /note get <id>\n- /note update <id> title=<value>\n- /note delete <id>"
+		return "Usage:\n- /note list\n- /note create <title> | <body>\n- /note get <id>\n- /note update <id> title=<value>\n- /note delete <id>\n- /note lock <id>\n- /note unlock <id>"
 	case "/event":
-		return "Usage:\n- /event list\n- /event create <title> <startTime> <endTime>\n- /event get <id>\n- /event update <id> title=<value>\n- /event delete <id>"
+		return "Usage:\n- /event list [chatId]\n- /event create <title> <startTime> <endTime>\n- /event get <id>\n- /event update <id> title=<value>\n- /event delete <id>"
 	case "/card":
 		return "Usage:\n- /card get <id>\n- /card delete <id>"
 	default:

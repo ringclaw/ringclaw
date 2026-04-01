@@ -141,9 +141,10 @@ Send these as messages in your RingCentral chat:
 | `/new` or `/clear` | Reset current agent session |
 | `/cwd /path/to/project` | Switch workspace directory for all agents |
 | `/task list\|create\|get\|update\|delete\|complete` | Manage tasks |
-| `/note list\|create\|get\|update\|delete` | Manage notes |
-| `/event list\|create\|get\|update\|delete` | Manage calendar events |
+| `/note list\|create\|get\|update\|delete\|lock\|unlock` | Manage notes |
+| `/event list [chatId]\|create\|get\|update\|delete` | Manage calendar events |
 | `/card get\|delete` | Manage adaptive cards |
+| `/chatinfo [chatId]` | Show chat details (name, type, members) |
 | `summarize my chat with John` | Summarize a conversation |
 | `/cron list\|add\|delete\|enable\|disable` | Manage scheduled tasks |
 | `/info` | Show current agent info (alias: `/status`) |
