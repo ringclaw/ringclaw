@@ -87,6 +87,14 @@ curl -sSL .../install.sh | sh -s -- beta      # beta (latest main build)
 curl -sSL .../install.sh | sh -s -- alpha feature/my-branch  # alpha (specific branch)
 ```
 
+**Switch channels via CLI:**
+
+```bash
+ringclaw update                                    # update to latest stable
+ringclaw update --channel beta                     # switch to beta channel
+ringclaw update --channel alpha --branch feature/foo  # switch to alpha branch
+```
+
 > **macOS note:** The installer and `ringclaw update` automatically clear Gatekeeper quarantine attributes (`com.apple.quarantine`, `com.apple.provenance`), so the binary won't be killed after download.
 
 ### Other install methods
@@ -615,7 +623,8 @@ ringclaw
 ├── restart                            # restart
 ├── status                             # check if running
 ├── setup                              # interactive credential wizard
-├── update / upgrade / version         # self-update
+├── update [--channel beta|alpha] [--branch X]  # self-update
+├── upgrade / version                  # aliases
 │
 ├── message                            # message operations
 │   ├── send <chatId> <text>           # send a message

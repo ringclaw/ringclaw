@@ -16,7 +16,16 @@ import (
 
 const githubRepo = "ringclaw/ringclaw"
 
+var (
+	updateChannel string
+	updateBranch  string
+)
+
 func init() {
+	updateCmd.Flags().StringVar(&updateChannel, "channel", "", "Release channel: stable (default), beta, alpha")
+	updateCmd.Flags().StringVar(&updateBranch, "branch", "", "Branch name for alpha channel")
+	upgradeCmd.Flags().StringVar(&updateChannel, "channel", "", "Release channel: stable (default), beta, alpha")
+	upgradeCmd.Flags().StringVar(&updateBranch, "branch", "", "Branch name for alpha channel")
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -43,19 +52,40 @@ var upgradeCmd = &cobra.Command{
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
-	// 1. Get latest version
-	fmt.Println("Checking for updates...")
-	latest, err := getLatestVersion()
-	if err != nil {
-		return fmt.Errorf("failed to check latest version: %w", err)
+	channel := strings.ToLower(updateChannel)
+
+	// Resolve version based on channel
+	var latest string
+	switch channel {
+	case "beta":
+		latest = "beta-latest"
+		fmt.Println("Channel: beta (latest main build)")
+	case "alpha":
+		if updateBranch == "" {
+			return fmt.Errorf("alpha channel requires --branch flag\nExample: ringclaw update --channel alpha --branch feature/foo")
+		}
+		safeBranch := strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+				return r
+			}
+			return '-'
+		}, updateBranch)
+		latest = "alpha-" + safeBranch
+		fmt.Printf("Channel: alpha (branch: %s)\n", updateBranch)
+	default:
+		fmt.Println("Checking for updates...")
+		var err error
+		latest, err = getLatestVersion()
+		if err != nil {
+			return fmt.Errorf("failed to check latest version: %w", err)
+		}
+		if latest == Version {
+			fmt.Printf("Already up to date (%s)\n", Version)
+			return nil
+		}
 	}
 
-	if latest == Version {
-		fmt.Printf("Already up to date (%s)\n", Version)
-		return nil
-	}
-
-	fmt.Printf("Current: %s -> Latest: %s\n", Version, latest)
+	fmt.Printf("Current: %s -> Target: %s\n", Version, latest)
 
 	// 2. Download new binary
 	goos := runtime.GOOS
