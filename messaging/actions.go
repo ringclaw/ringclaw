@@ -776,13 +776,52 @@ func resolveAssigneeParam(ctx context.Context, client *ringcentral.Client, raw s
 	return resolveNameToPersonID(ctx, client, id)
 }
 
+func isDirectChatID(ctx context.Context, client *ringcentral.Client, chatID string) (bool, error) {
+	chats, err := client.ListChats(ctx, "Direct")
+	if err != nil {
+		return false, err
+	}
+	for _, chat := range chats.Records {
+		if chat.ID == chatID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func selectCardClient(ctx context.Context, replyClient, actionClient *ringcentral.Client, targetChat string) *ringcentral.Client {
+	if replyClient != nil && replyClient.IsBot() && replyClient.IsBotDM(targetChat) {
+		return replyClient
+	}
+
+	if actionClient == nil {
+		return replyClient
+	}
+	if replyClient == nil {
+		return actionClient
+	}
+	if actionClient == replyClient {
+		return actionClient
+	}
+
+	isDirect, err := isDirectChatID(ctx, actionClient, targetChat)
+	if err != nil {
+		slog.Warn("action: failed to detect chat type for card routing, using action client", "chatID", targetChat, "error", err)
+		return actionClient
+	}
+	if isDirect {
+		return replyClient
+	}
+	return actionClient
+}
+
 // ExecuteAgentActions executes parsed actions against the RC API.
-func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID string, actions []AgentAction) []string {
+func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcentral.Client, chatID string, actions []AgentAction) []string {
 	var results []string
 	for _, a := range actions {
 		targetChat := chatID
 		if cid := a.Params["chatid"]; cid != "" {
-			resolved, err := resolveChatParam(ctx, client, cid)
+			resolved, err := resolveChatParam(ctx, actionClient, cid)
 			if err != nil {
 				slog.Error("action: failed to resolve chatid", "chatid", cid, "error", err)
 				results = append(results, fmt.Sprintf("Failed to resolve chat '%s': %v", cid, err))
@@ -797,7 +836,7 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 			if title == "" {
 				title = "Note"
 			}
-			note, err := client.CreateNote(ctx, targetChat, &ringcentral.CreateNoteRequest{
+			note, err := actionClient.CreateNote(ctx, targetChat, &ringcentral.CreateNoteRequest{
 				Title: title,
 				Body:  a.Body,
 			})
@@ -806,7 +845,7 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 				results = append(results, fmt.Sprintf("Failed to create note: %v", err))
 				continue
 			}
-			if pubErr := client.PublishNote(ctx, note.ID); pubErr != nil {
+			if pubErr := actionClient.PublishNote(ctx, note.ID); pubErr != nil {
 				slog.Error("action: publish note failed", "noteID", note.ID, "error", pubErr)
 			}
 			slog.Info("action: created note", "noteID", note.ID, "chatID", targetChat, "title", title)
@@ -818,7 +857,7 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 			}
 			req := &ringcentral.CreateTaskRequest{Subject: subject}
 			if aid := a.Params["assignee"]; aid != "" {
-				resolvedID, err := resolveAssigneeParam(ctx, client, aid)
+				resolvedID, err := resolveAssigneeParam(ctx, actionClient, aid)
 				if err != nil {
 					slog.Error("action: failed to resolve assignee", "assignee", aid, "error", err)
 					results = append(results, fmt.Sprintf("Failed to resolve assignee '%s': %v", aid, err))
@@ -826,7 +865,7 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 				}
 				req.Assignees = []ringcentral.TaskAssignee{{ID: resolvedID}}
 			}
-			task, err := client.CreateTask(ctx, targetChat, req)
+			task, err := actionClient.CreateTask(ctx, targetChat, req)
 			if err != nil {
 				slog.Error("action: create task failed", "error", err)
 				results = append(results, fmt.Sprintf("Failed to create task: %v", err))
@@ -841,7 +880,7 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 			if title == "" || startTime == "" || endTime == "" {
 				continue
 			}
-			event, err := client.CreateEvent(ctx, &ringcentral.CreateEventRequest{
+			event, err := actionClient.CreateEvent(ctx, &ringcentral.CreateEventRequest{
 				Title:     title,
 				StartTime: startTime,
 				EndTime:   endTime,
@@ -863,7 +902,8 @@ func ExecuteAgentActions(ctx context.Context, client *ringcentral.Client, chatID
 				results = append(results, "Failed to create card: invalid JSON")
 				continue
 			}
-			card, err := client.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
+			cardClient := selectCardClient(ctx, replyClient, actionClient, targetChat)
+			card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
 			if err != nil {
 				slog.Error("action: create adaptive card failed", "error", err)
 				results = append(results, fmt.Sprintf("Failed to create card: %v", err))
