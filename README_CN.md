@@ -480,6 +480,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 ```json
 {
   "default_agent": "claude",
+  "agent_workspace": "/home/user/my-project",
   "ringcentral": {
     "bot_token": "your_bot_token",
     "chat_ids": ["chat_id_1", "chat_id_2"],
@@ -527,6 +528,8 @@ curl -X POST http://127.0.0.1:18011/api/send \
 }
 ```
 
+`agent_workspace` 用来指定 Agent 进程的默认工作目录。RingClaw 会先进入这个 workspace，再调用对应 Agent。若某个 Agent 单独配置了 `cwd`，则优先使用该值。
+
 环境变量：
 
 - `RC_BOT_TOKEN` — Bot App Token（必需）
@@ -551,6 +554,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 
 ```json
 {
+  "agent_workspace": "/home/user/my-project",
   "claude": {
     "type": "cli",
     "command": "/usr/local/bin/claude",
@@ -566,7 +570,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 }
 ```
 
-通过 `cwd` 指定 Agent 的工作目录（workspace）。不设置则默认为 `~/.ringclaw/workspace`。
+顶层 `agent_workspace` 用于指定所有 Agent 的默认 workspace；单个 Agent 的 `cwd` 可覆盖该默认值。如果两者都未设置，则默认使用 `~/.ringclaw/workspace`。
 
 > **注意：** 这些参数会跳过安全检查，请了解风险后再启用。ACP 模式的 Agent 会自动处理权限，无需配置。
 

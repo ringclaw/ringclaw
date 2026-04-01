@@ -10,12 +10,13 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
-	DefaultAgent string                 `json:"default_agent"`
-	APIAddr      string                 `json:"api_addr,omitempty"`
-	Agents       map[string]AgentConfig `json:"agents"`
-	RC           RCConfig               `json:"ringcentral,omitempty"`
-	Heartbeat    HeartbeatConfig        `json:"heartbeat,omitempty"`
-	Cron         CronConfig             `json:"cron,omitempty"`
+	DefaultAgent   string                 `json:"default_agent"`
+	AgentWorkspace string                 `json:"agent_workspace,omitempty"`
+	APIAddr        string                 `json:"api_addr,omitempty"`
+	Agents         map[string]AgentConfig `json:"agents"`
+	RC             RCConfig               `json:"ringcentral,omitempty"`
+	Heartbeat      HeartbeatConfig        `json:"heartbeat,omitempty"`
+	Cron           CronConfig             `json:"cron,omitempty"`
 }
 
 // HeartbeatConfig holds heartbeat runner configuration.
@@ -23,7 +24,7 @@ type HeartbeatConfig struct {
 	Enabled     bool   `json:"enabled,omitempty"`
 	Interval    string `json:"interval,omitempty"`     // duration string, default "30m"
 	ActiveHours string `json:"active_hours,omitempty"` // "HH:MM-HH:MM", e.g. "09:00-18:00"
-	Timezone    string `json:"timezone,omitempty"`      // IANA timezone, default local
+	Timezone    string `json:"timezone,omitempty"`     // IANA timezone, default local
 }
 
 // CronConfig holds cron scheduler configuration.

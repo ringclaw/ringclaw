@@ -25,7 +25,8 @@ func TestLoadFromFile(t *testing.T) {
 	cfgPath := filepath.Join(tmpDir, "config.json")
 
 	testCfg := &Config{
-		DefaultAgent: "claude",
+		DefaultAgent:   "claude",
+		AgentWorkspace: "/tmp/workspace",
 		Agents: map[string]AgentConfig{
 			"claude": {Type: "acp", Command: "/usr/bin/claude", Model: "sonnet"},
 		},
@@ -52,6 +53,9 @@ func TestLoadFromFile(t *testing.T) {
 
 	if loaded.DefaultAgent != "claude" {
 		t.Errorf("expected default_agent=claude, got %q", loaded.DefaultAgent)
+	}
+	if loaded.AgentWorkspace != "/tmp/workspace" {
+		t.Errorf("expected agent_workspace=/tmp/workspace, got %q", loaded.AgentWorkspace)
 	}
 	if _, ok := loaded.Agents["claude"]; !ok {
 		t.Error("expected claude agent in config")
@@ -116,7 +120,8 @@ func TestSaveAndReload(t *testing.T) {
 	cfgPath := filepath.Join(tmpDir, "config.json")
 
 	original := &Config{
-		DefaultAgent: "codex",
+		DefaultAgent:   "codex",
+		AgentWorkspace: "/tmp/workspace",
 		Agents: map[string]AgentConfig{
 			"codex": {Type: "cli", Command: "/usr/bin/codex"},
 		},
@@ -143,6 +148,9 @@ func TestSaveAndReload(t *testing.T) {
 
 	if reloaded.DefaultAgent != original.DefaultAgent {
 		t.Errorf("default agent mismatch: %q vs %q", reloaded.DefaultAgent, original.DefaultAgent)
+	}
+	if reloaded.AgentWorkspace != original.AgentWorkspace {
+		t.Errorf("agent workspace mismatch: %q vs %q", reloaded.AgentWorkspace, original.AgentWorkspace)
 	}
 	if reloaded.Agents["codex"].Type != "cli" {
 		t.Errorf("agent type mismatch: got %q", reloaded.Agents["codex"].Type)

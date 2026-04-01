@@ -252,12 +252,14 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 		return nil
 	}
 
+	cwd := agentWorkspace(cfg, agCfg)
+
 	switch agCfg.Type {
 	case "acp":
 		ag := agent.NewACPAgent(agent.ACPAgentConfig{
 			Command:      agCfg.Command,
 			Args:         agCfg.Args,
-			Cwd:          agCfg.Cwd,
+			Cwd:          cwd,
 			Env:          agCfg.Env,
 			Model:        agCfg.Model,
 			SystemPrompt: agCfg.SystemPrompt,
@@ -273,7 +275,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			Name:         name,
 			Command:      agCfg.Command,
 			Args:         agCfg.Args,
-			Cwd:          agCfg.Cwd,
+			Cwd:          cwd,
 			Env:          agCfg.Env,
 			Model:        agCfg.Model,
 			SystemPrompt: agCfg.SystemPrompt,
@@ -298,7 +300,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			SystemPrompt: agCfg.SystemPrompt,
 			MaxHistory:   agCfg.MaxHistory,
 			Format:       agCfg.Format,
-			Cwd:          agCfg.Cwd,
+			Cwd:          cwd,
 			Sender:       agCfg.Sender,
 			ContextMode:  agCfg.ContextMode,
 			GroupJID:     agCfg.GroupJID,
@@ -310,6 +312,16 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 		slog.Warn("unknown agent type", "component", "agent", "type", agCfg.Type, "name", name)
 		return nil
 	}
+}
+
+func agentWorkspace(cfg *config.Config, agCfg config.AgentConfig) string {
+	if agCfg.Cwd != "" {
+		return agCfg.Cwd
+	}
+	if cfg != nil {
+		return cfg.AgentWorkspace
+	}
+	return ""
 }
 
 // checkAliasConflicts warns about alias conflicts at startup.

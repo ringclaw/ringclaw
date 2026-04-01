@@ -479,6 +479,7 @@ Config file: `~/.ringclaw/config.json`
 ```json
 {
   "default_agent": "claude",
+  "agent_workspace": "/home/user/my-project",
   "ringcentral": {
     "bot_token": "your_bot_token",
     "chat_ids": ["chat_id_1", "chat_id_2"],
@@ -526,6 +527,8 @@ Config file: `~/.ringclaw/config.json`
 }
 ```
 
+`agent_workspace` sets the default working directory for agent processes. RingClaw will start the agent from that workspace before invoking it. An agent-level `cwd` still takes precedence when set.
+
 Environment variables:
 - `RC_BOT_TOKEN` — Bot App token (required)
 - `RC_CLIENT_ID` — Private App client ID (optional, enables summarize)
@@ -549,6 +552,7 @@ Example:
 
 ```json
 {
+  "agent_workspace": "/home/user/my-project",
   "claude": {
     "type": "cli",
     "command": "/usr/local/bin/claude",
@@ -564,7 +568,7 @@ Example:
 }
 ```
 
-Set `cwd` to specify the agent's working directory (workspace). If omitted, defaults to `~/.ringclaw/workspace`.
+Set top-level `agent_workspace` to define the default workspace for all agents. Set per-agent `cwd` to override it for a specific agent. If neither is set, RingClaw defaults to `~/.ringclaw/workspace`.
 
 > **Warning:** These flags disable safety checks. Only enable them if you understand the risks. ACP agents handle permissions automatically and don't need these flags.
 
