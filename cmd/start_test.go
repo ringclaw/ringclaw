@@ -17,6 +17,17 @@ func TestAgentWorkspace_UsesGlobalWorkspaceWhenAgentCwdEmpty(t *testing.T) {
 	}
 }
 
+func TestAgentWorkspace_BothEmpty_ReturnsEmpty(t *testing.T) {
+	cfg := &config.Config{}
+	agCfg := config.AgentConfig{}
+
+	got := agentWorkspace(cfg, agCfg)
+
+	if got != "" {
+		t.Fatalf("agentWorkspace() = %q, want empty string", got)
+	}
+}
+
 func TestAgentWorkspace_PrefersAgentSpecificCwd(t *testing.T) {
 	cfg := &config.Config{AgentWorkspace: "/tmp/global-workspace"}
 	agCfg := config.AgentConfig{Cwd: "/tmp/agent-workspace"}

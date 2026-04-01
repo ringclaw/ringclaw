@@ -24,7 +24,7 @@ type HeartbeatConfig struct {
 	Enabled     bool   `json:"enabled,omitempty"`
 	Interval    string `json:"interval,omitempty"`     // duration string, default "30m"
 	ActiveHours string `json:"active_hours,omitempty"` // "HH:MM-HH:MM", e.g. "09:00-18:00"
-	Timezone    string `json:"timezone,omitempty"`     // IANA timezone, default local
+	Timezone    string `json:"timezone,omitempty"`      // IANA timezone, default local
 }
 
 // CronConfig holds cron scheduler configuration.
@@ -138,6 +138,9 @@ func Load() (*Config, error) {
 func loadEnv(cfg *Config) {
 	if v := os.Getenv("RINGCLAW_DEFAULT_AGENT"); v != "" {
 		cfg.DefaultAgent = v
+	}
+	if v := os.Getenv("RINGCLAW_AGENT_WORKSPACE"); v != "" {
+		cfg.AgentWorkspace = v
 	}
 	if v := os.Getenv("RINGCLAW_API_ADDR"); v != "" {
 		cfg.APIAddr = v
