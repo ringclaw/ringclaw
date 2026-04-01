@@ -776,43 +776,17 @@ func resolveAssigneeParam(ctx context.Context, client *ringcentral.Client, raw s
 	return resolveNameToPersonID(ctx, client, id)
 }
 
-func isDirectChatID(ctx context.Context, client *ringcentral.Client, chatID string) (bool, error) {
-	chats, err := client.ListChats(ctx, "Direct")
-	if err != nil {
-		return false, err
-	}
-	for _, chat := range chats.Records {
-		if chat.ID == chatID {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func selectCardClient(ctx context.Context, replyClient, actionClient *ringcentral.Client, targetChat string) *ringcentral.Client {
+// selectCardClient picks the right client for adaptive card creation.
+// Bot DM → bot client (card appears as bot's message).
+// Everything else → action client (private app has broader access).
+func selectCardClient(replyClient, actionClient *ringcentral.Client, targetChat string) *ringcentral.Client {
 	if replyClient != nil && replyClient.IsBot() && replyClient.IsBotDM(targetChat) {
 		return replyClient
 	}
-
-	if actionClient == nil {
-		return replyClient
-	}
-	if replyClient == nil {
+	if actionClient != nil {
 		return actionClient
 	}
-	if actionClient == replyClient {
-		return actionClient
-	}
-
-	isDirect, err := isDirectChatID(ctx, actionClient, targetChat)
-	if err != nil {
-		slog.Warn("action: failed to detect chat type for card routing, using action client", "chatID", targetChat, "error", err)
-		return actionClient
-	}
-	if isDirect {
-		return replyClient
-	}
-	return actionClient
+	return replyClient
 }
 
 // ExecuteAgentActions executes parsed actions against the RC API.
@@ -902,7 +876,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, "Failed to create card: invalid JSON")
 				continue
 			}
-			cardClient := selectCardClient(ctx, replyClient, actionClient, targetChat)
+			cardClient := selectCardClient(replyClient, actionClient, targetChat)
 			card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
 			if err != nil {
 				slog.Error("action: create adaptive card failed", "error", err)

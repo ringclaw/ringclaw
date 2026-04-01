@@ -592,31 +592,18 @@ func TestExecuteAgentActions_CardUsesBotClientInDM(t *testing.T) {
 func TestExecuteAgentActions_CardUsesPrivateClientInGroup(t *testing.T) {
 	var mu sync.Mutex
 	var authHeaders []string
-	var paths []string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
-		paths = append(paths, r.URL.Path)
 		mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/team-messaging/v1/chats"):
-			json.NewEncoder(w).Encode(map[string]any{
-				"records": []map[string]any{
-					{"id": "some-dm", "type": "Direct", "members": []map[string]string{{"id": "person-1"}}},
-				},
-			})
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/adaptive-cards"):
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":      "ac1",
-				"type":    "AdaptiveCard",
-				"version": "1.3",
-			})
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "ac1",
+			"type":    "AdaptiveCard",
+			"version": "1.3",
+		})
 	}))
 	defer srv.Close()
 
@@ -633,17 +620,12 @@ func TestExecuteAgentActions_CardUsesPrivateClientInGroup(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(authHeaders) != 2 {
-		t.Fatalf("expected 2 requests, got %d", len(authHeaders))
+	// No ListChats call — only the card creation request
+	if len(authHeaders) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(authHeaders))
 	}
 	if authHeaders[0] != "Bearer private-token" {
-		t.Fatalf("expected private token for chat lookup, got %q", authHeaders[0])
-	}
-	if authHeaders[1] != "Bearer private-token" {
-		t.Fatalf("expected private token for card create, got %q", authHeaders[1])
-	}
-	if !strings.Contains(paths[1], "/team-messaging/v1/chats/group-chat/adaptive-cards") {
-		t.Fatalf("expected card create path for group chat, got %q", paths[1])
+		t.Fatalf("expected private token for card create, got %q", authHeaders[0])
 	}
 }
 
