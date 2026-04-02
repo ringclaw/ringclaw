@@ -82,3 +82,34 @@ func TestACPAgent_SessionReuse(t *testing.T) {
 		t.Error("expected no session for conv-2")
 	}
 }
+
+func TestStripACPStdoutLine_ANSI(t *testing.T) {
+	raw := "\x1b[31m" + `{"jsonrpc":"2.0","id":1,"result":{}}` + "\x1b[0m"
+	got := stripACPStdoutLine(raw)
+	want := `{"jsonrpc":"2.0","id":1,"result":{}}`
+	if got != want {
+		t.Fatalf("stripACPStdoutLine = %q, want %q", got, want)
+	}
+	var msg rpcResponse
+	if err := json.Unmarshal([]byte(got), &msg); err != nil {
+		t.Fatalf("json.Unmarshal after strip: %v", err)
+	}
+	if msg.ID == nil || *msg.ID != 1 {
+		t.Fatalf("parsed id: %+v", msg.ID)
+	}
+}
+
+func TestStripACPStdoutLine_LeadingNoise(t *testing.T) {
+	raw := "\x1b[?2004h" + ` {"jsonrpc":"2.0","method":"session/update"}`
+	got := stripACPStdoutLine(raw)
+	if got != `{"jsonrpc":"2.0","method":"session/update"}` {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestStripACPStdoutLine_BOM(t *testing.T) {
+	got := stripACPStdoutLine("\ufeff" + `{"jsonrpc":"2.0"}`)
+	if got != `{"jsonrpc":"2.0"}` {
+		t.Fatalf("got %q", got)
+	}
+}

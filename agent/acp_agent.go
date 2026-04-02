@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -466,10 +467,34 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 	}
 }
 
+// acpANSIEscape matches terminal escape sequences some ACP agents write to stdout (e.g. droid),
+// which would otherwise break JSON decoding ("invalid character '\\x1b'").
+var acpANSIEscape = regexp.MustCompile(
+	`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]` + // CSI (colors, cursor, etc.)
+		`|\x9b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]` + // CSI via C1 control
+		`|\x1b\][^\x07]*(?:\x07|\x1b\\)` + // OSC terminated by BEL or ST
+		`|\x1b[@-Z\\-_]`, // two-byte escapes (e.g. save/restore cursor)
+)
+
+// stripACPStdoutLine removes ANSI/OSC noise and leading junk so one stdout line parses as JSON-RPC.
+func stripACPStdoutLine(line string) string {
+	line = strings.TrimPrefix(line, "\ufeff")
+	line = acpANSIEscape.ReplaceAllString(line, "")
+	line = strings.TrimSpace(line)
+	if line != "" && line[0] != '{' && line[0] != '[' {
+		if i := strings.IndexByte(line, '{'); i >= 0 {
+			line = line[i:]
+		} else if i := strings.IndexByte(line, '['); i >= 0 {
+			line = line[i:]
+		}
+	}
+	return line
+}
+
 // readLoop reads NDJSON lines from stdout and dispatches to pending requests or notification channels.
 func (a *ACPAgent) readLoop() {
 	for a.scanner.Scan() {
-		line := a.scanner.Text()
+		line := stripACPStdoutLine(a.scanner.Text())
 		if line == "" {
 			continue
 		}
