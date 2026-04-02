@@ -34,6 +34,47 @@ func TestParseTimeRange_LastNDays(t *testing.T) {
 	}
 }
 
+func TestParseTimeRange_LastNCNDays(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		text string
+		minD time.Duration
+		maxD time.Duration
+	}{
+		{"总结我跟 Yuki Chen 最近十天的聊天", 9 * 24 * time.Hour, 11 * 24 * time.Hour},
+		{"最近两天的消息", 1 * 24 * time.Hour, 3 * 24 * time.Hour},
+		{"过去十五天", 14 * 24 * time.Hour, 16 * 24 * time.Hour},
+		{"最近二十三天", 22 * 24 * time.Hour, 24 * 24 * time.Hour},
+	} {
+		result := parseTimeRange(tc.text)
+		diff := now.Sub(result)
+		if diff < tc.minD || diff > tc.maxD {
+			t.Errorf("parseTimeRange(%q): diff %v want between %v and %v", tc.text, diff, tc.minD, tc.maxD)
+		}
+	}
+}
+
+func TestChineseNumeralToInt(t *testing.T) {
+	tests := []struct {
+		s    string
+		want int
+		ok   bool
+	}{
+		{"十", 10, true},
+		{"两", 2, true},
+		{"十一", 11, true},
+		{"二十三", 23, true},
+		{"一百", 100, true},
+		{"", 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := chineseNumeralToInt(tt.s)
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("chineseNumeralToInt(%q) = (%d, %v), want (%d, %v)", tt.s, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestParseTimeRange_LastNHours(t *testing.T) {
 	now := time.Now()
 	result := parseTimeRange("last 2 hours")

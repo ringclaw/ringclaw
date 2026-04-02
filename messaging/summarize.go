@@ -403,11 +403,88 @@ func todayStart() time.Time {
 }
 
 var (
-	reLastNDays  = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:天|days?)`)
-	reLastNHours = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:小时|个小时|hours?)`)
-	reDigits     = regexp.MustCompile(`\d+`)
-	rePunctSpace = regexp.MustCompile(`[，。！？,\.!\?\s]+`)
+	reLastNDays     = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:天|days?)`)
+	reLastNHours    = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:小时|个小时|hours?)`)
+	reLastNCNDays   = regexp.MustCompile(`(?:最近|过去|last)\s*([一二三四五六七八九十百千万两]+)\s*(?:天|days?)`)
+	reLastNCNHours  = regexp.MustCompile(`(?:最近|过去|last)\s*([一二三四五六七八九十百千万两]+)\s*(?:小时|个小时|hours?)`)
+	reDigits        = regexp.MustCompile(`\d+`)
+	rePunctSpace    = regexp.MustCompile(`[，。！？,\.!\?\s]+`)
 )
+
+// chineseNumeralToInt parses simplified Chinese numerals for time ranges (1..999).
+// Examples: 一->1, 两/二->2, 十->10, 十一->11, 二十三->23, 一百->100.
+func chineseNumeralToInt(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	r := []rune(s)
+	digit := func(x rune) (int, bool) {
+		switch x {
+		case '零':
+			return 0, true
+		case '一':
+			return 1, true
+		case '二', '两':
+			return 2, true
+		case '三':
+			return 3, true
+		case '四':
+			return 4, true
+		case '五':
+			return 5, true
+		case '六':
+			return 6, true
+		case '七':
+			return 7, true
+		case '八':
+			return 8, true
+		case '九':
+			return 9, true
+		}
+		return 0, false
+	}
+
+	if len(r) == 2 && r[1] == '百' {
+		if r[0] == '一' {
+			return 100, true
+		}
+		if n, ok := digit(r[0]); ok {
+			return n * 100, true
+		}
+	}
+
+	switch len(r) {
+	case 1:
+		if r[0] == '十' {
+			return 10, true
+		}
+		if n, ok := digit(r[0]); ok && r[0] != '零' {
+			return n, true
+		}
+	case 2:
+		if r[0] == '十' {
+			if n, ok := digit(r[1]); ok {
+				return 10 + n, true
+			}
+			return 10, true
+		}
+		if r[1] == '十' {
+			if n, ok := digit(r[0]); ok {
+				return n * 10, true
+			}
+		}
+	case 3:
+		if r[1] == '十' {
+			a, okA := digit(r[0])
+			b, okB := digit(r[2])
+			if okA && okB {
+				return a*10 + b, true
+			}
+		}
+	}
+	return 0, false
+}
 
 func parseTimeRange(text string) time.Time {
 	lower := strings.ToLower(text)
@@ -419,9 +496,19 @@ func parseTimeRange(text string) time.Time {
 			return now.AddDate(0, 0, -n)
 		}
 	}
+	if m := reLastNCNDays.FindStringSubmatch(lower); len(m) == 2 {
+		if n, ok := chineseNumeralToInt(m[1]); ok && n > 0 {
+			return now.AddDate(0, 0, -n)
+		}
+	}
 	if m := reLastNHours.FindStringSubmatch(lower); len(m) == 2 {
 		n, _ := strconv.Atoi(m[1])
 		if n > 0 {
+			return now.Add(-time.Duration(n) * time.Hour)
+		}
+	}
+	if m := reLastNCNHours.FindStringSubmatch(lower); len(m) == 2 {
+		if n, ok := chineseNumeralToInt(m[1]); ok && n > 0 {
 			return now.Add(-time.Duration(n) * time.Hour)
 		}
 	}
