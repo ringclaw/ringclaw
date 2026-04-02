@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -205,5 +206,17 @@ func TestBuildHelpText_IncludesChatinfo(t *testing.T) {
 	}
 	if !strings.Contains(help, "lock") {
 		t.Error("help text should include lock for notes")
+	}
+}
+
+func TestSummarizeTargetResolveErrorReply(t *testing.T) {
+	base := fmt.Errorf("wrapped: %w", ErrSummarizeNoChatMatch)
+	disambig := fmt.Errorf("%w", errDisambiguationParseFailed)
+	got := summarizeTargetResolveErrorReply(base, disambig)
+	if !strings.HasPrefix(got, "Error: ") || !strings.Contains(got, "selection") {
+		t.Fatalf("expected disambig message, got %q", got)
+	}
+	if summarizeTargetResolveErrorReply(base, nil) != fmt.Sprintf("Error: %v", base) {
+		t.Fatal("expected original resolve error when disambigErr is nil")
 	}
 }

@@ -22,3 +22,23 @@ Thumbs.db
 # Claude Code
 .claude/
 .spec-workflow/
+
+
+# Agent / IDE tooling (local dirs)
+.agents/
+.augment/
+.copilot/
+.cursor/
+.dify/
+.droid/
+.factory/
+.gemini/
+.iflow/
+.junie/
+.kimi/
+.kiro/
+.opencode/
+.openclaw/
+.pi/
+.qwen/
+.zencoder/

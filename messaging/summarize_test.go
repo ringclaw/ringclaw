@@ -1,11 +1,34 @@
 package messaging
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
+
+func TestIsChatSummarizeIntent(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"总结一下跟张三的聊天", true},
+		{"summarize last 3 days", true},
+		{"总结下如何安装claw https://github.com/ringclaw/ringclaw/blob/main/README_CN.md", false},
+		{"总结 http://example.com/path", false},
+		{"Summary of https://a.com", false},
+		{"hello world", false},
+	}
+	for _, tt := range tests {
+		got := IsChatSummarizeIntent(tt.text)
+		if got != tt.want {
+			t.Errorf("IsChatSummarizeIntent(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
 
 func TestIsSummarizeCommand(t *testing.T) {
 	tests := []struct {
@@ -213,5 +236,68 @@ func TestFormatTimeDesc(t *testing.T) {
 	got = formatTimeDesc(threeDaysAgo)
 	if got != "last 3 days" {
 		t.Errorf("formatTimeDesc(3 days ago) = %q, want %q", got, "last 3 days")
+	}
+}
+
+func TestParseSummarizeTargetDisambiguationReply(t *testing.T) {
+	tests := []struct {
+		reply string
+		want  int
+		ok    bool
+	}{
+		{`{"choice_index":2}`, 2, true},
+		{"```json\n{\"choice_index\": 1}\n```", 1, true},
+		{"Here is the answer:\n```\n{\"choice_index\":0}\n```", 0, true},
+		{`{"choice_index":null}`, 0, false},
+		{`{"choice_index":-1}`, -1, true},
+		{"not json", 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := ParseSummarizeTargetDisambiguationReply(tt.reply)
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("ParseSummarizeTargetDisambiguationReply(%q) = (%d, %v), want (%d, %v)", tt.reply, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestErrSummarizeNoChatMatchWrapped(t *testing.T) {
+	err := fmt.Errorf("%w: could not find a chat matching %q. For group chats, use mention format: ![:Team](id)", ErrSummarizeNoChatMatch, "bob")
+	if !errors.Is(err, ErrSummarizeNoChatMatch) {
+		t.Fatal("expected errors.Is to match ErrSummarizeNoChatMatch")
+	}
+}
+
+func TestDisambiguationUserMessage(t *testing.T) {
+	if got := DisambiguationUserMessage(nil); got != "" {
+		t.Fatalf("nil: %q", got)
+	}
+	if got := DisambiguationUserMessage(fmt.Errorf("%w", errDisambiguationNoCandidates)); !strings.Contains(got, "Direct") {
+		t.Fatalf("no candidates: %q", got)
+	}
+	if got := DisambiguationUserMessage(fmt.Errorf("%w", errDisambiguationParseFailed)); !strings.Contains(got, "selection") {
+		t.Fatalf("parse: %q", got)
+	}
+	if got := DisambiguationUserMessage(fmt.Errorf("%w: x", errDisambiguationBadIndex)); !strings.Contains(got, "invalid") {
+		t.Fatalf("bad index: %q", got)
+	}
+	if got := DisambiguationUserMessage(errors.New("network")); !strings.Contains(got, "assistant step") {
+		t.Fatalf("generic: %q", got)
+	}
+}
+
+func TestBuildSummarizeTargetCandidatesFromChats(t *testing.T) {
+	list := &ringcentral.ChatList{
+		Records: []ringcentral.Chat{
+			{ID: "a", Name: "Alice", Members: []ringcentral.ChatMember{{ID: "1"}, {ID: "2"}}},
+			{ID: "b", Name: "", Members: []ringcentral.ChatMember{{ID: "1"}, {ID: "2"}}},
+			{ID: "c", Name: "Bob", Members: []ringcentral.ChatMember{{ID: "1"}}},
+		},
+	}
+	got := BuildSummarizeTargetCandidatesFromChats(list)
+	if len(got) != 1 || got[0].ChatID != "a" || got[0].Index != 0 || got[0].DisplayName != "Alice" {
+		t.Fatalf("unexpected candidates: %+v", got)
+	}
+	if BuildSummarizeTargetCandidatesFromChats(nil) != nil {
+		t.Fatal("expected nil for nil list")
 	}
 }

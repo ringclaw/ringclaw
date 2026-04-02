@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -329,6 +330,11 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 
 	// Summarize command -- requires private app (readClient) for reading other chats
 	if IsSummarizeCommand(text) {
+		// URL / doc-style "summarize" (e.g. README link) — not RC chat history; route like a normal agent message.
+		if !IsChatSummarizeIntent(text) {
+			h.sendToDefaultAgent(ctx, client, readClient, post, text)
+			return
+		}
 		if readClient == client {
 			// No private app configured — bot can't read other users' chats
 			_ = SendTextReply(ctx, client, chatID, "Summarize requires a Private App to be configured. Run 'ringclaw setup' to add one.")
@@ -939,9 +945,9 @@ func wrapAnswer(text string) string {
 }
 
 // isPrivilegedCommand returns true for commands that should be restricted
-// to the bot owner in group chats (agent switch, session reset, cwd, summarize).
+// to the bot owner in group chats (agent switch, session reset, cwd, RC chat summarize).
 func isPrivilegedCommand(text string) bool {
-	if IsSummarizeCommand(text) {
+	if IsChatSummarizeIntent(text) {
 		return true
 	}
 	if text == "/new" || text == "/clear" {
@@ -954,6 +960,53 @@ func isPrivilegedCommand(text string) bool {
 		return true
 	}
 	return false
+}
+
+// summarizeTargetResolveErrorReply prefers a clear message when disambiguation ran but failed; otherwise shows the resolve error.
+func summarizeTargetResolveErrorReply(resolveErr, disambigErr error) string {
+	if disambigErr != nil {
+		return "Error: " + DisambiguationUserMessage(disambigErr)
+	}
+	return fmt.Sprintf("Error: %v", resolveErr)
+}
+
+// resolveSummarizeTargetByAgent asks the default agent to pick a Direct chat from recent candidates when rule-based resolution fails.
+func (h *Handler) resolveSummarizeTargetByAgent(ctx context.Context, client *ringcentral.Client, userID, text string, ag agent.Agent) (*SummarizeRequest, error) {
+	list, err := client.ListRecentChats(ctx, "Direct", 80)
+	if err != nil {
+		slog.Warn("list recent chats for disambiguation failed, falling back", "component", "summarize", "error", err)
+		list, err = client.ListChats(ctx, "Direct")
+	}
+	if err != nil {
+		return nil, err
+	}
+	candidates := BuildSummarizeTargetCandidatesFromChats(list)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("%w", errDisambiguationNoCandidates)
+	}
+	prompt := BuildSummarizeTargetDisambiguationPrompt(text, candidates)
+	reply, err := h.chatWithAgent(ctx, ag, userID, prompt)
+	if err != nil {
+		return nil, err
+	}
+	idx, ok := ParseSummarizeTargetDisambiguationReply(reply)
+	if !ok {
+		return nil, fmt.Errorf("%w", errDisambiguationParseFailed)
+	}
+	if idx < 0 || idx >= len(candidates) {
+		return nil, fmt.Errorf("%w: got %d, valid 0-%d", errDisambiguationBadIndex, idx, len(candidates)-1)
+	}
+	c := candidates[idx]
+
+	globalChatCache.ensureLoaded()
+	globalChatCache.addEntry(chatCacheEntry{ChatID: c.ChatID, ChatName: c.DisplayName, ChatType: "Direct"})
+
+	return &SummarizeRequest{
+		ChatID:      c.ChatID,
+		ChatName:    c.DisplayName,
+		TimeFrom:    parseTimeRange(text),
+		UserRequest: text,
+	}, nil
 }
 
 func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
@@ -978,9 +1031,25 @@ func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.
 
 	// Resolve target chat using readClient (private app has access to all chats)
 	req, err := ResolveChatTarget(ctx, readClient, text, post.Mentions)
+	var disambigErr error
 	if err != nil {
-		sendReply(fmt.Sprintf("Error: %v", err))
-		return
+		if errors.Is(err, ErrSummarizeNoChatMatch) && extractNameFromText(text) != "" {
+			ag := h.getDefaultAgent()
+			if ag != nil {
+				req2, err2 := h.resolveSummarizeTargetByAgent(ctx, readClient, post.CreatorID, text, ag)
+				if err2 != nil {
+					disambigErr = err2
+					slog.Warn("summarize target disambiguation failed", "component", "summarize", "error", err2)
+				} else if req2 != nil {
+					req = req2
+					err = nil
+				}
+			}
+		}
+		if err != nil {
+			sendReply(summarizeTargetResolveErrorReply(err, disambigErr))
+			return
+		}
 	}
 
 	slog.Info("summarize target chat", "component", "summarize", "chatName", req.ChatName, "chatID", req.ChatID, "from", req.TimeFrom.Format(time.RFC3339))

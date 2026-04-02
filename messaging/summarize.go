@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +19,34 @@ import (
 )
 
 var summarizeKeywords = []string{"总结", "summarize", "summary"}
+
+// ErrSummarizeNoChatMatch is returned when the extracted target name could not be resolved to a chat.
+// It is wrapped with context; use errors.Is(err, ErrSummarizeNoChatMatch).
+var ErrSummarizeNoChatMatch = errors.New("summarize: no chat matched target")
+
+// Disambiguation failure markers (wrapped by resolveSummarizeTargetByAgent). Use errors.Is and DisambiguationUserMessage.
+var (
+	errDisambiguationNoCandidates = errors.New("summarize disambiguation: no direct chat candidates")
+	errDisambiguationParseFailed  = errors.New("summarize disambiguation: invalid agent reply")
+	errDisambiguationBadIndex     = errors.New("summarize disambiguation: choice index out of range")
+)
+
+// DisambiguationUserMessage maps a disambiguation error to a concise user-facing explanation (English).
+// For non-disambiguation errors, it returns a generic fallback (caller should log the full error).
+func DisambiguationUserMessage(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errDisambiguationNoCandidates):
+		return "No Direct chats were available to choose from. For a group conversation, use a Team mention (![:Team](id))."
+	case errors.Is(err, errDisambiguationParseFailed):
+		return "Could not read the assistant's selection. Please try again, or specify the target with a @mention."
+	case errors.Is(err, errDisambiguationBadIndex):
+		return "The assistant picked an invalid option. Please try again or use a @mention for the target."
+	default:
+		return "Could not resolve which chat to summarize (assistant step). Check connectivity and try again, or use a Team/User mention."
+	}
+}
 
 // chatCacheEntry stores a resolved chat name -> ID mapping.
 type chatCacheEntry struct {
@@ -36,19 +65,19 @@ type cachedPerson struct {
 
 // persistentCacheData is the on-disk format for ~/.ringclaw/chat_cache.json.
 type persistentCacheData struct {
-	Entries []chatCacheEntry           `json:"entries"`
-	Persons map[string]cachedPerson    `json:"persons"`
-	SavedAt time.Time                  `json:"saved_at"`
+	Entries []chatCacheEntry        `json:"entries"`
+	Persons map[string]cachedPerson `json:"persons"`
+	SavedAt time.Time               `json:"saved_at"`
 }
 
 // chatCache caches Direct chat lookups and person info.
 // Direct chats have stable IDs and are cached permanently.
 // Team/Group chats use mentions (have explicit IDs), no cache needed.
 type chatCache struct {
-	mu       sync.RWMutex
-	entries  []chatCacheEntry
-	persons  map[string]*ringcentral.PersonInfo
-	loaded   bool
+	mu      sync.RWMutex
+	entries []chatCacheEntry
+	persons map[string]*ringcentral.PersonInfo
+	loaded  bool
 }
 
 var globalChatCache = &chatCache{
@@ -393,6 +422,21 @@ func IsSummarizeCommand(text string) bool {
 	return false
 }
 
+var reHTTPURL = regexp.MustCompile(`(?i)https?://`)
+
+// IsChatSummarizeIntent is true when the user likely wants RingCentral chat history summarized
+// (starts with a summarize keyword and does not look like a web/doc question).
+// Messages with http(s) URLs are treated as general summarization for the agent (e.g. README links).
+func IsChatSummarizeIntent(text string) bool {
+	if !IsSummarizeCommand(text) {
+		return false
+	}
+	if reHTTPURL.MatchString(text) {
+		return false
+	}
+	return true
+}
+
 // SummarizeRequest holds parsed summarize parameters.
 type SummarizeRequest struct {
 	ChatID      string
@@ -463,7 +507,104 @@ func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, text str
 		return req, nil
 	}
 
-	return nil, fmt.Errorf("could not find a chat matching %q. For group chats, use mention format: ![:Team](id)", name)
+	return nil, fmt.Errorf("%w: could not find a chat matching %q. For group chats, use mention format: ![:Team](id)", ErrSummarizeNoChatMatch, name)
+}
+
+// SummarizeTargetCandidate is one Direct chat option for local agent disambiguation.
+type SummarizeTargetCandidate struct {
+	Index       int
+	ChatID      string
+	DisplayName string
+}
+
+// BuildSummarizeTargetCandidatesFromChats filters Direct chats that have a display name and at least two members
+// (same eligibility rules as lookupViaDirectChatList).
+func BuildSummarizeTargetCandidatesFromChats(list *ringcentral.ChatList) []SummarizeTargetCandidate {
+	if list == nil {
+		return nil
+	}
+	var out []SummarizeTargetCandidate
+	idx := 0
+	for _, chat := range list.Records {
+		if len(chat.Members) < 2 {
+			continue
+		}
+		cn := strings.TrimSpace(chat.Name)
+		if cn == "" {
+			continue
+		}
+		out = append(out, SummarizeTargetCandidate{
+			Index:       idx,
+			ChatID:      chat.ID,
+			DisplayName: cn,
+		})
+		idx++
+	}
+	return out
+}
+
+// BuildSummarizeTargetDisambiguationPrompt asks the default agent to pick exactly one candidate by index.
+func BuildSummarizeTargetDisambiguationPrompt(userText string, candidates []SummarizeTargetCandidate) string {
+	var b strings.Builder
+	b.WriteString(`You resolve which RingCentral Direct chat the user wants summarized.
+Read the user's message and pick the single best matching candidate from the list below.
+Respond with ONLY one JSON object and no other text. Use this shape:
+{"choice_index":<0-based integer index of the best match, or null if none match>}
+
+User message:
+---
+`)
+	b.WriteString(strings.TrimSpace(userText))
+	b.WriteString(`
+---
+
+Candidates (Direct chats):
+`)
+	for _, c := range candidates {
+		fmt.Fprintf(&b, "%d. chat_id=%s display_name=%q\n", c.Index, c.ChatID, c.DisplayName)
+	}
+	return b.String()
+}
+
+// ParseSummarizeTargetDisambiguationReply extracts choice_index from the agent reply (JSON, optionally in a fenced block).
+func ParseSummarizeTargetDisambiguationReply(reply string) (index int, ok bool) {
+	raw := extractJSONObjectFromAgentReply(reply)
+	if raw == "" {
+		return 0, false
+	}
+	var pick struct {
+		ChoiceIndex *int `json:"choice_index"`
+	}
+	if err := json.Unmarshal([]byte(raw), &pick); err != nil {
+		return 0, false
+	}
+	if pick.ChoiceIndex == nil {
+		return 0, false
+	}
+	return *pick.ChoiceIndex, true
+}
+
+func extractJSONObjectFromAgentReply(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(strings.ToLower(s), "```") {
+		rest := s[3:]
+		rest = strings.TrimLeft(rest, "\r\n")
+		if strings.HasPrefix(strings.ToLower(rest), "json") {
+			rest = rest[4:]
+			rest = strings.TrimLeft(rest, "\r\n")
+		}
+		if end := strings.Index(rest, "```"); end >= 0 {
+			s = strings.TrimSpace(rest[:end])
+		} else {
+			s = strings.TrimSpace(rest)
+		}
+	}
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start < 0 || end <= start {
+		return ""
+	}
+	return s[start : end+1]
 }
 
 // BuildSummaryPrompt fetches chat messages and builds a prompt for the agent.
@@ -555,12 +696,12 @@ func todayStart() time.Time {
 }
 
 var (
-	reLastNDays     = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:天|days?)`)
-	reLastNHours    = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:小时|个小时|hours?)`)
-	reLastNCNDays   = regexp.MustCompile(`(?:最近|过去|last)\s*([一二三四五六七八九十百千万两]+)\s*(?:天|days?)`)
-	reLastNCNHours  = regexp.MustCompile(`(?:最近|过去|last)\s*([一二三四五六七八九十百千万两]+)\s*(?:小时|个小时|hours?)`)
-	reDigits        = regexp.MustCompile(`\d+`)
-	rePunctSpace    = regexp.MustCompile(`[，。！？,\.!\?\s]+`)
+	reLastNDays    = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:天|days?)`)
+	reLastNHours   = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:小时|个小时|hours?)`)
+	reLastNCNDays  = regexp.MustCompile(`(?:最近|过去|last)\s*([一二三四五六七八九十百千万两]+)\s*(?:天|days?)`)
+	reLastNCNHours = regexp.MustCompile(`(?:最近|过去|last)\s*([一二三四五六七八九十百千万两]+)\s*(?:小时|个小时|hours?)`)
+	reDigits       = regexp.MustCompile(`\d+`)
+	rePunctSpace   = regexp.MustCompile(`[，。！？,\.!\?\s]+`)
 )
 
 // chineseNumeralToInt parses simplified Chinese numerals for time ranges (1..999).
