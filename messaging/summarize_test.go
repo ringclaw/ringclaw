@@ -185,6 +185,9 @@ func TestFuzzyMatch(t *testing.T) {
 		{"张三", "张三", true},
 		{"hello", "world", false},
 		{"hello", "", false},
+		// Empty haystack must not match (Go's strings.Contains(needle, "") is true).
+		{"", "mary yang", false},
+		{"   ", "mary yang", false},
 	}
 	for _, tt := range tests {
 		got := fuzzyMatch(tt.haystack, tt.needle)

@@ -75,6 +75,10 @@ func (c *chatCache) ensureLoaded() {
 
 // addEntry adds a new cache entry and persists to disk.
 func (c *chatCache) addEntry(entry chatCacheEntry) {
+	if strings.TrimSpace(entry.ChatName) == "" {
+		slog.Warn("skipping cache add: empty chat_name", "component", "summarize", "chatID", entry.ChatID)
+		return
+	}
 	c.mu.Lock()
 	c.entries = append(c.entries, entry)
 	c.loaded = true
@@ -99,7 +103,12 @@ func (c *chatCache) loadFromDisk() {
 	}
 
 	c.mu.Lock()
-	c.entries = pd.Entries
+	c.entries = nil
+	for _, e := range pd.Entries {
+		if strings.TrimSpace(e.ChatName) != "" {
+			c.entries = append(c.entries, e)
+		}
+	}
 	for id, cp := range pd.Persons {
 		c.persons[id] = &ringcentral.PersonInfo{
 			ID:        cp.ID,
@@ -111,7 +120,12 @@ func (c *chatCache) loadFromDisk() {
 	c.loaded = len(c.entries) > 0
 	c.mu.Unlock()
 
-	slog.Info("loaded cache from disk", "component", "summarize", "chats", len(pd.Entries), "persons", len(pd.Persons))
+	if len(c.entries) != len(pd.Entries) {
+		slog.Warn("dropped summarize cache rows with empty chat_name", "component", "summarize", "removed", len(pd.Entries)-len(c.entries))
+		c.saveToDisk()
+	}
+
+	slog.Info("loaded cache from disk", "component", "summarize", "chats", len(c.entries), "persons", len(pd.Persons))
 }
 
 // saveToDisk writes the cache to disk.
@@ -154,6 +168,9 @@ func (c *chatCache) lookup(name string) *chatCacheEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for i := range c.entries {
+		if strings.TrimSpace(c.entries[i].ChatName) == "" {
+			continue
+		}
 		if fuzzyMatch(c.entries[i].ChatName, name) {
 			return &c.entries[i]
 		}
@@ -748,8 +765,12 @@ func fuzzyMatch(haystack, needle string) bool {
 	if needle == "" {
 		return false
 	}
-	h := strings.ToLower(strings.ReplaceAll(haystack, " ", ""))
-	n := strings.ToLower(strings.ReplaceAll(needle, " ", ""))
+	h := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(haystack), " ", ""))
+	n := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(needle), " ", ""))
+	if h == "" {
+		// strings.Contains(n, "") is always true in Go; empty haystack must not match every lookup.
+		return false
+	}
 	return strings.Contains(h, n) || strings.Contains(n, h)
 }
 
