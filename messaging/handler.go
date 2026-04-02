@@ -327,29 +327,21 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
-	// Summarize command -- requires private app (readClient) for reading other chats
-	if IsSummarizeCommand(text) {
-		if readClient == client {
-			// No private app configured — bot can't read other users' chats
-			_ = SendTextReply(ctx, client, chatID, "Summarize requires a Private App to be configured. Run 'ringclaw setup' to add one.")
-			return
-		}
-		// Block in bot group chats -- would leak private data to the group
-		if isBotGroup {
-			_ = SendTextReply(ctx, client, chatID, "This command can only be used in a direct message with the bot.")
-			return
-		}
-		h.handleSummarize(ctx, client, readClient, post)
-		return
-	}
-
-	// Action commands: /task, /note, /event (use readClient for API access)
+	// Explicit action commands: /task, /note, /event (use readClient for API access)
 	if IsActionCommand(text) {
 		reply := HandleActionCommand(ctx, readClient, chatID, text)
 		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
 			slog.Error("failed to send action reply", "component", "handler", "error", err)
 		}
 		return
+	}
+
+	// AI intent classification: if the message matches loose multilingual keywords,
+	// ask the default agent to classify the intent before routing.
+	if matchesIntentTrigger(text) {
+		if intent := h.classifyAndRoute(ctx, client, readClient, post, text, isBotGroup); intent {
+			return
+		}
 	}
 
 	// Route: "/agent msg" or "/a /b msg" -> agent(s)
@@ -411,6 +403,48 @@ func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) st
 		return fmt.Sprintf("rc:dm:%s:%s", chatID, creatorID)
 	}
 	return fmt.Sprintf("rc:chat:%s:user:%s", chatID, creatorID)
+}
+
+// classifyAndRoute uses AI to classify the user's intent and routes accordingly.
+// Returns true if the message was handled, false to continue normal routing.
+func (h *Handler) classifyAndRoute(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string, isBotGroup bool) bool {
+	ag := h.getDefaultAgent()
+	if ag == nil {
+		// Agent not ready — fall back to old keyword prefix matching
+		if isSummarizeKeyword(text) {
+			return h.routeSummarize(ctx, client, readClient, post, isBotGroup)
+		}
+		return false
+	}
+
+	intent := classifyIntent(ctx, ag, text)
+	switch intent {
+	case IntentSummarize:
+		return h.routeSummarize(ctx, client, readClient, post, isBotGroup)
+	case IntentTask, IntentNote, IntentEvent:
+		// Send to the default agent with the ACTION prompt so it produces ACTION blocks
+		h.sendToDefaultAgent(ctx, client, readClient, post, text)
+		return true
+	default:
+		// IntentChat — let the message continue to normal agent routing
+		return false
+	}
+}
+
+// routeSummarize handles the summarize flow with permission checks.
+// Returns true (always handles the message).
+func (h *Handler) routeSummarize(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, isBotGroup bool) bool {
+	chatID := post.GroupID
+	if readClient == client {
+		_ = SendTextReply(ctx, client, chatID, "Summarize requires a Private App to be configured. Run 'ringclaw setup' to add one.")
+		return true
+	}
+	if isBotGroup {
+		_ = SendTextReply(ctx, client, chatID, "This command can only be used in a direct message with the bot.")
+		return true
+	}
+	h.handleSummarize(ctx, client, readClient, post)
+	return true
 }
 
 // sendToDefaultAgent sends the message to the default agent and replies.
