@@ -462,6 +462,16 @@ var (
 	reMention = regexp.MustCompile(`!\[:\w+\]\(\d+\)`)
 	// reEmail matches a typical corporate email before punctuation splitting breaks it.
 	reEmail = regexp.MustCompile(`[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}`)
+	// reChineseTimeSpan removes Chinese (non-Arabic) durations, e.g. "两天" after stripping "最近"
+	// leaves "两" if only "天" is removed — breaks directory search ("strong luo 两").
+	reChineseTimeSpan = regexp.MustCompile(
+		`[一二三四五六七八九十百千万两几]+\s*(?:个\s*)?(?:天|日)` +
+			`|[一二三四五六七八九十百千万两几]+\s*(?:个\s*)?(?:小时|钟头)` +
+			`|[一二三四五六七八九十百千万两几]+\s*(?:个\s*)?(?:礼拜|星期|周)` +
+			`|[一二三四五六七八九十百千万两几]+\s*(?:个\s*)?月` +
+			`|[半几]\s*(?:天|日|小时|钟头|周|星期|月)`)
+	// Trailing Chinese numerals left after unit stripping (e.g. lone "两").
+	reTrailingChineseNumeral = regexp.MustCompile(`\s+[一二三四五六七八九十百千万两几半]+$`)
 )
 
 func extractNameFromText(text string) string {
@@ -489,6 +499,7 @@ func extractNameFromText(text string) string {
 	for _, kw := range []string{"今天", "昨天", "本周", "最近", "过去", "today", "yesterday", "this week", "last"} {
 		clean = strings.ReplaceAll(clean, kw, "")
 	}
+	clean = reChineseTimeSpan.ReplaceAllString(clean, "")
 	// Remove common filler words (Chinese single chars and phrases)
 	for _, kw := range []string{
 		"一下", "下", "的", "消息", "聊天", "对话", "群聊", "群", "记录",
@@ -505,6 +516,8 @@ func extractNameFromText(text string) string {
 	for _, kw := range []string{"天", "小时", "个", "hours", "days"} {
 		clean = strings.ReplaceAll(clean, kw, "")
 	}
+	clean = strings.TrimSpace(clean)
+	clean = reTrailingChineseNumeral.ReplaceAllString(clean, "")
 	clean = strings.TrimSpace(clean)
 	return clean
 }

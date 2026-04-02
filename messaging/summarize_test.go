@@ -84,6 +84,8 @@ func TestExtractNameFromText(t *testing.T) {
 		{"总结和 holgie.wei@ringcentral.com 最近2天的聊天记录", "holgie.wei@ringcentral.com"},
 		// Team name without mention: strip 这个群 / 天 / 聊天 debris
 		{"总结GSP/Partners Teams DEV+QA+SDET 这个群最近2天的聊天", "gsp/partners teams dev+qa+sdet"},
+		// Chinese numeral duration: "两天" must not leave trailing "两"
+		{"总结我和 Strong Luo 最近两天的聊天记录", "strong luo"},
 	}
 	for _, tt := range tests {
 		got := extractNameFromText(tt.text)
