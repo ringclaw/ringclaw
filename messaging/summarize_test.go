@@ -124,7 +124,7 @@ func TestExtractNameFromText(t *testing.T) {
 		// Logged failures: "记录" left after removing 聊天; English name + 今天的聊天记录
 		{"总结下我和 Strong Luo 今天的聊天记录", "strong luo"},
 		{"总结和 Holgie Wei 最近2天的聊天记录", "holgie wei"},
-		{"总结和 holgie.wei@ringcentral.com 最近2天的聊天记录", "holgie.wei@ringcentral.com"},
+		{"总结和 holgie.wei@example.com 最近2天的聊天记录", "holgie.wei@example.com"},
 		// Team name without mention: strip 这个群 / 天 / 聊天 debris
 		{"总结GSP/Partners Teams DEV+QA+SDET 这个群最近2天的聊天", "gsp/partners teams dev+qa+sdet"},
 		// Chinese numeral duration: "两天" must not leave trailing "两"
