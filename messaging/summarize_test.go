@@ -3,6 +3,8 @@ package messaging
 import (
 	"testing"
 	"time"
+
+	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
 func TestIsSummarizeCommand(t *testing.T) {
@@ -133,6 +135,42 @@ func TestExtractNameFromText(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("extractNameFromText(%q) = %q, want %q", tt.text, got, tt.want)
 		}
+	}
+}
+
+func TestNameTokensAllPresent(t *testing.T) {
+	if !nameTokensAllPresent("Yuki Chen", "yuki chen") {
+		t.Error("expected both tokens to match as words")
+	}
+	if nameTokensAllPresent("Yukio Chen", "yuki chen") {
+		t.Error("yukio is not the whole word yuki")
+	}
+	if !nameTokensAllPresent("Yuki Chen", "chen") {
+		t.Error("single surname token")
+	}
+}
+
+func TestDirectorySearchQueries(t *testing.T) {
+	q := directorySearchQueries("yuki chen")
+	if len(q) < 2 {
+		t.Fatalf("expected full name + tokens, got %v", q)
+	}
+	if q[0] != "yuki chen" {
+		t.Errorf("want full name first, got %v", q)
+	}
+}
+
+func TestPickBestDirectoryEntry(t *testing.T) {
+	entries := []ringcentral.DirectoryEntry{
+		{ID: "1", FirstName: "Yukio", LastName: "Test", Email: "a@a.com"},
+		{ID: "2", FirstName: "Yuki", LastName: "Chen", Email: "y@c.com"},
+	}
+	best := pickBestDirectoryEntry(entries, "yuki chen")
+	if best == nil || best.ID != "2" {
+		t.Fatalf("got %+v", best)
+	}
+	if pickBestDirectoryEntry(entries, "nobody here") != nil {
+		t.Fatal("expected no match")
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,31 +183,158 @@ func (c *chatCache) getPerson(ctx context.Context, client *ringcentral.Client, p
 	return person
 }
 
-// lookupViaDirectory searches the company directory and creates/finds the Direct chat.
-func (c *chatCache) lookupViaDirectory(ctx context.Context, client *ringcentral.Client, name string) *chatCacheEntry {
-	slog.Info("searching company directory", "component", "summarize", "name", name)
-	result, err := client.SearchDirectory(ctx, name)
-	if err != nil {
-		slog.Warn("directory search failed", "component", "summarize", "error", err)
+// directorySearchQueries returns search strings: full name first, then tokens (longer first).
+// Directory APIs often miss full "First Last" but match a single token.
+func directorySearchQueries(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
 		return nil
 	}
-	if len(result.Records) == 0 {
+	var out []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[strings.ToLower(s)] {
+			return
+		}
+		seen[strings.ToLower(s)] = true
+		out = append(out, s)
+	}
+	add(name)
+	parts := strings.Fields(name)
+	sort.Slice(parts, func(i, j int) bool { return len(parts[i]) > len(parts[j]) })
+	for _, p := range parts {
+		if len(p) >= 2 {
+			add(p)
+		}
+	}
+	return out
+}
+
+// nameTokensAllPresent is true when every token in target (length >= 2) appears as a whole word in fullName.
+// Substring matching would false-positive (e.g. "yuki" inside "yukio").
+func nameTokensAllPresent(fullName, target string) bool {
+	fullName = strings.ToLower(strings.TrimSpace(fullName))
+	target = strings.ToLower(strings.TrimSpace(target))
+	words := strings.Fields(fullName)
+	wordSet := make(map[string]bool)
+	for _, w := range words {
+		w = strings.Trim(w, "., ")
+		if w != "" {
+			wordSet[w] = true
+		}
+	}
+	hasToken := false
+	for _, t := range strings.Fields(target) {
+		if len(t) < 2 {
+			continue
+		}
+		hasToken = true
+		if !wordSet[t] {
+			return false
+		}
+	}
+	return hasToken
+}
+
+// pickBestDirectoryEntry scores merged directory rows against the user's target name.
+func pickBestDirectoryEntry(entries []ringcentral.DirectoryEntry, target string) *ringcentral.DirectoryEntry {
+	target = strings.TrimSpace(strings.ToLower(target))
+	if target == "" || len(entries) == 0 {
+		return nil
+	}
+	var best *ringcentral.DirectoryEntry
+	bestScore := -1
+	for i := range entries {
+		e := &entries[i]
+		full := strings.TrimSpace(strings.ToLower(e.FirstName + " " + e.LastName))
+		email := strings.ToLower(e.Email)
+		score := 0
+		switch {
+		case full == target:
+			score = 1000
+		case fuzzyMatch(strings.TrimSpace(e.FirstName+" "+e.LastName), target):
+			score = 200
+		case nameTokensAllPresent(strings.TrimSpace(e.FirstName+" "+e.LastName), target):
+			score = 150
+		case strings.Contains(email, target):
+			score = 90
+		}
+		if score > bestScore {
+			bestScore = score
+			best = e
+		}
+	}
+	if best == nil || bestScore < 90 {
+		return nil
+	}
+	// Broad token search can return many rows; require a strong match when the result set is large.
+	if len(entries) > 8 && bestScore < 150 {
+		return nil
+	}
+	return best
+}
+
+func (c *chatCache) collectDirectoryEntries(ctx context.Context, client *ringcentral.Client, name string) []ringcentral.DirectoryEntry {
+	byID := make(map[string]ringcentral.DirectoryEntry)
+	for _, q := range directorySearchQueries(name) {
+		slog.Info("searching company directory", "component", "summarize", "target", name, "query", q)
+		result, err := client.SearchDirectory(ctx, q)
+		if err != nil {
+			slog.Warn("directory search failed", "component", "summarize", "query", q, "error", err)
+			continue
+		}
+		for _, rec := range result.Records {
+			byID[rec.ID] = rec
+		}
+	}
+	out := make([]ringcentral.DirectoryEntry, 0, len(byID))
+	for _, e := range byID {
+		out = append(out, e)
+	}
+	return out
+}
+
+// lookupViaDirectChatList matches the target name against Direct chat display names (no directory required).
+func (c *chatCache) lookupViaDirectChatList(ctx context.Context, client *ringcentral.Client, name string) *chatCacheEntry {
+	chats, err := client.ListChats(ctx, "Direct")
+	if err != nil {
+		slog.Warn("list direct chats for summarize failed", "component", "summarize", "error", err)
+		return nil
+	}
+	target := strings.TrimSpace(name)
+	if target == "" {
+		return nil
+	}
+	for _, chat := range chats.Records {
+		if len(chat.Members) < 2 {
+			continue
+		}
+		cn := strings.TrimSpace(chat.Name)
+		if cn == "" {
+			continue
+		}
+		if !fuzzyMatch(cn, target) && !nameTokensAllPresent(cn, target) {
+			continue
+		}
+		slog.Info("resolved Direct chat via chat list display name", "component", "summarize", "chatName", cn, "chatID", chat.ID)
+		entry := chatCacheEntry{ChatID: chat.ID, ChatName: cn, ChatType: "Direct"}
+		c.addEntry(entry)
+		return &entry
+	}
+	return nil
+}
+
+// lookupViaDirectory searches the company directory and creates/finds the Direct chat.
+func (c *chatCache) lookupViaDirectory(ctx context.Context, client *ringcentral.Client, name string) *chatCacheEntry {
+	entries := c.collectDirectoryEntries(ctx, client, name)
+	if len(entries) == 0 {
 		slog.Warn("no directory entries found", "component", "summarize", "name", name)
 		return nil
 	}
-
-	// Pick best match
-	var best *ringcentral.DirectoryEntry
-	for i := range result.Records {
-		e := &result.Records[i]
-		fullName := strings.TrimSpace(e.FirstName + " " + e.LastName)
-		if fuzzyMatch(fullName, name) || fuzzyMatch(e.Email, name) {
-			best = e
-			break
-		}
-	}
+	best := pickBestDirectoryEntry(entries, name)
 	if best == nil {
-		slog.Warn("directory returned entries but none matched", "component", "summarize", "count", len(result.Records), "name", name)
+		slog.Warn("directory returned entries but none matched confidently", "component", "summarize", "count", len(entries), "name", name)
 		return nil
 	}
 
@@ -306,6 +434,13 @@ func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, text str
 
 	// Cache miss: search company directory -> create/find conversation -> cache result
 	if entry := globalChatCache.lookupViaDirectory(ctx, client, name); entry != nil {
+		req.ChatID = entry.ChatID
+		req.ChatName = entry.ChatName
+		return req, nil
+	}
+
+	// Fallback: match Direct chat display names (works when directory search misses e.g. display-name vs legal name)
+	if entry := globalChatCache.lookupViaDirectChatList(ctx, client, name); entry != nil {
 		req.ChatID = entry.ChatID
 		req.ChatName = entry.ChatName
 		return req, nil
