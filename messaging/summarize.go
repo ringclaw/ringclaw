@@ -238,7 +238,14 @@ func (c *chatCache) lookupViaDirectory(ctx context.Context, client *ringcentral.
 }
 
 // IsSummarizeCommand checks if the text starts with a summarize keyword.
+// Used by isPrivilegedCommand for access control.
 func IsSummarizeCommand(text string) bool {
+	return isSummarizeKeyword(text)
+}
+
+// isSummarizeKeyword checks if the text starts with a summarize keyword (prefix match).
+// Used as fallback when the AI intent classifier is unavailable.
+func isSummarizeKeyword(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	for _, kw := range summarizeKeywords {
 		if strings.HasPrefix(lower, kw) {
