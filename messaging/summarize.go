@@ -458,16 +458,31 @@ func formatTimeDesc(from time.Time) string {
 	return fmt.Sprintf("last %d days", days)
 }
 
-var reMention = regexp.MustCompile(`!\[:\w+\]\(\d+\)`)
+var (
+	reMention = regexp.MustCompile(`!\[:\w+\]\(\d+\)`)
+	// reEmail matches a typical corporate email before punctuation splitting breaks it.
+	reEmail = regexp.MustCompile(`[\w.%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}`)
+)
 
 func extractNameFromText(text string) string {
+	text = strings.TrimSpace(text)
+	if m := reEmail.FindString(text); m != "" {
+		return strings.ToLower(m)
+	}
+
 	clean := text
+	// Remove mentions first (they carry explicit IDs; no name to extract here)
+	clean = reMention.ReplaceAllString(clean, "")
+	// Remove multi-character phrases before stripping "聊天" (else "聊天记录" -> stray "记录")
+	for _, phrase := range []string{
+		"聊天记录", "聊天内容", "这个群", "那个群", "群里", "群里的",
+	} {
+		clean = strings.ReplaceAll(clean, phrase, "")
+	}
 	// Remove summarize keywords
 	for _, kw := range summarizeKeywords {
 		clean = strings.ReplaceAll(clean, kw, "")
 	}
-	// Remove mentions
-	clean = reMention.ReplaceAllString(clean, "")
 	// Lowercase for filler removal
 	clean = strings.ToLower(clean)
 	// Remove time keywords
@@ -476,8 +491,8 @@ func extractNameFromText(text string) string {
 	}
 	// Remove common filler words (Chinese single chars and phrases)
 	for _, kw := range []string{
-		"一下", "下", "的", "消息", "聊天", "对话", "群聊", "群",
-		"跟", "和", "与", "我", "了",
+		"一下", "下", "的", "消息", "聊天", "对话", "群聊", "群", "记录",
+		"跟", "和", "与", "我", "了", "这", "那",
 		"messages", "chat", "conversation", "with", "my", "the",
 	} {
 		clean = strings.ReplaceAll(clean, kw, "")
