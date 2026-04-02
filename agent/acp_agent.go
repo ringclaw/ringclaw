@@ -96,8 +96,10 @@ type fsCapabilities struct {
 }
 
 type newSessionParams struct {
-	Cwd        string        `json:"cwd"`
-	McpServers []interface{} `json:"mcpServers"`
+	Cwd          string        `json:"cwd"`
+	McpServers   []interface{} `json:"mcpServers"`
+	SystemPrompt string        `json:"systemPrompt,omitempty"`
+	Model        string        `json:"model,omitempty"`
 }
 
 type newSessionResult struct {
@@ -247,21 +249,58 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	}
 
 	slog.Info("initialized", "component", "acp", "pid", pid, "result", string(result))
+
+	// Send "initialized" notification (no id = notification per JSON-RPC)
+	a.notify("initialized", nil)
+
 	return nil
 }
 
-// Stop terminates the subprocess.
+// Stop terminates the subprocess gracefully.
 func (a *ACPAgent) Stop() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if !a.started {
+		a.mu.Unlock()
 		return
 	}
+	// Snapshot active sessions and close stdin to signal EOF
+	sessions := make(map[string]string, len(a.sessions))
+	for k, v := range a.sessions {
+		sessions[k] = v
+	}
+	a.mu.Unlock()
+
+	// Best-effort: end active sessions
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, sid := range sessions {
+		a.notify("session/end", map[string]string{"sessionId": sid})
+	}
+
+	// Close stdin so the subprocess sees EOF
+	a.mu.Lock()
 	a.stdin.Close()
-	a.cmd.Process.Kill()
-	a.cmd.Wait()
+	proc := a.cmd.Process
+	a.mu.Unlock()
+
+	// Wait briefly for graceful exit, then force kill
+	done := make(chan struct{})
+	go func() {
+		a.cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		if proc != nil {
+			proc.Kill()
+		}
+		<-done
+	}
+
+	a.mu.Lock()
 	a.started = false
+	a.mu.Unlock()
 }
 
 // SetCwd changes the working directory for subsequent sessions.
@@ -392,8 +431,10 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	}
 
 	result, err := a.call(ctx, "session/new", newSessionParams{
-		Cwd:        a.cwd,
-		McpServers: []interface{}{},
+		Cwd:          a.cwd,
+		McpServers:   []interface{}{},
+		SystemPrompt: a.systemPrompt,
+		Model:        a.model,
 	})
 	if err != nil {
 		return "", false, err
@@ -464,6 +505,25 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 		}
 		return resp.Result, nil
 	}
+}
+
+// notify sends a JSON-RPC notification (no id, no response expected).
+func (a *ACPAgent) notify(method string, params interface{}) {
+	msg := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+	}
+	if params != nil {
+		msg["params"] = params
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		slog.Error("failed to marshal notification", "component", "acp", "method", method, "error", err)
+		return
+	}
+	a.mu.Lock()
+	fmt.Fprintf(a.stdin, "%s\n", data)
+	a.mu.Unlock()
 }
 
 // readLoop reads NDJSON lines from stdout and dispatches to pending requests or notification channels.
