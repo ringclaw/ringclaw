@@ -91,6 +91,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 	filename := fmt.Sprintf("ringclaw_%s_%s", goos, goarch)
+	if goos == "windows" {
+		filename += ".exe"
+	}
 	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, latest, filename)
 
 	fmt.Printf("Downloading %s...\n", url)
