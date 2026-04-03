@@ -63,6 +63,26 @@ if (-not (Test-Path $InstallDir)) {
 }
 
 $DestPath = Join-Path $InstallDir "$Binary.exe"
+
+# Stop running instance before replacing binary (locked .exe cannot be overwritten on Windows)
+$PidFile = "$env:USERPROFILE\.ringclaw\ringclaw.pid"
+$WasRunning = $false
+if (Test-Path $PidFile) {
+    $OldPid = Get-Content $PidFile -ErrorAction SilentlyContinue
+    if ($OldPid) {
+        $Proc = Get-Process -Id $OldPid -ErrorAction SilentlyContinue
+        if ($Proc) {
+            Write-Host "Stopping running instance (pid=$OldPid)..."
+            Stop-Process -Id $OldPid -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $WasRunning = $true
+        }
+    }
+}
+
+if (Test-Path $DestPath) {
+    Remove-Item -Path $DestPath -Force
+}
 Move-Item -Path $TmpFile -Destination $DestPath -Force
 
 # Add to PATH if not already present
@@ -74,24 +94,14 @@ if ($UserPath -notlike "*$InstallDir*") {
     Write-Host "Please restart your terminal for PATH changes to take effect."
 }
 
-# Restart if running in background
-$PidFile = "$env:USERPROFILE\.ringclaw\ringclaw.pid"
-if (Test-Path $PidFile) {
-    $OldPid = Get-Content $PidFile -ErrorAction SilentlyContinue
-    if ($OldPid) {
-        $Proc = Get-Process -Id $OldPid -ErrorAction SilentlyContinue
-        if ($Proc) {
-            Write-Host "Stopping old process (pid=$OldPid)..."
-            Stop-Process -Id $OldPid -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
-            Remove-Item $PidFile -ErrorAction SilentlyContinue
-            Write-Host "Starting new version..."
-            & $DestPath start
-            Write-Host ""
-            Write-Host "ringclaw $Version installed and restarted."
-            exit 0
-        }
-    }
+# Restart if was running before update
+if ($WasRunning) {
+    Remove-Item $PidFile -ErrorAction SilentlyContinue
+    Write-Host "Starting new version..."
+    & $DestPath start
+    Write-Host ""
+    Write-Host "ringclaw $Version installed and restarted."
+    exit 0
 }
 
 Write-Host ""
