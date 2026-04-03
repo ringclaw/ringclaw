@@ -10,14 +10,20 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 func notifyContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(ctx, os.Interrupt)
 }
 
+// CREATE_NO_WINDOW prevents the child from creating or inheriting a console window.
+const createNoWindow = 0x08000000
+
 func setSysProcAttr(cmd *exec.Cmd) {
-	// No Setsid on Windows; process detachment handled by Start().
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | createNoWindow,
+	}
 }
 
 func processExists(pid int) bool {
@@ -33,5 +39,10 @@ func signalTerminate(p *os.Process) error {
 }
 
 func killByName(exePath string) {
-	_ = exec.Command("taskkill", "/F", "/IM", filepath.Base(exePath)).Run()
+	myPID := os.Getpid()
+	name := filepath.Base(exePath)
+	// Use WMIC to terminate matching processes, excluding the current one.
+	_ = exec.Command("wmic", "process", "where",
+		fmt.Sprintf("Name='%s' AND ProcessId!=%d", name, myPID),
+		"call", "terminate").Run()
 }
