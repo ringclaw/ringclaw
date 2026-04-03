@@ -471,7 +471,7 @@ var reMention = regexp.MustCompile(`!\[:\w+\]\(\d+\)`)
 // (e.g. "并用 note 发给他", "and then create a note", "そして送る").
 // We split on these and keep only the first segment (the target name).
 var reInstructionSplit = regexp.MustCompile(`(?i)(?:` +
-	`并用|并且|并|然后|接着|之后|同时|再|用|通过|` + // Chinese
+	`并用|并且|并|然后|接着|之后|同时|通过|` + // Chinese (no standalone 用/再 — too common)
 	`and then|then|and also|also|and send|and create|and post|` + // English
 	`そして|それから|その後|` + // Japanese
 	`그리고|그런\s*다음|` + // Korean
