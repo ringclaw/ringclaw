@@ -335,8 +335,13 @@ func BuildSummaryPrompt(ctx context.Context, client *ringcentral.Client, req *Su
 	}
 
 	if len(posts.Records) == 0 {
-		return "", fmt.Errorf("no messages found")
+		return "", fmt.Errorf("no messages found in chat %s", req.ChatID)
 	}
+
+	// Log fetched range for debugging
+	oldest := posts.Records[len(posts.Records)-1].CreationTime
+	newest := posts.Records[0].CreationTime
+	slog.Debug("fetched posts", "component", "summarize", "chatID", req.ChatID, "count", len(posts.Records), "oldest", oldest, "newest", newest, "timeFrom", req.TimeFrom.Format(time.RFC3339))
 
 	// Resolve person names using global cache
 	resolveName := func(creatorID string) string {
