@@ -17,12 +17,12 @@ func notifyContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(ctx, os.Interrupt)
 }
 
-// DETACHED_PROCESS prevents the child from inheriting the parent's console.
-const detachedProcess = 0x00000008
+// CREATE_NO_WINDOW prevents the child from creating or inheriting a console window.
+const createNoWindow = 0x08000000
 
 func setSysProcAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | detachedProcess,
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | createNoWindow,
 	}
 }
 
