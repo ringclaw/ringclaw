@@ -372,6 +372,10 @@ graph LR
 
 - **`bot_mention_only: true`**（默认）— Bot 在群聊中只有被 @mention 时才响应
 - **`bot_mention_only: false`** — Bot 响应允许群中的所有消息
+- **`group_summary_group_id: "..."`** — 只有这个精确的群 ID 允许在群内触发总结
+- **`group_summary_message_limit: 200`**（默认）— 开启群内总结后，先拉取当前群最近这么多条消息，再按时间范围过滤
+
+只要配置了 `group_summary_group_id`，群内总结功能就会自动启用。只有当前群 ID 与该配置完全一致时，才允许在群内触发总结。
 
 ### 用户白名单
 
@@ -526,6 +530,8 @@ curl -X POST http://127.0.0.1:18011/api/send \
     "chat_ids": ["chat_id_1", "chat_id_2"],
     "source_user_ids": ["alice@example.com"],
     "bot_mention_only": true,
+    "group_summary_group_id": "1234567",
+    "group_summary_message_limit": 200,
     "server_url": "https://platform.ringcentral.com",
     "client_id": "",
     "client_secret": "",

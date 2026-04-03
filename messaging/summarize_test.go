@@ -1,8 +1,15 @@
 package messaging
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
 func TestIsSummarizeCommand(t *testing.T) {
@@ -65,6 +72,22 @@ func TestParseTimeRange_Yesterday(t *testing.T) {
 
 func TestParseTimeRange_Default(t *testing.T) {
 	result := parseTimeRange("some random text")
+	today := todayStart()
+	if !result.Equal(today) {
+		t.Errorf("expected today start %v, got %v", today, result)
+	}
+}
+
+func TestParseTimeRange_DefaultForGroupSummaryWithoutExplicitTime(t *testing.T) {
+	result := parseTimeRange("总结这个群的消息")
+	today := todayStart()
+	if !result.Equal(today) {
+		t.Errorf("expected today start %v, got %v", today, result)
+	}
+}
+
+func TestParseTimeRange_DefaultForEnglishSummaryWithoutExplicitTime(t *testing.T) {
+	result := parseTimeRange("summarize this group")
 	today := todayStart()
 	if !result.Equal(today) {
 		t.Errorf("expected today start %v, got %v", today, result)
@@ -155,5 +178,46 @@ func TestFormatTimeDesc(t *testing.T) {
 	got = formatTimeDesc(threeDaysAgo)
 	if got != "last 3 days" {
 		t.Errorf("formatTimeDesc(3 days ago) = %q, want %q", got, "last 3 days")
+	}
+}
+
+func TestBuildSummaryPrompt_DefaultMessageLimit(t *testing.T) {
+	var gotRecordCount string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats/group-1/posts":
+			gotRecordCount = r.URL.Query().Get("recordCount")
+			_ = json.NewEncoder(w).Encode(ringcentral.PostList{
+				Records: []ringcentral.Post{
+					{
+						ID:           "m1",
+						GroupID:      "group-1",
+						Text:         "latest message",
+						CreatorID:    "glip-user-1",
+						CreationTime: time.Now().UTC().Format(time.RFC3339),
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewBotClient(srv.URL, "token")
+	prompt, err := BuildSummaryPrompt(context.Background(), client, &SummarizeRequest{
+		ChatID:   "group-1",
+		ChatName: "General",
+		TimeFrom: time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("BuildSummaryPrompt returned error: %v", err)
+	}
+	if gotRecordCount != "250" {
+		t.Fatalf("expected default recordCount=250, got %q", gotRecordCount)
+	}
+	if !strings.Contains(prompt, "most recent 250 messages") {
+		t.Fatalf("expected prompt to mention default message limit, got %q", prompt)
 	}
 }

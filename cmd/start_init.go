@@ -112,6 +112,7 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 		handler.SetCustomAliases(customAliases)
 		checkAliasConflicts(cfg, customAliases)
 	}
+	handler.SetGroupSummaryConfig(cfg.RC.GroupSummaryGroup(), cfg.RC.GroupSummaryLimit())
 
 	// Start default agent in background
 	go func() {
@@ -281,5 +282,3 @@ func checkAliasConflicts(cfg *config.Config, aliases map[string]string) {
 		seen[alias] = agentName
 	}
 }
-
-

@@ -18,6 +18,8 @@ import (
 
 var summarizeKeywords = []string{"总结", "summarize", "summary"}
 
+const defaultSummaryMessageLimit = 250
+
 // chatCacheEntry stores a resolved chat name -> ID mapping.
 type chatCacheEntry struct {
 	ChatID   string `json:"chat_id"`
@@ -35,19 +37,19 @@ type cachedPerson struct {
 
 // persistentCacheData is the on-disk format for ~/.ringclaw/chat_cache.json.
 type persistentCacheData struct {
-	Entries []chatCacheEntry           `json:"entries"`
-	Persons map[string]cachedPerson    `json:"persons"`
-	SavedAt time.Time                  `json:"saved_at"`
+	Entries []chatCacheEntry        `json:"entries"`
+	Persons map[string]cachedPerson `json:"persons"`
+	SavedAt time.Time               `json:"saved_at"`
 }
 
 // chatCache caches Direct chat lookups and person info.
 // Direct chats have stable IDs and are cached permanently.
 // Team/Group chats use mentions (have explicit IDs), no cache needed.
 type chatCache struct {
-	mu       sync.RWMutex
-	entries  []chatCacheEntry
-	persons  map[string]*ringcentral.PersonInfo
-	loaded   bool
+	mu      sync.RWMutex
+	entries []chatCacheEntry
+	persons map[string]*ringcentral.PersonInfo
+	loaded  bool
 }
 
 var globalChatCache = &chatCache{
@@ -257,10 +259,11 @@ func isSummarizeKeyword(text string) bool {
 
 // SummarizeRequest holds parsed summarize parameters.
 type SummarizeRequest struct {
-	ChatID      string
-	ChatName    string
-	TimeFrom    time.Time
-	UserRequest string // original user message
+	ChatID       string
+	ChatName     string
+	TimeFrom     time.Time
+	UserRequest  string // original user message
+	MessageLimit int
 }
 
 // ResolveChatTarget finds the target chat ID from mentions or fuzzy name matching.
@@ -325,8 +328,12 @@ func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, text str
 func BuildSummaryPrompt(ctx context.Context, client *ringcentral.Client, req *SummarizeRequest) (string, error) {
 	// RingCentral List Posts API does not support time filters,
 	// so we fetch max records and filter by time client-side.
+	limit := req.MessageLimit
+	if limit <= 0 {
+		limit = defaultSummaryMessageLimit
+	}
 	opts := ringcentral.ListPostsOpts{
-		RecordCount: 250,
+		RecordCount: limit,
 	}
 
 	posts, err := client.ListPosts(ctx, req.ChatID, opts)
@@ -359,7 +366,7 @@ func BuildSummaryPrompt(ctx context.Context, client *ringcentral.Client, req *Su
 	// Posts are returned newest-first, reverse for chronological order
 	// Filter by time range client-side
 	timeFrom := req.TimeFrom.UTC()
-	var lines []string
+	lines := make([]string, 0, len(posts.Records))
 	for i := len(posts.Records) - 1; i >= 0; i-- {
 		p := posts.Records[i]
 		if p.Text == "" {
@@ -394,14 +401,15 @@ func BuildSummaryPrompt(ctx context.Context, client *ringcentral.Client, req *Su
 
 	prompt := fmt.Sprintf(`User request: %s
 
-Please summarize the following chat messages from "%s" (%s). 
+Please summarize the following chat messages from "%s" (%s).
+These are the most recent %d messages fetched from the chat before time filtering.
 Provide a concise summary in the same language as the messages. 
 Highlight key topics, decisions, and action items if any.
 %s
 --- Messages (%d total) ---
 %s
 --- End of Messages ---`,
-		userReq, chatLabel, timeDesc, ActionPrompt(), len(lines), strings.Join(lines, "\n"))
+		userReq, chatLabel, timeDesc, limit, ActionPrompt(), len(lines), strings.Join(lines, "\n"))
 
 	slog.Info("built prompt", "component", "summarize", "chatLabel", chatLabel, "messages", len(lines), "chars", len(prompt))
 	return prompt, nil

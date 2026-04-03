@@ -115,6 +115,26 @@ func TestHasPrivateApp(t *testing.T) {
 	}
 }
 
+func TestGroupSummaryDefaults(t *testing.T) {
+	rc := RCConfig{}
+	if rc.HasGroupSummary() {
+		t.Fatal("expected group summary disabled by default")
+	}
+	if got := rc.GroupSummaryLimit(); got != 200 {
+		t.Fatalf("expected default group summary limit 200, got %d", got)
+	}
+}
+
+func TestGroupSummaryConfiguredLimit(t *testing.T) {
+	rc := RCConfig{GroupSummaryGroupID: "group-1", GroupSummaryMessageLimit: 42}
+	if !rc.HasGroupSummary() {
+		t.Fatal("expected group summary enabled")
+	}
+	if got := rc.GroupSummaryLimit(); got != 42 {
+		t.Fatalf("expected configured group summary limit 42, got %d", got)
+	}
+}
+
 func TestSaveAndReload(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.json")

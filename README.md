@@ -371,6 +371,10 @@ Messages from chats not in `chat_ids` are silently dropped by the monitor.
 
 - **`bot_mention_only: true`** (default) — Bot only responds when @mentioned in group chats
 - **`bot_mention_only: false`** — Bot responds to all messages in allowed group chats
+- **`group_summary_group_id: "..."`** — Only this exact group ID is allowed to use in-group summarize
+- **`group_summary_message_limit: 200`** (default) — When group summarize is enabled, pull this many recent messages before time filtering
+
+If `group_summary_group_id` is set, in-group summarize is enabled automatically. It is only allowed when the current group ID exactly matches that configured value.
 
 ### User allowlist
 
@@ -525,6 +529,8 @@ Config file: `~/.ringclaw/config.json`
     "chat_ids": ["chat_id_1", "chat_id_2"],
     "source_user_ids": ["alice@example.com"],
     "bot_mention_only": true,
+    "group_summary_group_id": "1234567",
+    "group_summary_message_limit": 200,
     "server_url": "https://platform.ringcentral.com",
     "client_id": "",
     "client_secret": "",

@@ -44,6 +44,9 @@ type Handler struct {
 	seenMsgs      sync.Map // map[string]time.Time — dedup by post ID
 	seenMsgCount  int64    // approximate count for capacity limiting
 	cronStore     *CronStore
+
+	groupSummaryGroupID      string
+	groupSummaryMessageLimit int
 }
 
 // NewHandler creates a new message handler.
@@ -84,6 +87,18 @@ func (h *Handler) SetCustomAliases(aliases map[string]string) {
 // SetCronStore sets the cron job store for /cron commands.
 func (h *Handler) SetCronStore(store *CronStore) {
 	h.cronStore = store
+}
+
+// SetGroupSummaryConfig configures optional summarize behavior for the current
+// bot group.
+func (h *Handler) SetGroupSummaryConfig(groupID string, limit int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.groupSummaryGroupID = strings.TrimSpace(groupID)
+	if limit <= 0 {
+		limit = defaultSummaryMessageLimit
+	}
+	h.groupSummaryMessageLimit = limit
 }
 
 // SetAgentMetas sets the list of all configured agents (for /status).
@@ -580,6 +595,21 @@ func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, mes
 	return reply, nil
 }
 
+func (h *Handler) configuredGroupSummaryGroupID() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.groupSummaryGroupID
+}
+
+func (h *Handler) groupSummaryLimit() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.groupSummaryMessageLimit <= 0 {
+		return defaultSummaryMessageLimit
+	}
+	return h.groupSummaryMessageLimit
+}
+
 // switchDefault switches the default agent.
 func (h *Handler) switchDefault(ctx context.Context, name string) string {
 	ag, err := h.getAgent(ctx, name)
@@ -624,21 +654,3 @@ func (h *Handler) resetDefaultSession(ctx context.Context, conversationID string
 	}
 	return fmt.Sprintf("New %s session created", name)
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

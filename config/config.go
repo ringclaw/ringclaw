@@ -50,7 +50,7 @@ type HeartbeatConfig struct {
 	Enabled     bool   `json:"enabled,omitempty"`
 	Interval    string `json:"interval,omitempty"`     // duration string, default "30m"
 	ActiveHours string `json:"active_hours,omitempty"` // "HH:MM-HH:MM", e.g. "09:00-18:00"
-	Timezone    string `json:"timezone,omitempty"`      // IANA timezone, default local
+	Timezone    string `json:"timezone,omitempty"`     // IANA timezone, default local
 }
 
 // CronConfig holds cron scheduler configuration.
@@ -68,6 +68,9 @@ type RCConfig struct {
 	ServerURL      string   `json:"server_url,omitempty"`
 	BotToken       string   `json:"bot_token,omitempty"`
 	BotMentionOnly *bool    `json:"bot_mention_only,omitempty"`
+
+	GroupSummaryGroupID      string `json:"group_summary_group_id,omitempty"`
+	GroupSummaryMessageLimit int    `json:"group_summary_message_limit,omitempty"`
 }
 
 // HasPrivateApp returns true if all private app credentials are configured.
@@ -82,6 +85,28 @@ func (rc RCConfig) IsBotMentionOnly() bool {
 		return true
 	}
 	return *rc.BotMentionOnly
+}
+
+const defaultGroupSummaryMessageLimit = 200
+
+// GroupSummaryLimit returns the configured summarize message limit.
+// Defaults to 200 when unset or invalid.
+func (rc RCConfig) GroupSummaryLimit() int {
+	if rc.GroupSummaryMessageLimit <= 0 {
+		return defaultGroupSummaryMessageLimit
+	}
+	return rc.GroupSummaryMessageLimit
+}
+
+// GroupSummaryGroup returns the configured group ID that is allowed to use
+// current-group summarize.
+func (rc RCConfig) GroupSummaryGroup() string {
+	return strings.TrimSpace(rc.GroupSummaryGroupID)
+}
+
+// HasGroupSummary returns whether current-group summarize is enabled by config.
+func (rc RCConfig) HasGroupSummary() bool {
+	return rc.GroupSummaryGroup() != ""
 }
 
 // AgentConfig holds configuration for a single agent.

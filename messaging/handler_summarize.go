@@ -10,6 +10,20 @@ import (
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
+var groupCrossTargetDenyPhrases = []string{
+	"其他群", "别的群", "另一个群", "其它群", "私聊", "别人", "其他人", "别人的",
+	"other group", "another group", "other chat", "another chat", "private chat", "direct chat", "dm ",
+	"chat with", "conversation with",
+}
+
+// genericCurrentGroupSummaryTokens are words that indicate the user is referring
+// to the current group itself, not targeting a specific person or chat.
+// Keep this list tight — only structural/deictic words, not content words like
+// "讨论" or "discussion" which could appear inside a person-targeting phrase.
+var genericCurrentGroupSummaryTokens = []string{
+	"这个", "当前", "本", "这里", "这边", "this", "current", "here",
+}
+
 // classifyAndRoute uses AI to classify the user's intent and routes accordingly.
 // Returns true if the message was handled, false to continue normal routing.
 func (h *Handler) classifyAndRoute(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string, isBotGroup bool) bool {
@@ -42,21 +56,110 @@ func (h *Handler) classifyAndRoute(ctx context.Context, client *ringcentral.Clie
 // Returns true (always handles the message).
 func (h *Handler) routeSummarize(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, isBotGroup bool) bool {
 	chatID := post.GroupID
-	if readClient == client {
-		logSendError(SendTextReply(ctx, client, chatID, "Summarize requires a Private App to be configured. Run 'ringclaw setup' to add one."))
+	if isBotGroup {
+		allowedGroupID := h.configuredGroupSummaryGroupID()
+		if allowedGroupID == "" {
+			logSendError(SendTextReply(ctx, client, chatID, "Summarize in group chats requires ringcentral.group_summary_group_id to be configured."))
+			return true
+		}
+		if chatID != allowedGroupID {
+			logSendError(SendTextReply(ctx, client, chatID, fmt.Sprintf("Summarize is only allowed in the configured group (%s).", allowedGroupID)))
+			return true
+		}
+		if denyReason := denyGroupCrossTargetSummary(post.Text, post.Mentions, client.OwnerID()); denyReason != "" {
+			logSendError(SendTextReply(ctx, client, chatID, denyReason))
+			return true
+		}
+		h.handleCurrentGroupSummarize(ctx, client, readClient, post)
 		return true
 	}
-	if isBotGroup {
-		logSendError(SendTextReply(ctx, client, chatID, "This command can only be used in a direct message with the bot."))
+	if readClient == client {
+		logSendError(SendTextReply(ctx, client, chatID, "Summarize requires a Private App to be configured. Run 'ringclaw setup' to add one."))
 		return true
 	}
 	h.handleSummarize(ctx, client, readClient, post)
 	return true
 }
 
+func denyGroupCrossTargetSummary(text string, mentions []ringcentral.Mention, botID string) string {
+	trimmedBotID := strings.TrimSpace(botID)
+	for _, m := range mentions {
+		switch m.Type {
+		case "Team":
+			return "I don't have permission to summarize other groups from within this group."
+		case "Person":
+			if strings.TrimSpace(m.ID) != "" && strings.TrimSpace(m.ID) != trimmedBotID {
+				return "I don't have permission to summarize another user's information or private conversations from within this group."
+			}
+		}
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(text))
+	for _, phrase := range groupCrossTargetDenyPhrases {
+		if strings.Contains(lower, phrase) {
+			if strings.Contains(phrase, "group") || strings.Contains(phrase, "群") || strings.Contains(phrase, "chat") || strings.Contains(phrase, "dm") {
+				return "I don't have permission to summarize other groups or chats from within this group."
+			}
+			return "I don't have permission to summarize another user's information or private conversations from within this group."
+		}
+	}
+
+	target := strings.TrimSpace(extractNameFromText(text))
+	if target == "" {
+		return ""
+	}
+	if isGenericCurrentGroupSummaryTarget(target) {
+		return ""
+	}
+	return "I don't have permission to summarize another user's information or another chat from within this group."
+}
+
+func isGenericCurrentGroupSummaryTarget(target string) bool {
+	lower := strings.ToLower(strings.TrimSpace(target))
+	if lower == "" {
+		return true
+	}
+	for _, token := range genericCurrentGroupSummaryTokens {
+		if lower == token || strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
+	text := strings.TrimSpace(post.Text)
+
+	// Resolve target chat using readClient (private app has access to all chats)
+	req, err := ResolveChatTarget(ctx, readClient, text, post.Mentions)
+	if err != nil {
+		logSendError(SendTextReply(ctx, replyClient, post.GroupID, fmt.Sprintf("Error: %v", err)))
+		return
+	}
+
+	slog.Info("summarize target chat", "component", "summarize", "chatName", req.ChatName, "chatID", req.ChatID, "from", req.TimeFrom.Format(time.RFC3339))
+	h.executeSummarize(ctx, replyClient, readClient, post, req)
+}
+
+func (h *Handler) handleCurrentGroupSummarize(ctx context.Context, replyClient *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
 	chatID := post.GroupID
 	text := strings.TrimSpace(post.Text)
+
+	req := &SummarizeRequest{
+		ChatID:       chatID,
+		ChatName:     chatID,
+		TimeFrom:     parseTimeRange(text),
+		UserRequest:  text,
+		MessageLimit: h.groupSummaryLimit(),
+	}
+
+	slog.Info("summarize current group", "component", "summarize", "chatName", req.ChatName, "chatID", req.ChatID, "from", req.TimeFrom.Format(time.RFC3339), "limit", req.MessageLimit)
+	h.executeSummarize(ctx, replyClient, readClient, post, req)
+}
+
+// executeSummarize is the shared summarize execution path for both DM and group summarize.
+func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, req *SummarizeRequest) {
+	chatID := post.GroupID
 
 	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, replyClient, chatID)
 	if placeholderErr != nil {
@@ -74,23 +177,12 @@ func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.
 		}
 	}
 
-	// Resolve target chat using readClient (private app has access to all chats)
-	req, err := ResolveChatTarget(ctx, readClient, text, post.Mentions)
-	if err != nil {
-		sendReply(fmt.Sprintf("Error: %v", err))
-		return
-	}
-
-	slog.Info("summarize target chat", "component", "summarize", "chatName", req.ChatName, "chatID", req.ChatID, "from", req.TimeFrom.Format(time.RFC3339))
-
-	// Build prompt using readClient (private app can read any chat's messages)
 	prompt, err := BuildSummaryPrompt(ctx, readClient, req)
 	if err != nil {
 		sendReply(fmt.Sprintf("Error: %v", err))
 		return
 	}
 
-	// Send to default agent
 	ag := h.getDefaultAgent()
 	if ag == nil {
 		sendReply("Error: no agent available for summarization")
@@ -103,7 +195,6 @@ func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.
 		return
 	}
 
-	// Parse and execute any ACTION blocks from the agent's response
 	cleanReply, actions := ParseAgentActions(reply)
 	if replyClient.IsBot() {
 		sendReply(cleanReply)
@@ -112,7 +203,6 @@ func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.
 	}
 
 	if len(actions) > 0 {
-		// Execute actions in the current chat (not the summarized chat) using readClient
 		results := ExecuteAgentActions(ctx, replyClient, readClient, chatID, actions)
 		if len(results) > 0 {
 			logSendError(SendTextReply(ctx, replyClient, chatID, strings.Join(results, "\n")))

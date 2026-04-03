@@ -13,6 +13,24 @@ import (
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
+type testAgent struct {
+	reply string
+}
+
+func (a *testAgent) Chat(context.Context, string, string) (string, error) {
+	return a.reply, nil
+}
+
+func (a *testAgent) ResetSession(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (a *testAgent) SetCwd(string) {}
+
+func (a *testAgent) Info() agent.AgentInfo {
+	return agent.AgentInfo{Name: "test-agent", Type: "test"}
+}
+
 func newTestHandler() *Handler {
 	return &Handler{agents: make(map[string]agent.Agent)}
 }
@@ -205,5 +223,247 @@ func TestBuildHelpText_IncludesChatinfo(t *testing.T) {
 	}
 	if !strings.Contains(help, "lock") {
 		t.Error("help text should include lock for notes")
+	}
+}
+
+func TestRouteSummarize_GroupDisabled(t *testing.T) {
+	var sentTexts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts") {
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			sentTexts = append(sentTexts, req["text"])
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	h := newTestHandler()
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("owner-1")
+
+	handled := h.routeSummarize(context.Background(), bot, bot, ringcentral.Post{
+		GroupID:   "group-1",
+		CreatorID: "owner-1",
+		Text:      "总结一下",
+	}, true)
+	if !handled {
+		t.Fatal("expected summarize route to handle the message")
+	}
+	if len(sentTexts) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(sentTexts))
+	}
+	if !strings.Contains(sentTexts[0], "group_summary_group_id") {
+		t.Fatalf("expected missing group id hint in reply, got %q", sentTexts[0])
+	}
+}
+
+func TestRouteSummarize_GroupEnabledWithoutConfiguredGroupID(t *testing.T) {
+	var sentTexts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts") {
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			sentTexts = append(sentTexts, req["text"])
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	h := newTestHandler()
+	h.SetGroupSummaryConfig("", 42)
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("owner-1")
+
+	handled := h.routeSummarize(context.Background(), bot, bot, ringcentral.Post{
+		GroupID:   "group-1",
+		CreatorID: "owner-1",
+		Text:      "总结一下",
+	}, true)
+	if !handled {
+		t.Fatal("expected summarize route to handle the message")
+	}
+	if len(sentTexts) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(sentTexts))
+	}
+	if !strings.Contains(sentTexts[0], "group_summary_group_id") {
+		t.Fatalf("expected missing group id hint in reply, got %q", sentTexts[0])
+	}
+}
+
+func TestRouteSummarize_GroupEnabledButWrongGroup(t *testing.T) {
+	var sentTexts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts") {
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			sentTexts = append(sentTexts, req["text"])
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	h := newTestHandler()
+	h.SetGroupSummaryConfig("group-allowed", 42)
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("owner-1")
+
+	handled := h.routeSummarize(context.Background(), bot, bot, ringcentral.Post{
+		GroupID:   "group-1",
+		CreatorID: "owner-1",
+		Text:      "总结一下",
+	}, true)
+	if !handled {
+		t.Fatal("expected summarize route to handle the message")
+	}
+	if len(sentTexts) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(sentTexts))
+	}
+	if !strings.Contains(sentTexts[0], "group-allowed") {
+		t.Fatalf("expected configured group id in reply, got %q", sentTexts[0])
+	}
+}
+
+func TestRouteSummarize_GroupRejectsOtherUserTarget(t *testing.T) {
+	var sentTexts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts") {
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			sentTexts = append(sentTexts, req["text"])
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	h := newTestHandler()
+	h.SetGroupSummaryConfig("group-1", 42)
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+
+	handled := h.routeSummarize(context.Background(), bot, bot, ringcentral.Post{
+		GroupID:   "group-1",
+		CreatorID: "owner-1",
+		Text:      "总结 ![:Person](user-2) 的消息",
+		Mentions: []ringcentral.Mention{
+			{ID: "bot-1", Type: "Person", Name: "bot"},
+			{ID: "user-2", Type: "Person", Name: "alice"},
+		},
+	}, true)
+	if !handled {
+		t.Fatal("expected summarize route to handle the message")
+	}
+	if len(sentTexts) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(sentTexts))
+	}
+	if !strings.Contains(strings.ToLower(sentTexts[0]), "don't have permission") {
+		t.Fatalf("expected permission denial, got %q", sentTexts[0])
+	}
+}
+
+func TestRouteSummarize_GroupRejectsOtherGroupTarget(t *testing.T) {
+	var sentTexts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts") {
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			sentTexts = append(sentTexts, req["text"])
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	h := newTestHandler()
+	h.SetGroupSummaryConfig("group-1", 42)
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+
+	handled := h.routeSummarize(context.Background(), bot, bot, ringcentral.Post{
+		GroupID:   "group-1",
+		CreatorID: "owner-1",
+		Text:      "总结其他群的消息",
+	}, true)
+	if !handled {
+		t.Fatal("expected summarize route to handle the message")
+	}
+	if len(sentTexts) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(sentTexts))
+	}
+	if !strings.Contains(strings.ToLower(sentTexts[0]), "don't have permission") {
+		t.Fatalf("expected permission denial, got %q", sentTexts[0])
+	}
+}
+
+func TestRouteSummarize_GroupEnabledUsesConfiguredLimit(t *testing.T) {
+	var gotRecordCount string
+	var updatedText string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/group-1/posts":
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "placeholder-1"})
+		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats/group-1":
+			_ = json.NewEncoder(w).Encode(ringcentral.Chat{ID: "group-1", Name: "General"})
+		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats/group-1/posts":
+			gotRecordCount = r.URL.Query().Get("recordCount")
+			_ = json.NewEncoder(w).Encode(ringcentral.PostList{
+				Records: []ringcentral.Post{
+					{
+						ID:           "m1",
+						GroupID:      "group-1",
+						Text:         "hello team",
+						CreatorID:    "glip-user-1",
+						CreationTime: time.Now().UTC().Format(time.RFC3339),
+					},
+				},
+			})
+		case r.Method == http.MethodPatch && r.URL.Path == "/team-messaging/v1/chats/group-1/posts/placeholder-1":
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			updatedText = req["text"]
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "placeholder-1", Text: updatedText})
+		default:
+			t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+	}))
+	defer srv.Close()
+
+	h := newTestHandler()
+	h.SetGroupSummaryConfig("group-1", 42)
+	h.SetDefaultAgent("test", &testAgent{reply: "group summary"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("owner-1")
+
+	handled := h.routeSummarize(context.Background(), bot, bot, ringcentral.Post{
+		GroupID:   "group-1",
+		CreatorID: "owner-1",
+		Text:      "总结一下最近消息",
+	}, true)
+	if !handled {
+		t.Fatal("expected summarize route to handle the message")
+	}
+	if gotRecordCount != "42" {
+		t.Fatalf("expected recordCount=42, got %q", gotRecordCount)
+	}
+	if updatedText != "group summary" {
+		t.Fatalf("expected final summarized reply, got %q", updatedText)
 	}
 }
