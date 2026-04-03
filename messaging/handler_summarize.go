@@ -13,12 +13,16 @@ import (
 // classifyAndRoute uses AI to classify the user's intent and routes accordingly.
 // Returns true if the message was handled, false to continue normal routing.
 func (h *Handler) classifyAndRoute(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string, isBotGroup bool) bool {
+	// Fast-path: messages starting with summarize keywords skip AI classification.
+	// The summarize flow already injects ActionPrompt, so the agent can still
+	// produce ACTION blocks (note/task/message) for compound requests like
+	// "总结 maxwell 并用 note 发给他".
+	if isSummarizeKeyword(text) {
+		return h.routeSummarize(ctx, client, readClient, post, isBotGroup)
+	}
+
 	ag := h.getDefaultAgent()
 	if ag == nil {
-		// Agent not ready — fall back to old keyword prefix matching
-		if isSummarizeKeyword(text) {
-			return h.routeSummarize(ctx, client, readClient, post, isBotGroup)
-		}
 		return false
 	}
 
@@ -27,11 +31,9 @@ func (h *Handler) classifyAndRoute(ctx context.Context, client *ringcentral.Clie
 	case IntentSummarize:
 		return h.routeSummarize(ctx, client, readClient, post, isBotGroup)
 	case IntentTask, IntentNote, IntentEvent:
-		// Send to the default agent with the ACTION prompt so it produces ACTION blocks
 		h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		return true
 	default:
-		// IntentChat — let the message continue to normal agent routing
 		return false
 	}
 }

@@ -54,6 +54,31 @@ func TestMatchesIntentTrigger(t *testing.T) {
 	}
 }
 
+func TestIsSummarizeKeyword_FastPath(t *testing.T) {
+	// These should be caught by the fast-path (prefix match) and skip AI classification
+	fastPathCases := []struct {
+		text string
+		want bool
+	}{
+		{"总结 maxwell 并用 note 发给他", true},
+		{"总结 昨天跟 maxwell 的聊天并用 note 发给他", true},
+		{"summarize john and then create a note", true},
+		{"summary of alice and also send to her", true},
+		{"总结一下跟张三的聊天", true},
+		// Should NOT match — not summarize prefix
+		{"帮我创建笔记 关于会议", false},
+		{"create task for John", false},
+		{"hello summarize", false}, // "summarize" is not at the start
+	}
+	for _, tt := range fastPathCases {
+		t.Run(tt.text, func(t *testing.T) {
+			if got := isSummarizeKeyword(tt.text); got != tt.want {
+				t.Errorf("isSummarizeKeyword(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseIntentReply(t *testing.T) {
 	tests := []struct {
 		reply string
