@@ -148,7 +148,11 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 	if c.private != nil {
 		apiClient = c.private
 	}
-	apiServer := api.NewServer(apiClient, apiAddr, defaultChatID)
+	apiToken, err := api.LoadOrCreateToken()
+	if err != nil {
+		slog.Warn("failed to load API token, API will be unauthenticated", "component", "api", "error", err)
+	}
+	apiServer := api.NewServer(apiClient, apiAddr, defaultChatID, apiToken)
 	go func() {
 		if err := apiServer.Run(ctx); err != nil {
 			slog.Error("API server error", "error", err)
@@ -202,6 +206,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			Env:          agCfg.Env,
 			Model:        agCfg.Model,
 			SystemPrompt: agCfg.SystemPrompt,
+			AllowWrite:   agCfg.AllowWrite,
 		})
 		if err := ag.Start(ctx); err != nil {
 			slog.Error("failed to start ACP agent", "component", "agent", "name", name, "error", err)

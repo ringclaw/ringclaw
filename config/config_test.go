@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -210,4 +211,38 @@ func TestDebugMode(t *testing.T) {
 		t.Error("expected debug mode on")
 	}
 	SetDebugMode(false)
+}
+
+func TestRCConfigLogValue_RedactsSensitive(t *testing.T) {
+	rc := RCConfig{
+		ClientID:     "my-client-id",
+		ClientSecret: "super-secret",
+		JWTToken:     "jwt-token-value",
+		BotToken:     "bot-token-value",
+		ServerURL:    "https://platform.ringcentral.com",
+		ChatIDs:      []string{"chat1", "chat2"},
+	}
+
+	v := rc.LogValue()
+	s := v.String()
+
+	if !contains(s, "my-client-id") {
+		t.Error("LogValue should include client_id")
+	}
+	if contains(s, "super-secret") {
+		t.Error("LogValue should NOT include raw client_secret")
+	}
+	if contains(s, "jwt-token-value") {
+		t.Error("LogValue should NOT include raw jwt_token")
+	}
+	if contains(s, "bot-token-value") {
+		t.Error("LogValue should NOT include raw bot_token")
+	}
+	if !contains(s, "***") {
+		t.Error("LogValue should contain *** redaction markers")
+	}
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

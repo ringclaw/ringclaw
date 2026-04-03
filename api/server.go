@@ -21,6 +21,7 @@ type Server struct {
 	client        *ringcentral.Client
 	defaultChatID string
 	addr          string
+	token         string
 	limiter       *rateLimiter
 }
 
@@ -74,7 +75,7 @@ func (rl *rateLimiter) allow(ip string) bool {
 }
 
 // NewServer creates an API server.
-func NewServer(client *ringcentral.Client, addr string, defaultChatID string) *Server {
+func NewServer(client *ringcentral.Client, addr, defaultChatID, token string) *Server {
 	if addr == "" {
 		addr = "127.0.0.1:18011"
 	}
@@ -82,6 +83,7 @@ func NewServer(client *ringcentral.Client, addr string, defaultChatID string) *S
 		client:        client,
 		defaultChatID: defaultChatID,
 		addr:          addr,
+		token:         token,
 		limiter:       newRateLimiter(60, 1*time.Minute), // 60 req/min per IP
 	}
 }
@@ -95,29 +97,35 @@ type SendRequest struct {
 
 // Run starts the HTTP server. Blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
+	// protect wraps handlers with host validation and token auth.
+	protect := func(h http.HandlerFunc) http.HandlerFunc {
+		return hostGuard(s.authMiddleware(h))
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/send", s.handleSend)
+	mux.HandleFunc("/api/send", protect(s.handleSend))
 
 	// Task endpoints
-	mux.HandleFunc("/api/tasks", s.handleTasks)
-	mux.HandleFunc("/api/tasks/", s.handleTaskByID)
+	mux.HandleFunc("/api/tasks", protect(s.handleTasks))
+	mux.HandleFunc("/api/tasks/", protect(s.handleTaskByID))
 
 	// Note endpoints
-	mux.HandleFunc("/api/notes", s.handleNotes)
-	mux.HandleFunc("/api/notes/", s.handleNoteByID)
+	mux.HandleFunc("/api/notes", protect(s.handleNotes))
+	mux.HandleFunc("/api/notes/", protect(s.handleNoteByID))
 
 	// Event endpoints
-	mux.HandleFunc("/api/events", s.handleEvents)
-	mux.HandleFunc("/api/events/", s.handleEventByID)
+	mux.HandleFunc("/api/events", protect(s.handleEvents))
+	mux.HandleFunc("/api/events/", protect(s.handleEventByID))
 
 	// Adaptive Card endpoints
-	mux.HandleFunc("/api/cards", s.handleCards)
-	mux.HandleFunc("/api/cards/", s.handleCardByID)
+	mux.HandleFunc("/api/cards", protect(s.handleCards))
+	mux.HandleFunc("/api/cards/", protect(s.handleCardByID))
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	// /health is exempt from auth (monitoring probes) but still checks host
+	mux.HandleFunc("/health", hostGuard(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
-	})
+	}))
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
 

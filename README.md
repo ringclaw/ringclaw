@@ -618,6 +618,38 @@ Set top-level `agent_workspace` to define the default workspace for all agents. 
 
 > **Warning:** These flags disable safety checks. Only enable them if you understand the risks. ACP agents handle permissions automatically and don't need these flags.
 
+### Security
+
+#### Local API authentication
+
+The HTTP API server (default `127.0.0.1:18011`) requires token authentication. A random token is generated on first startup and stored in `~/.ringclaw/api_token`.
+
+All API requests (except `/health`) must include the `X-RingClaw-Token` header:
+
+```bash
+curl -H "X-RingClaw-Token: $(cat ~/.ringclaw/api_token)" http://127.0.0.1:18011/api/send -d '{"text":"hello"}'
+```
+
+The server also validates the `Host` header to prevent DNS rebinding attacks — only `localhost`, `127.0.0.1`, and `::1` are accepted.
+
+> **Warning:** Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
+
+#### ACP agent file permissions
+
+By default, ACP agents are granted **read-only** file access. To allow file writes, set `allow_write: true` in the agent config:
+
+```json
+"claude-acp": {
+  "type": "acp",
+  "command": "claude-agent-acp",
+  "allow_write": true
+}
+```
+
+#### Workspace path restrictions
+
+The `/cwd` command blocks access to sensitive directories: `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
+
 ## CLI Command Map
 
 RingClaw provides a full CLI for interacting with RingCentral Team Messaging without the bridge running. All commands support `--json` for machine-readable output.

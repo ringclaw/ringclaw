@@ -24,6 +24,7 @@ type ACPAgent struct {
 	systemPrompt string
 	cwd          string
 	env          map[string]string
+	allowWrite   bool
 
 	mu       sync.Mutex
 	cmd      *exec.Cmd
@@ -54,6 +55,7 @@ type ACPAgentConfig struct {
 	SystemPrompt string
 	Cwd          string            // working directory
 	Env          map[string]string // extra environment variables
+	AllowWrite   bool              // grant file write permission (default: false)
 }
 
 // --- JSON-RPC types ---
@@ -159,6 +161,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		systemPrompt: cfg.SystemPrompt,
 		cwd:          cfg.Cwd,
 		env:          cfg.Env,
+		allowWrite:   cfg.AllowWrite,
 		sessions:     make(map[string]string),
 		pending:      make(map[int64]chan *rpcResponse),
 		notifyCh:     make(map[string]chan *sessionUpdate),
@@ -226,7 +229,7 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	result, err := a.call(initCtx, "initialize", initParams{
 		ProtocolVersion: 1,
 		ClientCapabilities: clientCapabilities{
-			FS: &fsCapabilities{ReadTextFile: true, WriteTextFile: true},
+			FS: &fsCapabilities{ReadTextFile: true, WriteTextFile: a.allowWrite},
 		},
 	})
 	if err != nil {

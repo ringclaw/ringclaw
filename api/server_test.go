@@ -11,6 +11,8 @@ import (
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
+const testAPIToken = "test-api-token-123"
+
 func newTestServer() *Server {
 	creds := &ringcentral.Credentials{
 		ClientID:     "id",
@@ -19,7 +21,7 @@ func newTestServer() *Server {
 		ServerURL:    "https://example.com",
 	}
 	client := ringcentral.NewClient(creds)
-	return NewServer(client, "127.0.0.1:0", "default-chat")
+	return NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken)
 }
 
 func newTestServerWithBackend(backend *httptest.Server) *Server {
@@ -32,7 +34,7 @@ func newTestServerWithBackend(backend *httptest.Server) *Server {
 	client := ringcentral.NewClient(creds)
 	// Pre-set a valid token so auth doesn't need to call the real endpoint
 	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
-	return NewServer(client, "127.0.0.1:0", "default-chat")
+	return NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken)
 }
 
 func TestHealthEndpoint(t *testing.T) {

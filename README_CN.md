@@ -620,6 +620,38 @@ curl -X POST http://127.0.0.1:18011/api/send \
 
 > **注意：** 这些参数会跳过安全检查，请了解风险后再启用。ACP 模式的 Agent 会自动处理权限，无需配置。
 
+### 安全
+
+#### 本地 API 认证
+
+HTTP API 服务（默认 `127.0.0.1:18011`）需要 Token 认证。首次启动时自动生成随机 Token，存储在 `~/.ringclaw/api_token`。
+
+除 `/health` 外，所有 API 请求必须携带 `X-RingClaw-Token` 请求头：
+
+```bash
+curl -H "X-RingClaw-Token: $(cat ~/.ringclaw/api_token)" http://127.0.0.1:18011/api/send -d '{"text":"hello"}'
+```
+
+服务还会验证 `Host` 请求头以防止 DNS 重绑定攻击 —— 仅接受 `localhost`、`127.0.0.1` 和 `::1`。
+
+> **警告：** 不要将 `RINGCLAW_API_ADDR` 设为 `0.0.0.0`，这会将未加密的企业 RingCentral 账号网关暴露在局域网中。默认的 `127.0.0.1` 绑定已满足所有正常使用场景。
+
+#### ACP Agent 文件权限
+
+默认情况下，ACP Agent 仅获得**只读**文件访问权限。如需允许文件写入，请在 Agent 配置中设置 `allow_write: true`：
+
+```json
+"claude-acp": {
+  "type": "acp",
+  "command": "claude-agent-acp",
+  "allow_write": true
+}
+```
+
+#### 工作目录路径限制
+
+`/cwd` 命令会阻止进入敏感目录：`.ssh`、`.gnupg`、`.ringclaw`、`.aws`、`.kube`、`.config/gcloud`。
+
 ## CLI 命令索引
 
 RingClaw 提供完整的 CLI，无需启动 Bridge 即可直接操作 RingCentral Team Messaging。所有命令均支持 `--json` 输出机器可读的 JSON 格式。
