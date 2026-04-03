@@ -580,18 +580,18 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 // chatWithAgent sends a message to an agent and returns the reply.
 func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, message string) (string, error) {
 	info := ag.Info()
-	slog.Info("dispatching to agent", "component", "handler", "info", info, "userID", userID)
+	slog.Info("dispatching to agent", "component", "handler", "info", info, "conversationID", userID)
 
 	start := time.Now()
 	reply, err := ag.Chat(ctx, userID, message)
 	elapsed := time.Since(start)
 
 	if err != nil {
-		slog.Error("agent error", "component", "handler", "info", info, "elapsed", elapsed, "error", err)
+		slog.Error("agent error", "component", "handler", "info", info, "conversationID", userID, "elapsed", elapsed, "error", err)
 		return "", err
 	}
 
-	slog.Info("agent replied", "component", "handler", "info", info, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
+	slog.Info("agent replied", "component", "handler", "info", info, "conversationID", userID, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
 	return reply, nil
 }
 
