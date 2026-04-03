@@ -85,6 +85,9 @@ func TestExtractNameFromText(t *testing.T) {
 		{"summary of alice and also send to her", "alice"},
 		{"总结 bob 并且用笔记发送", "bob"},
 		{"summarize dave then send him a task", "dave"},
+		// Regression: standalone 用/再 must NOT split inside words
+		{"总结 昨天跟 maxwell 的聊天并用 note 发给他", "maxwell"},
+		{"总结 昨天跟 Maxwell Huang 的聊天并用 note 发给他", "maxwell huang"},
 	}
 	for _, tt := range tests {
 		got := extractNameFromText(tt.text)
