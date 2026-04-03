@@ -60,6 +60,22 @@ echo "Downloading ${URL}..."
 TMP=$(mktemp)
 curl -fsSL -o "$TMP" "$URL"
 
+# Stop running instance before replacing binary
+PIDFILE="$HOME/.ringclaw/ringclaw.pid"
+WAS_RUNNING=false
+if [ -f "$PIDFILE" ]; then
+  OLD_PID=$(cat "$PIDFILE" 2>/dev/null)
+  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "Stopping running instance (pid=$OLD_PID)..."
+    kill "$OLD_PID" 2>/dev/null || true
+    for i in $(seq 1 20); do
+      kill -0 "$OLD_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    WAS_RUNNING=true
+  fi
+fi
+
 # Install
 chmod +x "$TMP"
 if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
@@ -70,30 +86,20 @@ else
   sudo mv "$TMP" "${INSTALL_DIR}/${BINARY}"
 fi
 
-# Clear macOS quarantine attributes (ported from weclaw c1d5e12)
+# Clear macOS quarantine attributes
 if [ "$OS" = "darwin" ]; then
   xattr -d com.apple.quarantine "${INSTALL_DIR}/${BINARY}" 2>/dev/null || true
   xattr -d com.apple.provenance "${INSTALL_DIR}/${BINARY}" 2>/dev/null || true
 fi
 
-# Restart if running in background
-PIDFILE="$HOME/.ringclaw/ringclaw.pid"
-if [ -f "$PIDFILE" ]; then
-  OLD_PID=$(cat "$PIDFILE" 2>/dev/null)
-  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    echo "Stopping old process (pid=$OLD_PID)..."
-    kill "$OLD_PID" 2>/dev/null || true
-    for i in $(seq 1 20); do
-      kill -0 "$OLD_PID" 2>/dev/null || break
-      sleep 0.5
-    done
-    rm -f "$PIDFILE"
-    echo "Starting new version..."
-    "${INSTALL_DIR}/${BINARY}" start
-    echo ""
-    echo "ringclaw ${VERSION} installed and restarted."
-    exit 0
-  fi
+# Restart if was running before update
+if $WAS_RUNNING; then
+  rm -f "$PIDFILE"
+  echo "Starting new version..."
+  "${INSTALL_DIR}/${BINARY}" start
+  echo ""
+  echo "ringclaw ${VERSION} installed and restarted."
+  exit 0
 fi
 
 echo ""

@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -103,7 +102,16 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 	defer os.Remove(tmpFile)
 
-	// 3. Replace current binary
+	// 3. Stop running process before replacing binary (Windows locks running .exe)
+	wasRunning := false
+	pid, pidErr := readPid()
+	if pidErr == nil && processExists(pid) {
+		fmt.Println("Stopping running process...")
+		stopAllRingclaw()
+		wasRunning = true
+	}
+
+	// 4. Replace binary
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find executable: %w", err)
@@ -118,7 +126,6 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Clear macOS quarantine/provenance attributes to avoid Gatekeeper killing the binary.
-	// Ported from github.com/fastclaw-ai/weclaw commit c1d5e12.
 	if runtime.GOOS == "darwin" {
 		exec.Command("xattr", "-d", "com.apple.quarantine", exePath).Run()
 		exec.Command("xattr", "-d", "com.apple.provenance", exePath).Run()
@@ -126,22 +133,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Updated to %s\n", latest)
 
-	// 4. Restart if running in background
-	pid, pidErr := readPid()
-	if pidErr == nil && processExists(pid) {
-		fmt.Println("Stopping old process...")
-		if p, err := os.FindProcess(pid); err == nil {
-			p.Signal(os.Interrupt)
-		}
-		// Wait for old process to exit
-		for i := 0; i < 20; i++ {
-			if !processExists(pid) {
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-		os.Remove(pidFile())
-
+	// 5. Restart if was running
+	if wasRunning {
 		fmt.Println("Starting new version...")
 		if err := runDaemon(); err != nil {
 			slog.Error("failed to restart", "error", err)
