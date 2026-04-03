@@ -290,21 +290,12 @@ func verifyAgents(cfg *config.Config) {
 	}
 }
 
-// stopAllRingclaw kills all running ringclaw processes (by PID file and by process scan).
+// stopAllRingclaw stops the running ringclaw process identified by the PID file.
 func stopAllRingclaw() {
-	// 1. Kill by PID file
 	if pid, err := readPid(); err == nil && processExists(pid) {
 		if p, err := os.FindProcess(pid); err == nil {
 			_ = signalTerminate(p)
 		}
 	}
 	os.Remove(pidFile())
-
-	// 2. Kill any remaining ringclaw processes by scanning
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	killByName(exe)
-	time.Sleep(500 * time.Millisecond)
 }

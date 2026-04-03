@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -38,11 +37,4 @@ func signalTerminate(p *os.Process) error {
 	return p.Kill()
 }
 
-func killByName(exePath string) {
-	myPID := os.Getpid()
-	name := filepath.Base(exePath)
-	// Use WMIC to terminate matching processes, excluding the current one.
-	_ = exec.Command("wmic", "process", "where",
-		fmt.Sprintf("Name='%s' AND ProcessId!=%d", name, myPID),
-		"call", "terminate").Run()
-}
+
