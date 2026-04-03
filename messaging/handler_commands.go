@@ -44,6 +44,10 @@ func (h *Handler) handleCwd(text string) string {
 		return fmt.Sprintf("Invalid path: %v", err)
 	}
 
+	if err := validateCwdPath(absPath); err != nil {
+		return fmt.Sprintf("Denied: %v", err)
+	}
+
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return fmt.Sprintf("Path not found: %s", absPath)
@@ -65,6 +69,23 @@ func (h *Handler) handleCwd(text string) string {
 	}
 
 	return fmt.Sprintf("cwd: %s", absPath)
+}
+
+// restrictedDirs are directories that /cwd must never enter.
+var restrictedDirs = []string{".ssh", ".gnupg", ".ringclaw", ".aws", ".kube", ".config/gcloud"}
+
+// validateCwdPath rejects paths containing sensitive directories.
+func validateCwdPath(absPath string) error {
+	// Normalize to forward slashes for consistent matching on Windows
+	norm := filepath.ToSlash(absPath)
+	for _, dir := range restrictedDirs {
+		// Check for /.<dir> or /.<dir>/ anywhere in the path
+		pattern := "/" + dir
+		if strings.Contains(norm, pattern+"/") || strings.HasSuffix(norm, pattern) {
+			return fmt.Errorf("path contains restricted directory: %s", dir)
+		}
+	}
+	return nil
 }
 
 func buildHelpText() string {

@@ -73,6 +73,25 @@ type RCConfig struct {
 	GroupSummaryMessageLimit int    `json:"group_summary_message_limit,omitempty"`
 }
 
+// LogValue implements slog.LogValuer to redact sensitive fields.
+func (rc RCConfig) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("client_id", rc.ClientID),
+		slog.String("client_secret", redact(rc.ClientSecret)),
+		slog.String("jwt_token", redact(rc.JWTToken)),
+		slog.String("bot_token", redact(rc.BotToken)),
+		slog.String("server_url", rc.ServerURL),
+		slog.Int("chat_ids_count", len(rc.ChatIDs)),
+	)
+}
+
+func redact(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "***"
+}
+
 // HasPrivateApp returns true if all private app credentials are configured.
 func (rc RCConfig) HasPrivateApp() bool {
 	return rc.ClientID != "" && rc.ClientSecret != "" && rc.JWTToken != ""
@@ -117,6 +136,7 @@ type AgentConfig struct {
 	Aliases      []string          `json:"aliases,omitempty"`       // custom trigger commands (e.g. ["gpt", "4o"])
 	Cwd          string            `json:"cwd,omitempty"`           // working directory (workspace)
 	Env          map[string]string `json:"env,omitempty"`           // extra environment variables (cli/acp type)
+	AllowWrite   bool              `json:"allow_write,omitempty"`   // grant file write permission to ACP agent (default: false)
 	Model        string            `json:"model,omitempty"`         // model name
 	SystemPrompt string            `json:"system_prompt,omitempty"` // system prompt
 	Endpoint     string            `json:"endpoint,omitempty"`      // API endpoint (http type)
