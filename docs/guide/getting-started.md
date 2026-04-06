@@ -36,25 +36,25 @@ After creating your apps, run `ringclaw setup` for an interactive wizard that co
 
 1. Go to [RingCentral Developer Console](https://developers.ringcentral.com/console) and sign in
 
-   <a href="https://github.com/user-attachments/assets/33cbf61e-9c7b-4173-84ff-e5df1f112a89" target="_blank"><img src="https://github.com/user-attachments/assets/33cbf61e-9c7b-4173-84ff-e5df1f112a89" width="600" alt="RingCentral Developer Console login" /></a>
+   <a href="/images/rc-login.png" target="_blank"><img src="/images/rc-login.png" width="600" alt="RingCentral Developer Console login" /></a>
 
 2. Click **Register App** → select **Bot Add-in**
 
-   <a href="https://github.com/user-attachments/assets/8bf5f8ee-52d6-4fb4-8cdf-1342678ef52d" target="_blank"><img src="https://github.com/user-attachments/assets/8bf5f8ee-52d6-4fb4-8cdf-1342678ef52d" width="600" alt="Register App" /></a>
+   <a href="/images/rc-register-app.png" target="_blank"><img src="/images/rc-register-app.png" width="600" alt="Register App" /></a>
 
-   <a href="https://github.com/user-attachments/assets/9dc9f735-9371-477f-a4a7-8fb0cfe03be0" target="_blank"><img src="https://github.com/user-attachments/assets/9dc9f735-9371-477f-a4a7-8fb0cfe03be0" width="600" alt="Select Bot Add-in" /></a>
+   <a href="/images/rc-bot-addin.png" target="_blank"><img src="/images/rc-bot-addin.png" width="600" alt="Select Bot Add-in" /></a>
 
 3. Configure the app:
    - **Security** → **Application Scopes**: check **Read Accounts**, **Read Messages**, **TeamMessaging**, **WebSockets Subscription**, **WebSockets**
    - **Access**: Private (only your own account)
 
-   <a href="https://github.com/user-attachments/assets/3b3e702a-63f7-45d1-98c6-a68f7c1e3fb5" target="_blank"><img src="https://github.com/user-attachments/assets/3b3e702a-63f7-45d1-98c6-a68f7c1e3fb5" width="600" alt="Application Scopes" /></a>
+   <a href="/images/rc-scopes.png" target="_blank"><img src="/images/rc-scopes.png" width="600" alt="Application Scopes" /></a>
 
 4. Click **Create**
 5. Go to the **Bot** tab → click **Install** to install the bot to your account
 6. Copy the **Bot Token** shown on the Bot tab
 
-   <a href="https://github.com/user-attachments/assets/e6f36d45-ab31-45c0-bee3-bb4264d4c1fe" target="_blank"><img src="https://github.com/user-attachments/assets/e6f36d45-ab31-45c0-bee3-bb4264d4c1fe" width="600" alt="Copy Bot Token" /></a>
+   <a href="/images/rc-bot-token.png" target="_blank"><img src="/images/rc-bot-token.png" width="600" alt="Copy Bot Token" /></a>
 
 ### Step 2: Find Chat IDs
 
@@ -62,7 +62,7 @@ After creating your apps, run `ringclaw setup` for an interactive wizard that co
 2. Click **More** → **Copy conversation link**
 3. The number after `/messages/` is the Chat ID (e.g. `1234567890` from `https://app.ringcentral.com/l/messages/1234567890`)
 
-   <a href="https://github.com/user-attachments/assets/d2f55d04-2bad-45f0-9b1f-bda633238c42" target="_blank"><img src="https://github.com/user-attachments/assets/d2f55d04-2bad-45f0-9b1f-bda633238c42" width="600" alt="Copy conversation link to get Chat ID" /></a>
+   <a href="/images/rc-chat-id.png" target="_blank"><img src="/images/rc-chat-id.png" width="600" alt="Copy conversation link to get Chat ID" /></a>
 
 ### Step 3: Create a Private App (Optional)
 
@@ -72,7 +72,7 @@ A Private App (REST API with JWT) enables additional features:
 
 1. In the Developer Console, click **Register App** → select **REST API App (most common)**
 
-   <a href="https://github.com/user-attachments/assets/6440f7c7-1d0b-4814-8572-39f1aaf4ae84" target="_blank"><img src="https://github.com/user-attachments/assets/6440f7c7-1d0b-4814-8572-39f1aaf4ae84" width="600" alt="Select REST API App" /></a>
+   <a href="/images/rc-rest-api-app.png" target="_blank"><img src="/images/rc-rest-api-app.png" width="600" alt="Select REST API App" /></a>
 
 2. Configure the app:
    - **Auth**: JWT auth flow
@@ -81,11 +81,11 @@ A Private App (REST API with JWT) enables additional features:
 3. Click **Create** — you'll get a **Client ID** and **Client Secret**
 4. Go to **Credentials** tab → **JWT Credentials** → click **Create JWT Token**
 
-   <a href="https://github.com/user-attachments/assets/78a7a003-6ec4-4891-8543-fb98b20d58a9" target="_blank"><img src="https://github.com/user-attachments/assets/78a7a003-6ec4-4891-8543-fb98b20d58a9" width="600" alt="Create JWT Token" /></a>
+   <a href="/images/rc-jwt-create.png" target="_blank"><img src="/images/rc-jwt-create.png" width="600" alt="Create JWT Token" /></a>
 
 5. Copy the JWT token
 
-   <a href="https://github.com/user-attachments/assets/f7d690c7-bbc3-4cf5-9ccf-2877b2dfc70a" target="_blank"><img src="https://github.com/user-attachments/assets/f7d690c7-bbc3-4cf5-9ccf-2877b2dfc70a" width="600" alt="Copy JWT Token" /></a>
+   <a href="/images/rc-jwt-copy.png" target="_blank"><img src="/images/rc-jwt-copy.png" width="600" alt="Copy JWT Token" /></a>
 
 ### Interactive Setup
 
