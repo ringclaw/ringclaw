@@ -37,25 +37,25 @@ ringclaw start
 
 1. 前往 [RingCentral 开发者控制台](https://developers.ringcentral.com/console) 并登录
 
-   <a href="https://github.com/user-attachments/assets/33cbf61e-9c7b-4173-84ff-e5df1f112a89" target="_blank"><img src="https://github.com/user-attachments/assets/33cbf61e-9c7b-4173-84ff-e5df1f112a89" width="600" alt="RingCentral 开发者控制台登录" /></a>
+   <a href="/images/rc-login.png" target="_blank"><img src="/images/rc-login.png" width="600" alt="RingCentral 开发者控制台登录" /></a>
 
 2. 点击 **Register App** → 选择 **Bot Add-in**
 
-   <a href="https://github.com/user-attachments/assets/8bf5f8ee-52d6-4fb4-8cdf-1342678ef52d" target="_blank"><img src="https://github.com/user-attachments/assets/8bf5f8ee-52d6-4fb4-8cdf-1342678ef52d" width="600" alt="注册应用" /></a>
+   <a href="/images/rc-register-app.png" target="_blank"><img src="/images/rc-register-app.png" width="600" alt="注册应用" /></a>
 
-   <a href="https://github.com/user-attachments/assets/9dc9f735-9371-477f-a4a7-8fb0cfe03be0" target="_blank"><img src="https://github.com/user-attachments/assets/9dc9f735-9371-477f-a4a7-8fb0cfe03be0" width="600" alt="选择 Bot Add-in" /></a>
+   <a href="/images/rc-bot-addin.png" target="_blank"><img src="/images/rc-bot-addin.png" width="600" alt="选择 Bot Add-in" /></a>
 
 3. 配置应用：
    - **Security** → **Application Scopes**：勾选 **Read Accounts**、**Read Messages**、**TeamMessaging**、**WebSockets Subscription**、**WebSockets**
    - **Access**：Private（仅限自己的账号）
 
-   <a href="https://github.com/user-attachments/assets/3b3e702a-63f7-45d1-98c6-a68f7c1e3fb5" target="_blank"><img src="https://github.com/user-attachments/assets/3b3e702a-63f7-45d1-98c6-a68f7c1e3fb5" width="600" alt="应用权限配置" /></a>
+   <a href="/images/rc-scopes.png" target="_blank"><img src="/images/rc-scopes.png" width="600" alt="应用权限配置" /></a>
 
 4. 点击 **Create**
 5. 进入 **Bot** 标签 → 点击 **Install** 将 Bot 安装到你的账号
 6. 复制 Bot 标签页上显示的 **Bot Token**
 
-   <a href="https://github.com/user-attachments/assets/e6f36d45-ab31-45c0-bee3-bb4264d4c1fe" target="_blank"><img src="https://github.com/user-attachments/assets/e6f36d45-ab31-45c0-bee3-bb4264d4c1fe" width="600" alt="复制 Bot Token" /></a>
+   <a href="/images/rc-bot-token.png" target="_blank"><img src="/images/rc-bot-token.png" width="600" alt="复制 Bot Token" /></a>
 
 ### 第二步：获取 Chat ID
 
@@ -63,7 +63,7 @@ ringclaw start
 2. 点击 **More** → **Copy conversation link**
 3. 链接中 `/messages/` 后面的数字即为 Chat ID（如 `https://app.ringcentral.com/l/messages/1234567890` 中的 `1234567890`）
 
-   <a href="https://github.com/user-attachments/assets/d2f55d04-2bad-45f0-9b1f-bda633238c42" target="_blank"><img src="https://github.com/user-attachments/assets/d2f55d04-2bad-45f0-9b1f-bda633238c42" width="600" alt="复制对话链接获取 Chat ID" /></a>
+   <a href="/images/rc-chat-id.png" target="_blank"><img src="/images/rc-chat-id.png" width="600" alt="复制对话链接获取 Chat ID" /></a>
 
 ### 第三步：创建 Private App（可选）
 
@@ -73,7 +73,7 @@ Private App（REST API + JWT）可以启用以下高级功能：
 
 1. 在开发者控制台，点击 **Register App** → 选择 **REST API App (most common)**
 
-   <a href="https://github.com/user-attachments/assets/6440f7c7-1d0b-4814-8572-39f1aaf4ae84" target="_blank"><img src="https://github.com/user-attachments/assets/6440f7c7-1d0b-4814-8572-39f1aaf4ae84" width="600" alt="选择 REST API App" /></a>
+   <a href="/images/rc-rest-api-app.png" target="_blank"><img src="/images/rc-rest-api-app.png" width="600" alt="选择 REST API App" /></a>
 
 2. 配置应用：
    - **Auth**：JWT auth flow
@@ -82,11 +82,11 @@ Private App（REST API + JWT）可以启用以下高级功能：
 3. 点击 **Create** — 获取 **Client ID** 和 **Client Secret**
 4. 进入 **Credentials** 标签 → **JWT Credentials** → 点击 **Create JWT Token**
 
-   <a href="https://github.com/user-attachments/assets/78a7a003-6ec4-4891-8543-fb98b20d58a9" target="_blank"><img src="https://github.com/user-attachments/assets/78a7a003-6ec4-4891-8543-fb98b20d58a9" width="600" alt="创建 JWT Token" /></a>
+   <a href="/images/rc-jwt-create.png" target="_blank"><img src="/images/rc-jwt-create.png" width="600" alt="创建 JWT Token" /></a>
 
 5. 复制 JWT Token
 
-   <a href="https://github.com/user-attachments/assets/f7d690c7-bbc3-4cf5-9ccf-2877b2dfc70a" target="_blank"><img src="https://github.com/user-attachments/assets/f7d690c7-bbc3-4cf5-9ccf-2877b2dfc70a" width="600" alt="复制 JWT Token" /></a>
+   <a href="/images/rc-jwt-copy.png" target="_blank"><img src="/images/rc-jwt-copy.png" width="600" alt="复制 JWT Token" /></a>
 
 ### 交互式配置向导
 
