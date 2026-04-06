@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
-export default defineConfig({
+export default withMermaid(defineConfig({
   title: 'RingClaw',
   description: 'RingCentral AI Agent Bridge',
   base: '/ringclaw/',
@@ -145,4 +146,4 @@ export default defineConfig({
       provider: 'local',
     },
   },
-})
+}))
