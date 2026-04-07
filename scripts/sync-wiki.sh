@@ -145,6 +145,7 @@ cat > "$WIKI_DIR/_Sidebar.md" << EOF
 
 **English**
 $(printf '%b' "$sidebar_en")
+
 **中文**
 $(printf '%b' "$sidebar_zh")
 EOF
