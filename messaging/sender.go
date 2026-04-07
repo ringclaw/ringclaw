@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/ringclaw/ringclaw/internal/util"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
+
+var thinkingEmojis = []string{"1F440", "1F914", "1F525", "26A1", "1F9E0"} // 👀🤔🔥⚡🧠
+const doneEmoji = "2705"                                                   // ✅
+const reactionInterval = 5 * time.Second
 
 // SendTypingPlaceholder sends a "Thinking..." placeholder message and returns its post ID.
 func SendTypingPlaceholder(ctx context.Context, client *ringcentral.Client, chatID string) (string, error) {
@@ -17,6 +23,68 @@ func SendTypingPlaceholder(ctx context.Context, client *ringcentral.Client, chat
 	}
 	slog.Info("sent typing placeholder", "component", "sender", "chatID", chatID, "postID", post.ID)
 	return post.ID, nil
+}
+
+// StartThinkingReaction starts rolling emoji reactions on a message.
+// Returns a stop function: call stop(true) on success to leave ✅, stop(false) to clean up silently.
+func StartThinkingReaction(ctx context.Context, client *ringcentral.Client, chatID, postID string) func(success bool) {
+	var (
+		mu      sync.Mutex
+		current string
+		stopped bool
+	)
+
+	addReaction := func(code string) {
+		if err := client.AddReaction(ctx, chatID, postID, code); err != nil {
+			slog.Debug("failed to add reaction", "component", "sender", "emoji", code, "error", err)
+		}
+	}
+	removeReaction := func(code string) {
+		if err := client.RemoveReaction(ctx, chatID, postID, code); err != nil {
+			slog.Debug("failed to remove reaction", "component", "sender", "emoji", code, "error", err)
+		}
+	}
+
+	// Add the first emoji immediately
+	current = thinkingEmojis[0]
+	addReaction(current)
+
+	ticker := time.NewTicker(reactionInterval)
+	idx := 0
+
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			mu.Lock()
+			if stopped {
+				mu.Unlock()
+				return
+			}
+			prev := current
+			idx = (idx + 1) % len(thinkingEmojis)
+			current = thinkingEmojis[idx]
+			mu.Unlock()
+
+			removeReaction(prev)
+			addReaction(current)
+		}
+	}()
+
+	return func(success bool) {
+		mu.Lock()
+		if stopped {
+			mu.Unlock()
+			return
+		}
+		stopped = true
+		prev := current
+		mu.Unlock()
+
+		removeReaction(prev)
+		if success {
+			addReaction(doneEmoji)
+		}
+	}
 }
 
 // UpdatePostText updates an existing post's text content.

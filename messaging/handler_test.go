@@ -411,14 +411,17 @@ func TestRouteSummarize_GroupRejectsOtherGroupTarget(t *testing.T) {
 
 func TestRouteSummarize_GroupEnabledUsesConfiguredLimit(t *testing.T) {
 	var gotRecordCount string
-	var updatedText string
+	var replyText string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.Contains(r.URL.Path, "/reactions"):
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/group-1/posts":
 			var req map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "placeholder-1"})
+			replyText = req["text"]
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "reply-1", Text: replyText})
 		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats/group-1":
 			_ = json.NewEncoder(w).Encode(ringcentral.Chat{ID: "group-1", Name: "General"})
 		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats/group-1/posts":
@@ -434,11 +437,6 @@ func TestRouteSummarize_GroupEnabledUsesConfiguredLimit(t *testing.T) {
 					},
 				},
 			})
-		case r.Method == http.MethodPatch && r.URL.Path == "/team-messaging/v1/chats/group-1/posts/placeholder-1":
-			var req map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			updatedText = req["text"]
-			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "placeholder-1", Text: updatedText})
 		default:
 			t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
@@ -463,7 +461,9 @@ func TestRouteSummarize_GroupEnabledUsesConfiguredLimit(t *testing.T) {
 	if gotRecordCount != "42" {
 		t.Fatalf("expected recordCount=42, got %q", gotRecordCount)
 	}
-	if updatedText != "group summary" {
-		t.Fatalf("expected final summarized reply, got %q", updatedText)
+	// Wait for async reaction goroutine to finish
+	time.Sleep(200 * time.Millisecond)
+	if replyText != "group summary" {
+		t.Fatalf("expected final summarized reply, got %q", replyText)
 	}
 }

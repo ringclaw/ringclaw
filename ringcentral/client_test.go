@@ -665,3 +665,47 @@ func TestListGroupEvents_Success(t *testing.T) {
 		t.Errorf("unexpected result: %+v", list)
 	}
 }
+
+func TestAddReaction(t *testing.T) {
+	var gotMethod, gotPath, gotCode string
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		gotCode = body["code"]
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer srv.Close()
+
+	err := client.AddReaction(context.Background(), "chat1", "post1", "1F440")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("expected PUT, got %s", gotMethod)
+	}
+	if gotPath != "/team-messaging/v1/chats/chat1/posts/post1/reactions" {
+		t.Errorf("unexpected path: %s", gotPath)
+	}
+	if gotCode != "1F440" {
+		t.Errorf("expected 1F440, got %s", gotCode)
+	}
+}
+
+func TestRemoveReaction(t *testing.T) {
+	var gotMethod string
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer srv.Close()
+
+	err := client.RemoveReaction(context.Background(), "chat1", "post1", "1F440")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("expected DELETE, got %s", gotMethod)
+	}
+}

@@ -161,20 +161,11 @@ func (h *Handler) handleCurrentGroupSummarize(ctx context.Context, replyClient *
 func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, req *SummarizeRequest) {
 	chatID := post.GroupID
 
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, replyClient, chatID)
-	if placeholderErr != nil {
-		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
-	}
+	stopReaction := StartThinkingReaction(ctx, replyClient, chatID, post.ID)
 
 	sendReply := func(reply string) {
-		if placeholderID != "" {
-			if err := UpdatePostText(ctx, replyClient, chatID, placeholderID, reply); err != nil {
-				slog.Error("failed to update placeholder", "component", "handler", "error", err)
-				logSendError(SendTextReply(ctx, replyClient, chatID, reply))
-			}
-		} else {
-			logSendError(SendTextReply(ctx, replyClient, chatID, reply))
-		}
+		stopReaction(strings.TrimSpace(reply) != "")
+		logSendError(SendTextReply(ctx, replyClient, chatID, reply))
 	}
 
 	prompt, err := BuildSummaryPrompt(ctx, readClient, req)

@@ -432,13 +432,9 @@ func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) st
 
 // sendToDefaultAgent sends the message to the default agent and replies.
 func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string) {
-	chatID := post.GroupID
 	conversationID := conversationIDForPost(client, post)
 
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
-	if placeholderErr != nil {
-		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
-	}
+	stopReaction := StartThinkingReaction(ctx, client, post.GroupID, post.ID)
 
 	ag := h.getDefaultAgent()
 	var reply string
@@ -453,7 +449,8 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Cl
 		reply = "[echo] " + text
 	}
 
-	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
+	stopReaction(strings.TrimSpace(reply) != "")
+	h.sendReplyWithActions(ctx, client, readClient, post, reply)
 }
 
 // sendToNamedAgent sends the message to a specific agent and replies.
@@ -461,14 +458,12 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 	chatID := post.GroupID
 	conversationID := conversationIDForPost(client, post)
 
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
-	if placeholderErr != nil {
-		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
-	}
+	stopReaction := StartThinkingReaction(ctx, client, chatID, post.ID)
 
 	ag, agErr := h.getAgent(ctx, name)
 	if agErr != nil {
 		slog.Error("agent not available", "component", "handler", "agent", name, "error", agErr)
+		stopReaction(false)
 		reply := fmt.Sprintf("Agent %q is not available: %v", name, agErr)
 		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
 			slog.Error("failed to send reply", "component", "handler", "error", err)
@@ -481,7 +476,8 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 		reply = fmt.Sprintf("Error: %v", err)
 	}
 
-	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
+	stopReaction(strings.TrimSpace(reply) != "")
+	h.sendReplyWithActions(ctx, client, readClient, post, reply)
 }
 
 // broadcastToAgents sends the message to multiple agents in parallel.
@@ -514,13 +510,13 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 	for range names {
 		r := <-ch
 		reply := fmt.Sprintf("[%s] %s", r.name, r.reply)
-		h.sendReplyWithActions(ctx, client, readClient, post, reply, "")
+		h.sendReplyWithActions(ctx, client, readClient, post, reply)
 	}
 }
 
 // sendReplyWithActions processes action blocks and sends the final reply.
 // actionClient is used for executing actions (should be private app when available).
-func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, actionClient *ringcentral.Client, post ringcentral.Post, reply, placeholderID string) {
+func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, actionClient *ringcentral.Client, post ringcentral.Post, reply string) {
 	chatID := post.GroupID
 
 	// Parse and execute any ACTION blocks from the agent's response
@@ -546,24 +542,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		reply = wrapAnswer(reply)
 	}
 
-	// Update the placeholder with the real reply, or send a new post
-	if strings.TrimSpace(reply) == "" {
-		// No text reply -- delete the placeholder instead of leaving it empty
-		if placeholderID != "" {
-			if delErr := client.DeletePost(ctx, chatID, placeholderID); delErr != nil {
-				slog.Error("failed to delete empty placeholder", "component", "handler", "error", delErr)
-			} else {
-				slog.Info("deleted empty placeholder", "component", "handler", "postID", placeholderID)
-			}
-		}
-	} else if placeholderID != "" {
-		if updateErr := UpdatePostText(ctx, client, chatID, placeholderID, reply); updateErr != nil {
-			slog.Error("failed to update placeholder, sending new post", "component", "handler", "error", updateErr)
-			if sendErr := SendTextReply(ctx, client, chatID, reply); sendErr != nil {
-				slog.Error("failed to send reply", "component", "handler", "error", sendErr)
-			}
-		}
-	} else {
+	if strings.TrimSpace(reply) != "" {
 		if sendErr := SendTextReply(ctx, client, chatID, reply); sendErr != nil {
 			slog.Error("failed to send reply", "component", "handler", "error", sendErr)
 		}

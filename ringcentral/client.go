@@ -178,6 +178,22 @@ func (c *Client) DeletePost(ctx context.Context, chatID, postID string) error {
 	return err
 }
 
+// AddReaction adds an emoji reaction to a post.
+func (c *Client) AddReaction(ctx context.Context, chatID, postID, code string) error {
+	data, _ := json.Marshal(map[string]string{"code": code})
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts/%s/reactions", chatID, postID)
+	_, err := c.doRequest(ctx, http.MethodPut, path, "application/json", bytes.NewReader(data))
+	return err
+}
+
+// RemoveReaction removes an emoji reaction from a post.
+func (c *Client) RemoveReaction(ctx context.Context, chatID, postID, code string) error {
+	data, _ := json.Marshal(map[string]string{"code": code})
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts/%s/reactions", chatID, postID)
+	_, err := c.doRequest(ctx, http.MethodDelete, path, "application/json", bytes.NewReader(data))
+	return err
+}
+
 // UploadFile uploads a file to a chat.
 func (c *Client) UploadFile(ctx context.Context, chatID, fileName string, fileData []byte) (*FileUploadResponse, error) {
 	ct := inferContentType(fileName)
