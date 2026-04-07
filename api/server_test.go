@@ -21,7 +21,11 @@ func newTestServer() *Server {
 		ServerURL:    "https://example.com",
 	}
 	client := ringcentral.NewClient(creds)
-	return NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken)
+	s, err := NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken)
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 func newTestServerWithBackend(backend *httptest.Server) *Server {
@@ -34,7 +38,11 @@ func newTestServerWithBackend(backend *httptest.Server) *Server {
 	client := ringcentral.NewClient(creds)
 	// Pre-set a valid token so auth doesn't need to call the real endpoint
 	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
-	return NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken)
+	s, err := NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken)
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -381,5 +389,41 @@ func TestHandleSend_MissingFields(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestNewServer_LoopbackOnly(t *testing.T) {
+	creds := &ringcentral.Credentials{
+		ClientID:     "id",
+		ClientSecret: "secret",
+		JWTToken:     "jwt",
+		ServerURL:    "https://example.com",
+	}
+	client := ringcentral.NewClient(creds)
+
+	tests := []struct {
+		addr    string
+		wantErr bool
+	}{
+		{"127.0.0.1:18011", false},
+		{"localhost:18011", false},
+		{"[::1]:18011", false},
+		{"127.0.0.1:0", false},
+		{"", false}, // defaults to 127.0.0.1:18011
+		{"0.0.0.0:18011", true},
+		{"192.168.1.1:18011", true},
+		{"10.0.0.1:8080", true},
+		{"example.com:18011", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			_, err := NewServer(client, tt.addr, "chat", "token")
+			if tt.wantErr && err == nil {
+				t.Errorf("NewServer(%q) should have returned error", tt.addr)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("NewServer(%q) unexpected error: %v", tt.addr, err)
+			}
+		})
 	}
 }

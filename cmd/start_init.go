@@ -152,7 +152,11 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 	if err != nil {
 		slog.Warn("failed to load API token, API will be unauthenticated", "component", "api", "error", err)
 	}
-	apiServer := api.NewServer(apiClient, apiAddr, defaultChatID, apiToken)
+	apiServer, err := api.NewServer(apiClient, apiAddr, defaultChatID, apiToken)
+	if err != nil {
+		slog.Error("failed to create API server", "error", err)
+		return
+	}
 	go func() {
 		if err := apiServer.Run(ctx); err != nil {
 			slog.Error("API server error", "error", err)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -75,9 +76,17 @@ func (rl *rateLimiter) allow(ip string) bool {
 }
 
 // NewServer creates an API server.
-func NewServer(client *ringcentral.Client, addr, defaultChatID, token string) *Server {
+// Returns an error if addr binds to a non-loopback address.
+func NewServer(client *ringcentral.Client, addr, defaultChatID, token string) (*Server, error) {
 	if addr == "" {
 		addr = "127.0.0.1:18011"
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid api-addr %q: %w", addr, err)
+	}
+	if !loopbackHosts[host] {
+		return nil, fmt.Errorf("api-addr must bind to loopback (127.0.0.1, ::1, localhost), got %q", host)
 	}
 	return &Server{
 		client:        client,
@@ -85,7 +94,7 @@ func NewServer(client *ringcentral.Client, addr, defaultChatID, token string) *S
 		addr:          addr,
 		token:         token,
 		limiter:       newRateLimiter(60, 1*time.Minute), // 60 req/min per IP
-	}
+	}, nil
 }
 
 // SendRequest is the JSON body for POST /api/send.
