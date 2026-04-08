@@ -112,6 +112,78 @@ func (a *CLIAgent) Chat(ctx context.Context, conversationID string, message stri
 	}
 }
 
+// ChatWithImages saves images to temp files and passes them via --image flag (claude only).
+func (a *CLIAgent) ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error) {
+	if a.name != "claude" || len(images) == 0 {
+		if len(images) > 0 {
+			message += fmt.Sprintf("\n\n[Note: %d image(s) were attached but this agent does not support image input.]", len(images))
+		}
+		return a.Chat(ctx, conversationID, message)
+	}
+
+	var tmpFiles []string
+	defer func() {
+		for _, f := range tmpFiles {
+			os.Remove(f)
+		}
+	}()
+
+	for _, img := range images {
+		ext := ".jpg"
+		switch img.MediaType {
+		case "image/png":
+			ext = ".png"
+		case "image/gif":
+			ext = ".gif"
+		case "image/webp":
+			ext = ".webp"
+		}
+		f, err := os.CreateTemp("", "ringclaw-img-*"+ext)
+		if err != nil {
+			slog.Error("failed to create temp file for image", "component", "cli", "error", err)
+			continue
+		}
+		if _, err := f.Write(img.Data); err != nil {
+			f.Close()
+			os.Remove(f.Name())
+			slog.Error("failed to write image temp file", "component", "cli", "error", err)
+			continue
+		}
+		f.Close()
+		tmpFiles = append(tmpFiles, f.Name())
+	}
+
+	return a.chatClaudeWithImages(ctx, conversationID, message, tmpFiles)
+}
+
+// chatClaudeWithImages is like chatClaude but passes image file paths via --image flags.
+func (a *CLIAgent) chatClaudeWithImages(ctx context.Context, conversationID string, message string, imagePaths []string) (string, error) {
+	args := []string{"-p", message, "--output-format", "stream-json", "--verbose"}
+	for _, p := range imagePaths {
+		args = append(args, "--image", p)
+	}
+
+	if a.model != "" {
+		args = append(args, "--model", a.model)
+	}
+	if a.systemPrompt != "" {
+		args = append(args, "--append-system-prompt", a.systemPrompt)
+	}
+	args = append(args, a.args...)
+
+	a.mu.Lock()
+	sessionID, hasSession := a.sessions[conversationID]
+	a.mu.Unlock()
+
+	if hasSession {
+		args = append(args, "--resume", sessionID)
+	} else {
+		slog.Info("starting new conversation", "component", "cli", "command", a.command, "conversation", conversationID)
+	}
+
+	return a.runClaude(ctx, conversationID, args)
+}
+
 // chatClaude uses claude -p with stream-json to get structured output and session persistence.
 func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, message string) (string, error) {
 	args := []string{"-p", message, "--output-format", "stream-json", "--verbose"}
@@ -122,10 +194,8 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 	if a.systemPrompt != "" {
 		args = append(args, "--append-system-prompt", a.systemPrompt)
 	}
-	// Append extra args from config (e.g. --dangerously-skip-permissions)
 	args = append(args, a.args...)
 
-	// Resume existing session for multi-turn conversation
 	a.mu.Lock()
 	sessionID, hasSession := a.sessions[conversationID]
 	a.mu.Unlock()
@@ -137,6 +207,11 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 		slog.Info("starting new conversation", "component", "cli", "command", a.command, "conversation", conversationID)
 	}
 
+	return a.runClaude(ctx, conversationID, args)
+}
+
+// runClaude executes claude CLI with the given args and parses streaming JSON output.
+func (a *CLIAgent) runClaude(ctx context.Context, conversationID string, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, a.command, args...)
 	if a.cwd != "" {
 		cmd.Dir = a.cwd
@@ -162,13 +237,12 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 
 	slog.Info("spawned process", "component", "cli", "command", a.command, "pid", cmd.Process.Pid, "conversation", conversationID)
 
-	// Parse streaming JSON events
 	var result string
 	var newSessionID string
 	var assistantTexts []string
 
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB buffer for large responses
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -181,7 +255,6 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 			continue
 		}
 
-		// Capture session ID from any event
 		if event.SessionID != "" {
 			newSessionID = event.SessionID
 		}
@@ -193,8 +266,6 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 			}
 			result = event.Result
 		case "assistant":
-			// Newer claude CLI versions send text in assistant events
-			// instead of the result event's result field.
 			if event.Message != nil {
 				for _, c := range event.Message.Content {
 					if c.Type == "text" && c.Text != "" {
@@ -205,7 +276,6 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 		}
 	}
 
-	// If the result event had an empty result, fall back to accumulated assistant texts.
 	if result == "" && len(assistantTexts) > 0 {
 		result = strings.Join(assistantTexts, "")
 	}
@@ -218,12 +288,10 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 			}
 			return "", fmt.Errorf("%s exited with error: %w", a.name, err)
 		}
-		// If we got a result but exit code is non-zero (e.g. hook failures), still return the result
 	}
 
 	slog.Info("process exited", "component", "cli", "command", a.command, "pid", cmd.Process.Pid)
 
-	// Save session ID for multi-turn conversation
 	if newSessionID != "" {
 		a.mu.Lock()
 		a.sessions[conversationID] = newSessionID
