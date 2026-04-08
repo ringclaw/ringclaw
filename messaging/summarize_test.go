@@ -111,6 +111,15 @@ func TestExtractNameFromText(t *testing.T) {
 		// Regression: standalone 用/再 must NOT split inside words
 		{"总结 昨天跟 maxwell 的聊天并用 note 发给他", "maxwell"},
 		{"总结 昨天跟 Maxwell Huang 的聊天并用 note 发给他", "maxwell huang"},
+		// Time word stripping (multilingual)
+		{"总结我和 Maxwell 上周的聊天", "maxwell"},
+		{"总结我和 Maxwell 上星期的聊天", "maxwell"},
+		{"总结 Maxwell 这周的消息", "maxwell"},
+		{"总结 Maxwell 上个月的聊天", "maxwell"},
+		{"summarize my chat with John last week", "john"},
+		{"summarize chat with Alice last month", "alice"},
+		{"先週のMaxwellとのチャットを要約して", "maxwell"},
+		{"지난주 maxwell 과의 채팅 요약", "maxwell"},
 	}
 	for _, tt := range tests {
 		got := extractNameFromText(tt.text)
