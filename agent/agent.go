@@ -82,6 +82,13 @@ func mergeEnv(base []string, extra map[string]string) ([]string, error) {
 	return merged, nil
 }
 
+// ImageAttachment holds a downloaded image for multi-modal input.
+type ImageAttachment struct {
+	Data      []byte
+	MediaType string // e.g. "image/png"
+	Name      string
+}
+
 // Agent is the interface for AI chat agents.
 type Agent interface {
 	// Chat sends a message to the agent and returns the response.
@@ -99,4 +106,9 @@ type Agent interface {
 
 	// Info returns metadata about this agent.
 	Info() AgentInfo
+}
+
+// ImageSupporter is an optional interface for agents that support image input.
+type ImageSupporter interface {
+	ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error)
 }

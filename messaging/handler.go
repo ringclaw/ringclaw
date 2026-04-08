@@ -440,11 +440,13 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Cl
 		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
 	}
 
+	images := extractImageAttachments(ctx, client, post)
+
 	ag := h.getDefaultAgent()
 	var reply string
 	if ag != nil {
 		var err error
-		reply, err = h.chatWithAgent(ctx, ag, conversationID, text+ActionPrompt())
+		reply, err = h.chatWithAgentOrImages(ctx, ag, conversationID, text+ActionPrompt(), images)
 		if err != nil {
 			reply = fmt.Sprintf("Error: %v", err)
 		}
@@ -466,6 +468,8 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
 	}
 
+	images := extractImageAttachments(ctx, client, post)
+
 	ag, agErr := h.getAgent(ctx, name)
 	if agErr != nil {
 		slog.Error("agent not available", "component", "handler", "agent", name, "error", agErr)
@@ -476,7 +480,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 		return
 	}
 
-	reply, err := h.chatWithAgent(ctx, ag, conversationID, message+ActionPrompt())
+	reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
 	if err != nil {
 		reply = fmt.Sprintf("Error: %v", err)
 	}
@@ -488,6 +492,8 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 // Each reply is sent as a separate message with the agent name prefix.
 func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, names []string, message string) {
 	conversationID := conversationIDForPost(client, post)
+	images := extractImageAttachments(ctx, client, post)
+
 	type result struct {
 		name  string
 		reply string
@@ -501,7 +507,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
 				return
 			}
-			reply, err := h.chatWithAgent(ctx, ag, conversationID, message+ActionPrompt())
+			reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
 			if err != nil {
 				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
 				return
@@ -510,7 +516,6 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 		}(name)
 	}
 
-	// Send replies as they arrive
 	for range names {
 		r := <-ch
 		reply := fmt.Sprintf("[%s] %s", r.name, r.reply)
@@ -593,6 +598,89 @@ func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, mes
 
 	slog.Info("agent replied", "component", "handler", "info", info, "conversationID", userID, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
 	return reply, nil
+}
+
+// chatWithAgentOrImages dispatches to ChatWithImages if agent supports it, otherwise text-only.
+func (h *Handler) chatWithAgentOrImages(ctx context.Context, ag agent.Agent, conversationID, message string, images []agent.ImageAttachment) (string, error) {
+	if len(images) > 0 {
+		if is, ok := ag.(agent.ImageSupporter); ok {
+			info := ag.Info()
+			slog.Info("dispatching to agent with images", "component", "handler", "info", info, "conversationID", conversationID, "images", len(images))
+			start := time.Now()
+			reply, err := is.ChatWithImages(ctx, conversationID, message, images)
+			elapsed := time.Since(start)
+			if err != nil {
+				slog.Error("agent error", "component", "handler", "info", info, "conversationID", conversationID, "elapsed", elapsed, "error", err)
+				return "", err
+			}
+			slog.Info("agent replied", "component", "handler", "info", info, "conversationID", conversationID, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
+			return reply, nil
+		}
+		message += fmt.Sprintf("\n\n[Note: %d image(s) were attached but this agent does not support image input.]", len(images))
+	}
+	return h.chatWithAgent(ctx, ag, conversationID, message)
+}
+
+const maxImages = 5
+
+var imageMediaTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+	"image/jpg":  true,
+}
+
+func extractImageAttachments(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) []agent.ImageAttachment {
+	var images []agent.ImageAttachment
+	for _, att := range post.Attachments {
+		if len(images) >= maxImages {
+			break
+		}
+		if att.ContentURI == "" {
+			continue
+		}
+		mt := att.MediaType
+		if mt == "" {
+			mt = inferMediaType(att.Name)
+		}
+		if !imageMediaTypes[mt] {
+			continue
+		}
+		data, detectedMT, err := client.DownloadAttachment(ctx, att.ContentURI)
+		if err != nil {
+			slog.Error("failed to download attachment", "component", "handler", "id", att.ID, "error", err)
+			continue
+		}
+		if detectedMT != "" && !imageMediaTypes[detectedMT] {
+			continue
+		}
+		if detectedMT != "" {
+			mt = detectedMT
+		}
+		images = append(images, agent.ImageAttachment{
+			Data:      data,
+			MediaType: mt,
+			Name:      att.Name,
+		})
+		slog.Info("downloaded image attachment", "component", "handler", "id", att.ID, "name", att.Name, "size", len(data))
+	}
+	return images
+}
+
+func inferMediaType(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".png"):
+		return "image/png"
+	case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(lower, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(lower, ".webp"):
+		return "image/webp"
+	}
+	return ""
 }
 
 func (h *Handler) configuredGroupSummaryGroupID() string {

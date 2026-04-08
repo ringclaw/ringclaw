@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -114,8 +115,10 @@ type promptParams struct {
 }
 
 type promptEntry struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type      string `json:"type"`                // "text" or "image"
+	Text      string `json:"text,omitempty"`
+	Data      string `json:"data,omitempty"`       // base64 encoded image data
+	MediaType string `json:"mediaType,omitempty"`  // e.g. "image/png"
 }
 
 type promptResult struct {
@@ -328,15 +331,31 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 	return sessionID, nil
 }
 
-// Chat sends a message and returns the full response.
+// Chat sends a text message and returns the full response.
 func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
+	return a.chatWithEntries(ctx, conversationID, []promptEntry{{Type: "text", Text: message}})
+}
+
+// ChatWithImages sends a message with image attachments to the agent.
+func (a *ACPAgent) ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error) {
+	entries := []promptEntry{{Type: "text", Text: message}}
+	for _, img := range images {
+		entries = append(entries, promptEntry{
+			Type:      "image",
+			Data:      base64.StdEncoding.EncodeToString(img.Data),
+			MediaType: img.MediaType,
+		})
+	}
+	return a.chatWithEntries(ctx, conversationID, entries)
+}
+
+func (a *ACPAgent) chatWithEntries(ctx context.Context, conversationID string, entries []promptEntry) (string, error) {
 	if !a.started {
 		if err := a.Start(ctx); err != nil {
 			return "", err
 		}
 	}
 
-	// Get or create session
 	sessionID, isNew, err := a.getOrCreateSession(ctx, conversationID)
 	if err != nil {
 		return "", fmt.Errorf("session error: %w", err)
@@ -349,7 +368,6 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 		slog.Info("reusing session", "component", "acp", "pid", pid, "session", sessionID, "conversation", conversationID)
 	}
 
-	// Register notification channel for this session
 	notifyCh := make(chan *sessionUpdate, 256)
 	a.notifyMu.Lock()
 	a.notifyCh[sessionID] = notifyCh
@@ -361,7 +379,6 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 		a.notifyMu.Unlock()
 	}()
 
-	// Send prompt (this blocks until the prompt completes)
 	type promptDoneMsg struct {
 		result json.RawMessage
 		err    error
@@ -370,7 +387,7 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 	go func() {
 		result, err := a.call(ctx, "session/prompt", promptParams{
 			SessionID: sessionID,
-			Prompt:    []promptEntry{{Type: "text", Text: message}},
+			Prompt:    entries,
 		})
 		if result != nil {
 			slog.Debug("prompt result", "component", "acp", "session", sessionID, "result", string(result))
@@ -378,7 +395,6 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 		promptDone <- promptDoneMsg{result: result, err: err}
 	}()
 
-	// Collect text chunks from notifications
 	var textParts []string
 
 	for {
@@ -393,7 +409,6 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 				}
 			}
 		case done := <-promptDone:
-			// Drain remaining notifications
 			for {
 				select {
 				case update := <-notifyCh:
@@ -413,7 +428,6 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 			}
 			result := strings.TrimSpace(strings.Join(textParts, ""))
 			if result == "" {
-				// Try extracting from prompt result (some agents return content here)
 				result = extractPromptResultText(done.result)
 			}
 			if result == "" {

@@ -265,6 +265,47 @@ func (c *Client) ListChats(ctx context.Context, chatType string) (*ChatList, err
 	return &list, nil
 }
 
+const maxImageSize = 5 * 1024 * 1024 // 5MB
+
+// DownloadAttachment downloads a file from a contentUri using auth token.
+func (c *Client) DownloadAttachment(ctx context.Context, contentURI string) ([]byte, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	token, err := c.auth.AccessToken()
+	if err != nil {
+		return nil, "", fmt.Errorf("get access token: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, contentURI, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("download HTTP %d", resp.StatusCode)
+	}
+
+	mediaType := resp.Header.Get("Content-Type")
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("read body: %w", err)
+	}
+	if len(data) > maxImageSize {
+		return nil, "", fmt.Errorf("file too large (>5MB)")
+	}
+
+	return data, mediaType, nil
+}
+
 func (c *Client) doRequest(ctx context.Context, method, path, contentType string, body io.Reader) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()

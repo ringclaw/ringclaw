@@ -467,3 +467,163 @@ func TestRouteSummarize_GroupEnabledUsesConfiguredLimit(t *testing.T) {
 		t.Fatalf("expected final summarized reply, got %q", updatedText)
 	}
 }
+
+func TestInferMediaType(t *testing.T) {
+	tests := []struct {
+		name, want string
+	}{
+		{"photo.png", "image/png"},
+		{"photo.PNG", "image/png"},
+		{"photo.jpg", "image/jpeg"},
+		{"photo.jpeg", "image/jpeg"},
+		{"photo.gif", "image/gif"},
+		{"photo.webp", "image/webp"},
+		{"document.pdf", ""},
+		{"file.txt", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := inferMediaType(tt.name); got != tt.want {
+			t.Errorf("inferMediaType(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestImageMediaTypes(t *testing.T) {
+	supported := []string{"image/png", "image/jpeg", "image/gif", "image/webp", "image/jpg"}
+	for _, mt := range supported {
+		if !imageMediaTypes[mt] {
+			t.Errorf("expected %q to be supported", mt)
+		}
+	}
+	unsupported := []string{"image/bmp", "application/pdf", "text/plain", ""}
+	for _, mt := range unsupported {
+		if imageMediaTypes[mt] {
+			t.Errorf("expected %q to NOT be supported", mt)
+		}
+	}
+}
+
+func TestExtractImageAttachments(t *testing.T) {
+	imgData := []byte("fake-png-data")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewBotClient(srv.URL, "token")
+	post := ringcentral.Post{
+		Attachments: []ringcentral.Attachment{
+			{ID: "a1", ContentURI: srv.URL + "/img1.png", Name: "screenshot.png", MediaType: "image/png"},
+			{ID: "a2", ContentURI: srv.URL + "/img2.jpg", Name: "photo.jpg", MediaType: "image/jpeg"},
+			{ID: "a3", ContentURI: "", Name: "nourl.png"},           // no URI — skipped
+			{ID: "a4", ContentURI: srv.URL + "/f.pdf", Name: "f.pdf", MediaType: "application/pdf"}, // not image — skipped
+		},
+	}
+
+	images := extractImageAttachments(context.Background(), client, post)
+	if len(images) != 2 {
+		t.Fatalf("expected 2 images, got %d", len(images))
+	}
+	if images[0].Name != "screenshot.png" {
+		t.Errorf("expected screenshot.png, got %s", images[0].Name)
+	}
+}
+
+func TestExtractImageAttachments_MaxLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write([]byte("data"))
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewBotClient(srv.URL, "token")
+	var atts []ringcentral.Attachment
+	for i := 0; i < 10; i++ {
+		atts = append(atts, ringcentral.Attachment{
+			ID: "a", ContentURI: srv.URL + "/img.png", Name: "img.png", MediaType: "image/png",
+		})
+	}
+	post := ringcentral.Post{Attachments: atts}
+
+	images := extractImageAttachments(context.Background(), client, post)
+	if len(images) != maxImages {
+		t.Fatalf("expected %d images (max), got %d", maxImages, len(images))
+	}
+}
+
+// mockAgent for testing chatWithAgentOrImages
+type mockImageAgent struct {
+	lastImages int
+}
+
+func (m *mockImageAgent) Chat(_ context.Context, _, msg string) (string, error) {
+	return "text-only: " + msg, nil
+}
+func (m *mockImageAgent) ChatWithImages(_ context.Context, _, msg string, imgs []agent.ImageAttachment) (string, error) {
+	m.lastImages = len(imgs)
+	return "with-images: " + msg, nil
+}
+func (m *mockImageAgent) ResetSession(_ context.Context, _ string) (string, error) { return "", nil }
+func (m *mockImageAgent) SetCwd(_ string)                                          {}
+func (m *mockImageAgent) Info() agent.AgentInfo {
+	return agent.AgentInfo{Name: "mock", Type: "test"}
+}
+
+type mockTextOnlyAgent struct{}
+
+func (m *mockTextOnlyAgent) Chat(_ context.Context, _, msg string) (string, error) {
+	return "text: " + msg, nil
+}
+func (m *mockTextOnlyAgent) ResetSession(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockTextOnlyAgent) SetCwd(_ string)               {}
+func (m *mockTextOnlyAgent) Info() agent.AgentInfo {
+	return agent.AgentInfo{Name: "text-only", Type: "test"}
+}
+
+func TestChatWithAgentOrImages_ImageSupporter(t *testing.T) {
+	h := &Handler{}
+	ag := &mockImageAgent{}
+	imgs := []agent.ImageAttachment{{Data: []byte("x"), MediaType: "image/png", Name: "a.png"}}
+	reply, err := h.chatWithAgentOrImages(context.Background(), ag, "conv1", "hello", imgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "with-images:") {
+		t.Errorf("expected ChatWithImages path, got %q", reply)
+	}
+	if ag.lastImages != 1 {
+		t.Errorf("expected 1 image passed, got %d", ag.lastImages)
+	}
+}
+
+func TestChatWithAgentOrImages_TextFallback(t *testing.T) {
+	h := &Handler{}
+	ag := &mockTextOnlyAgent{}
+	imgs := []agent.ImageAttachment{{Data: []byte("x"), MediaType: "image/png", Name: "a.png"}}
+	reply, err := h.chatWithAgentOrImages(context.Background(), ag, "conv1", "hello", imgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "text:") {
+		t.Errorf("expected text-only path, got %q", reply)
+	}
+	if !strings.Contains(reply, "1 image(s) were attached") {
+		t.Errorf("expected fallback note, got %q", reply)
+	}
+}
+
+func TestChatWithAgentOrImages_NoImages(t *testing.T) {
+	h := &Handler{}
+	ag := &mockImageAgent{}
+	reply, err := h.chatWithAgentOrImages(context.Background(), ag, "conv1", "hello", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "text-only:") {
+		t.Errorf("expected Chat path (no images), got %q", reply)
+	}
+}
