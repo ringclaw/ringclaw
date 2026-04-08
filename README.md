@@ -34,6 +34,7 @@ On first start, RingClaw auto-detects installed AI agents and saves config to `~
 - **Proactive Messaging** — CLI and HTTP API for sending messages and media. [→ Media & API](https://ringclaw.github.io/ringclaw/features/media.html)
 - **Security** — API token auth, Host validation, ACP write permissions, credential redaction. [→ Security](https://ringclaw.github.io/ringclaw/security/)
 - **Full CLI** — manage messages, chats, tasks, notes, events, cards, users, files from the command line. [→ CLI](https://ringclaw.github.io/ringclaw/guide/commands.html#cli-command-map)
+- **Image Analysis** — send images to the bot for AI-powered visual analysis (ACP agents). [→ Image Support](#image-analysis)
 - **Docker & systemd** — background mode, auto-start on boot. [→ Deployment](https://ringclaw.github.io/ringclaw/deployment/background.html)
 
 ## How It Works
@@ -48,6 +49,31 @@ graph LR
     RingClaw -->|replies| RC
     RC -->|displays reply| User
 ```
+
+### Image Analysis
+
+Send images in chat and the AI agent will analyze them. Supports up to 5 images per message (max 5MB each), in PNG, JPEG, GIF, and WebP formats.
+
+| Agent | Image Support | Notes |
+|-------|:---:|-------|
+| Factory Droid | ✅ Tested | ACP with `promptCapabilities.image` |
+| Claude (ACP) | ✅ Tested | Requires `claude-agent-acp` (see below) |
+| Gemini (ACP) | 🔷 Expected | Gemini models are multi-modal |
+| Cursor (ACP) | 🔷 Expected | Depends on underlying model |
+| GitHub Copilot (ACP) | 🔷 Expected | GPT-4o is multi-modal |
+| Cline (ACP) | 🔷 Expected | Cline supports image input |
+| Claude (CLI) | ❌ No | CLI mode has no image flag |
+| Codex (CLI) | ❌ No | CLI mode, text-only fallback |
+| HTTP agents | ❌ No | Text-only fallback |
+
+**Switching Claude to ACP mode:**
+
+```bash
+npm install -g @agentclientprotocol/claude-agent-acp
+ringclaw restart
+```
+
+RingClaw auto-detects `claude-agent-acp` on startup and upgrades from CLI to ACP automatically. No manual config editing needed.
 
 📖 **Full documentation:** [ringclaw.github.io/ringclaw](https://ringclaw.github.io/ringclaw/)
 

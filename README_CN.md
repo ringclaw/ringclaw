@@ -34,6 +34,7 @@ ringclaw start
 - **主动推送** — CLI 和 HTTP API 发送消息和媒体文件。[→ 媒体 & API](https://ringclaw.github.io/ringclaw/zh/features/media.html)
 - **安全加固** — API Token 认证、Host 验证、ACP 写权限控制、凭证脱敏。[→ 安全](https://ringclaw.github.io/ringclaw/zh/security/)
 - **完整 CLI** — 命令行管理消息、聊天、任务、笔记、日程、卡片、用户、文件。[→ CLI](https://ringclaw.github.io/ringclaw/zh/guide/commands.html#cli)
+- **图片解析** — 发送图片给 Bot，AI 自动分析图片内容（仅 ACP 模式）。[→ 图片支持](#图片解析)
 - **Docker & systemd** — 后台运行，开机自启。[→ 部署](https://ringclaw.github.io/ringclaw/zh/deployment/background.html)
 
 ## 工作原理
@@ -48,6 +49,31 @@ graph LR
     RingClaw -->|回复| RC
     RC -->|显示回复| User
 ```
+
+### 图片解析
+
+在聊天中发送图片，AI 智能体会自动分析图片内容。支持每条消息最多 5 张图片（单张最大 5MB），格式支持 PNG、JPEG、GIF、WebP。
+
+| Agent | 图片支持 | 说明 |
+|-------|:---:|-------|
+| Factory Droid | ✅ 已测试 | ACP 模式，`promptCapabilities.image` |
+| Claude (ACP) | ✅ 已测试 | 需安装 `claude-agent-acp`（见下方） |
+| Gemini (ACP) | 🔷 理论支持 | Gemini 模型原生支持多模态 |
+| Cursor (ACP) | 🔷 理论支持 | 取决于底层模型 |
+| GitHub Copilot (ACP) | 🔷 理论支持 | GPT-4o 支持多模态 |
+| Cline (ACP) | 🔷 理论支持 | Cline 支持图片输入 |
+| Claude (CLI) | ❌ 不支持 | CLI 模式无图片参数 |
+| Codex (CLI) | ❌ 不支持 | CLI 模式，仅文本回退 |
+| HTTP agents | ❌ 不支持 | 仅文本回退 |
+
+**将 Claude 切换到 ACP 模式：**
+
+```bash
+npm install -g @agentclientprotocol/claude-agent-acp
+ringclaw restart
+```
+
+RingClaw 启动时会自动检测 `claude-agent-acp`，并将 Claude 从 CLI 模式升级为 ACP 模式，无需手动修改配置。
 
 📖 **完整文档：** [ringclaw.github.io/ringclaw/zh](https://ringclaw.github.io/ringclaw/zh/)
 
