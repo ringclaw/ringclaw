@@ -151,16 +151,24 @@ func (c *chatCache) saveToDisk() {
 	slog.Info("saved cache to disk", "component", "summarize", "chats", len(pd.Entries), "persons", len(pd.Persons))
 }
 
-// lookup searches cached entries by name. Returns nil if not found.
+// lookup searches cached entries by name (exact first, then shortest fuzzy).
 func (c *chatCache) lookup(name string) *chatCacheEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for i := range c.entries {
-		if fuzzyMatch(c.entries[i].ChatName, name) {
+		if exactMatch(c.entries[i].ChatName, name) {
 			return &c.entries[i]
 		}
 	}
-	return nil
+	var best *chatCacheEntry
+	for i := range c.entries {
+		if fuzzyMatch(c.entries[i].ChatName, name) {
+			if best == nil || len(c.entries[i].ChatName) < len(best.ChatName) {
+				best = &c.entries[i]
+			}
+		}
+	}
+	return best
 }
 
 // getPerson returns cached person info or fetches it.
@@ -198,16 +206,7 @@ func (c *chatCache) lookupViaDirectory(ctx context.Context, client *ringcentral.
 		return nil
 	}
 
-	// Pick best match
-	var best *ringcentral.DirectoryEntry
-	for i := range result.Records {
-		e := &result.Records[i]
-		fullName := strings.TrimSpace(e.FirstName + " " + e.LastName)
-		if fuzzyMatch(fullName, name) || fuzzyMatch(e.Email, name) {
-			best = e
-			break
-		}
-	}
+	best := bestDirectoryMatch(result.Records, name)
 	if best == nil {
 		slog.Warn("directory returned entries but none matched", "component", "summarize", "count", len(result.Records), "name", name)
 		return nil
