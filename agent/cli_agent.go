@@ -135,11 +135,6 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 		slog.Info("starting new conversation", "component", "cli", "command", a.command, "conversation", conversationID)
 	}
 
-	return a.runClaude(ctx, conversationID, args)
-}
-
-// runClaude executes claude CLI with the given args and parses streaming JSON output.
-func (a *CLIAgent) runClaude(ctx context.Context, conversationID string, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, a.command, args...)
 	if a.cwd != "" {
 		cmd.Dir = a.cwd
