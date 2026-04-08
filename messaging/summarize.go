@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -267,7 +268,9 @@ type SummarizeRequest struct {
 }
 
 // ResolveChatTarget finds the target chat ID from mentions or fuzzy name matching.
-func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, text string, mentions []ringcentral.Mention) (*SummarizeRequest, error) {
+// If ag is non-nil, uses the agent to extract the person name from the message;
+// otherwise falls back to filler-word stripping.
+func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, ag agent.Agent, text string, mentions []ringcentral.Mention) (*SummarizeRequest, error) {
 	req := &SummarizeRequest{
 		TimeFrom:    todayStart(),
 		UserRequest: text,
@@ -295,8 +298,14 @@ func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, text str
 		}
 	}
 
-	// 2. Extract name from text and fuzzy match
-	name := extractNameFromText(text)
+	// 2. Extract name — prefer agent, fall back to filler-word stripping
+	var name string
+	if ag != nil {
+		name = extractNameViaAgent(ctx, ag, text)
+	}
+	if name == "" {
+		name = extractNameFromText(text)
+	}
 	if name == "" {
 		return nil, fmt.Errorf("cannot determine which chat to summarize. Use a mention or specify a name")
 	}
@@ -608,6 +617,38 @@ var reInstructionSplit = regexp.MustCompile(`(?i)(?:` +
 	`luego|después|y\s+también|` + // Spanish
 	`dann|und\s+auch|` + // German
 	`потом|затем|и\s+также)`) // Russian
+
+const nameExtractConversationID = "name:extractor"
+
+const nameExtractPrompt = `Extract the target person's name from this message.
+Reply with ONLY the person's name (e.g. "John Lin"), nothing else.
+If no specific person is mentioned, reply with "NONE".
+
+Message: %s
+
+Name:`
+
+func extractNameViaAgent(ctx context.Context, ag agent.Agent, text string) string {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	reply, err := ag.Chat(ctx, nameExtractConversationID, fmt.Sprintf(nameExtractPrompt, text))
+	elapsed := time.Since(start)
+	if err != nil {
+		slog.Warn("agent name extraction failed", "component", "summarize", "error", err, "elapsed", elapsed)
+		return ""
+	}
+
+	name := strings.TrimSpace(reply)
+	name = strings.Trim(name, `"'`)
+	if strings.EqualFold(name, "none") || name == "" {
+		slog.Info("agent found no target name", "component", "summarize", "elapsed", elapsed)
+		return ""
+	}
+	slog.Info("agent extracted name", "component", "summarize", "name", name, "elapsed", elapsed)
+	return strings.ToLower(name)
+}
 
 func extractNameFromText(text string) string {
 	clean := text
