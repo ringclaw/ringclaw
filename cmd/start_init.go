@@ -229,9 +229,6 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			SystemPrompt: agCfg.SystemPrompt,
 		})
 		slog.Info("created CLI agent", "component", "agent", "name", name, "command", agCfg.Command, "type", agCfg.Type, "model", agCfg.Model)
-		if name == "claude" {
-			return &agent.ClaudeCLIAgent{CLIAgent: cli}
-		}
 		return cli
 	case "http":
 		if agCfg.Endpoint == "" {
