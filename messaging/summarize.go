@@ -446,7 +446,16 @@ func parseTimeRange(text string) time.Time {
 		}
 	}
 
-	if strings.Contains(lower, "本周") || strings.Contains(lower, "this week") {
+	if containsAny(lower, "上周", "上星期", "last week", "先週", "지난주") {
+		weekday := int(now.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		lastMonday := now.AddDate(0, 0, -(weekday - 1 + 7))
+		return time.Date(lastMonday.Year(), lastMonday.Month(), lastMonday.Day(), 0, 0, 0, 0, now.Location())
+	}
+
+	if containsAny(lower, "本周", "这周", "这星期", "this week", "今週", "이번주") {
 		weekday := int(now.Weekday())
 		if weekday == 0 {
 			weekday = 7
@@ -455,9 +464,28 @@ func parseTimeRange(text string) time.Time {
 		return time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, now.Location())
 	}
 
-	if strings.Contains(lower, "昨天") || strings.Contains(lower, "yesterday") {
+	if containsAny(lower, "上个月", "上月", "last month", "先月", "지난달") {
+		firstOfThisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		firstOfLastMonth := firstOfThisMonth.AddDate(0, -1, 0)
+		return firstOfLastMonth
+	}
+
+	if containsAny(lower, "本月", "这个月", "this month", "今月", "이번달") {
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	}
+
+	if containsAny(lower, "前天", "day before yesterday", "一昨日", "그저께", "avant-hier", "anteayer", "vorgestern") {
+		d := now.AddDate(0, 0, -2)
+		return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
+	}
+
+	if containsAny(lower, "昨天", "yesterday", "昨日") {
 		y := now.AddDate(0, 0, -1)
 		return time.Date(y.Year(), y.Month(), y.Day(), 0, 0, 0, 0, now.Location())
+	}
+
+	if containsAny(lower, "这几天", "近期", "最近", "recently", "past few days") {
+		return now.AddDate(0, 0, -3)
 	}
 
 	// Default: today
@@ -476,6 +504,15 @@ func formatTimeDesc(from time.Time) string {
 	}
 	days := int(diff.Hours() / 24)
 	return fmt.Sprintf("last %d days", days)
+}
+
+func containsAny(s string, keywords ...string) bool {
+	for _, kw := range keywords {
+		if strings.Contains(s, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 var reMention = regexp.MustCompile(`!\[:\w+\]\(\d+\)`)
@@ -509,16 +546,45 @@ func extractNameFromText(text string) string {
 
 	// Lowercase for filler removal
 	clean = strings.ToLower(clean)
-	// Remove time keywords
-	for _, kw := range []string{"今天", "昨天", "本周", "最近", "过去", "today", "yesterday", "this week", "last"} {
+	// Remove time keywords (multi-word phrases first, then single words)
+	for _, kw := range []string{
+		// Multi-word phrases (must come before single-word removal)
+		// French
+		"la semaine dernière", "cette semaine", "le mois dernier", "ce mois", "avant-hier", "récemment",
+		// Spanish
+		"la semana pasada", "esta semana", "el mes pasado", "este mes", "anteayer", "recientemente",
+		// German
+		"letzte woche", "diese woche", "letzten monat", "diesen monat", "vorgestern", "kürzlich",
+		// Russian
+		"на прошлой неделе", "на этой неделе", "в прошлом месяце", "в этом месяце", "позавчера", "недавно",
+		// English multi-word
+		"last week", "last month", "this week", "this month", "past week", "past month",
+		// Chinese
+		"上星期", "这星期", "上个月", "这段时间", "这几天",
+		"上周", "这周", "上月", "本月", "前天", "近期",
+		"今天", "昨天", "本周", "最近", "过去",
+		// Japanese
+		"一昨日", "先週", "今週", "先月", "今月", "最近",
+		// Korean
+		"지난주", "이번주", "지난달", "이번달", "그저께", "최근",
+		// English single-word
+		"today", "yesterday", "recently", "last",
+	} {
 		clean = strings.ReplaceAll(clean, kw, "")
 	}
 	// Remove CJK filler words (safe for substring removal — no Latin overlap)
 	for _, kw := range []string{
+		// Chinese
 		"一下", "下", "的", "消息", "聊天", "对话", "群聊", "群",
 		"跟", "和", "与", "我", "了",
 		"发给", "发送", "发到", "给", "他", "她", "它", "他们",
 		"笔记", "任务", "日程",
+		// Japanese
+		"の", "と", "を", "は", "が", "で", "に", "へ",
+		"チャット", "会話", "メッセージ", "要約して", "要約", "まとめて", "まとめ",
+		// Korean
+		"과의", "와의", "과", "와", "의", "을", "를", "에서",
+		"채팅", "대화", "메시지", "요약",
 	} {
 		clean = strings.ReplaceAll(clean, kw, "")
 	}

@@ -94,6 +94,63 @@ func TestParseTimeRange_DefaultForEnglishSummaryWithoutExplicitTime(t *testing.T
 	}
 }
 
+func TestParseTimeRange_LastWeek(t *testing.T) {
+	now := time.Now()
+	for _, text := range []string{"上周的聊天", "上星期的消息", "last week chat", "先週のチャット", "지난주 채팅"} {
+		result := parseTimeRange(text)
+		diff := now.Sub(result)
+		if diff < 7*24*time.Hour || diff > 14*24*time.Hour {
+			t.Errorf("parseTimeRange(%q): expected 7-14 days ago, got %v ago", text, diff)
+		}
+		if result.Weekday() != time.Monday {
+			t.Errorf("parseTimeRange(%q): expected Monday, got %v", text, result.Weekday())
+		}
+	}
+}
+
+func TestParseTimeRange_LastMonth(t *testing.T) {
+	now := time.Now()
+	for _, text := range []string{"上个月的聊天", "上月的消息", "last month chat", "先月のチャット", "지난달 채팅"} {
+		result := parseTimeRange(text)
+		if result.Day() != 1 {
+			t.Errorf("parseTimeRange(%q): expected 1st of month, got day %d", text, result.Day())
+		}
+		expectedMonth := now.Month() - 1
+		if expectedMonth == 0 {
+			expectedMonth = 12
+		}
+		if result.Month() != expectedMonth {
+			t.Errorf("parseTimeRange(%q): expected month %d, got %d", text, expectedMonth, result.Month())
+		}
+	}
+}
+
+func TestParseTimeRange_ThisMonth(t *testing.T) {
+	now := time.Now()
+	result := parseTimeRange("本月的消息")
+	if result.Day() != 1 || result.Month() != now.Month() {
+		t.Errorf("expected 1st of current month, got %v", result)
+	}
+}
+
+func TestParseTimeRange_DayBeforeYesterday(t *testing.T) {
+	now := time.Now()
+	result := parseTimeRange("前天的聊天")
+	diff := now.Sub(result)
+	if diff < 36*time.Hour || diff > 72*time.Hour {
+		t.Errorf("expected ~2 days ago, got %v ago", diff)
+	}
+}
+
+func TestParseTimeRange_Recently(t *testing.T) {
+	now := time.Now()
+	result := parseTimeRange("最近的聊天")
+	diff := now.Sub(result)
+	if diff < 2*24*time.Hour || diff > 4*24*time.Hour {
+		t.Errorf("expected ~3 days ago, got %v ago", diff)
+	}
+}
+
 func TestExtractNameFromText(t *testing.T) {
 	tests := []struct {
 		text string
@@ -111,6 +168,15 @@ func TestExtractNameFromText(t *testing.T) {
 		// Regression: standalone 用/再 must NOT split inside words
 		{"总结 昨天跟 maxwell 的聊天并用 note 发给他", "maxwell"},
 		{"总结 昨天跟 Maxwell Huang 的聊天并用 note 发给他", "maxwell huang"},
+		// Time word stripping (multilingual)
+		{"总结我和 Maxwell 上周的聊天", "maxwell"},
+		{"总结我和 Maxwell 上星期的聊天", "maxwell"},
+		{"总结 Maxwell 这周的消息", "maxwell"},
+		{"总结 Maxwell 上个月的聊天", "maxwell"},
+		{"summarize my chat with John last week", "john"},
+		{"summarize chat with Alice last month", "alice"},
+		{"先週のMaxwellとのチャットを要約して", "maxwell"},
+		{"지난주 maxwell 과의 채팅 요약", "maxwell"},
 	}
 	for _, tt := range tests {
 		got := extractNameFromText(tt.text)
