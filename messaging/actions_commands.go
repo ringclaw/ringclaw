@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
@@ -91,6 +92,9 @@ func taskList(ctx context.Context, client *ringcentral.Client, chatID string) st
 	if len(list.Records) == 0 {
 		return "No tasks found in this chat."
 	}
+	sort.Slice(list.Records, func(i, j int) bool {
+		return list.Records[i].CreationTime > list.Records[j].CreationTime
+	})
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**Tasks** (%d)\n", len(list.Records)))
 	for _, t := range list.Records {
@@ -226,6 +230,9 @@ func noteList(ctx context.Context, client *ringcentral.Client, chatID string) st
 	if len(list.Records) == 0 {
 		return "No notes found in this chat."
 	}
+	sort.Slice(list.Records, func(i, j int) bool {
+		return list.Records[i].LastModifiedTime > list.Records[j].LastModifiedTime
+	})
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**Notes** (%d)\n", len(list.Records)))
 	for _, n := range list.Records {
@@ -352,6 +359,9 @@ func eventList(ctx context.Context, client *ringcentral.Client) string {
 	if len(list.Records) == 0 {
 		return "No events found."
 	}
+	sort.Slice(list.Records, func(i, j int) bool {
+		return list.Records[i].StartTime > list.Records[j].StartTime
+	})
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**Events** (%d)\n", len(list.Records)))
 	for _, e := range list.Records {
@@ -373,6 +383,9 @@ func eventListGroup(ctx context.Context, client *ringcentral.Client, groupID str
 	if len(list.Records) == 0 {
 		return fmt.Sprintf("No events found in chat `%s`.", groupID)
 	}
+	sort.Slice(list.Records, func(i, j int) bool {
+		return list.Records[i].StartTime > list.Records[j].StartTime
+	})
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**Events in chat %s** (%d)\n", groupID, len(list.Records)))
 	for _, e := range list.Records {

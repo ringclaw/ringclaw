@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
@@ -41,6 +42,9 @@ var noteListCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("list notes failed: %w", err)
 		}
+		sort.Slice(list.Records, func(i, j int) bool {
+			return list.Records[i].LastModifiedTime > list.Records[j].LastModifiedTime
+		})
 		if jsonOutput {
 			printJSON(list)
 		} else {

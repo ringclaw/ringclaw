@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
@@ -40,6 +41,9 @@ var eventListCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("list group events failed: %w", err)
 			}
+			sort.Slice(list.Records, func(i, j int) bool {
+				return list.Records[i].StartTime > list.Records[j].StartTime
+			})
 			if jsonOutput {
 				printJSON(list)
 			} else {
@@ -55,6 +59,9 @@ var eventListCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("list events failed: %w", err)
 		}
+		sort.Slice(list.Records, func(i, j int) bool {
+			return list.Records[i].StartTime > list.Records[j].StartTime
+		})
 		if jsonOutput {
 			printJSON(list)
 		} else {
