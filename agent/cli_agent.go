@@ -112,13 +112,17 @@ func (a *CLIAgent) Chat(ctx context.Context, conversationID string, message stri
 	}
 }
 
-// ChatWithImages saves images to temp files and passes them via --image flag (claude only).
-func (a *CLIAgent) ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error) {
-	if a.name != "claude" || len(images) == 0 {
-		if len(images) > 0 {
-			message += fmt.Sprintf("\n\n[Note: %d image(s) were attached but this agent does not support image input.]", len(images))
-		}
-		return a.Chat(ctx, conversationID, message)
+// ClaudeCLIAgent wraps CLIAgent with image support via --image flag.
+// Only claude CLI supports images; other CLI agents use the base CLIAgent
+// which does not implement ImageSupporter, so handler falls back to text.
+type ClaudeCLIAgent struct {
+	*CLIAgent
+}
+
+// ChatWithImages saves images to temp files and passes them via --image flag.
+func (c *ClaudeCLIAgent) ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error) {
+	if len(images) == 0 {
+		return c.Chat(ctx, conversationID, message)
 	}
 
 	var tmpFiles []string
@@ -153,7 +157,7 @@ func (a *CLIAgent) ChatWithImages(ctx context.Context, conversationID string, me
 		tmpFiles = append(tmpFiles, f.Name())
 	}
 
-	return a.chatClaudeWithImages(ctx, conversationID, message, tmpFiles)
+	return c.chatClaudeWithImages(ctx, conversationID, message, tmpFiles)
 }
 
 // chatClaudeWithImages is like chatClaude but passes image file paths via --image flags.
