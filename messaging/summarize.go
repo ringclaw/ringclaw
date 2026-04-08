@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -429,6 +430,69 @@ var (
 	rePunctSpace = regexp.MustCompile(`[，。！？,\.!\?\s]+`)
 )
 
+// timeRule maps multilingual keywords to a time resolver.
+type timeRule struct {
+	keywords []string
+	resolve  func(now time.Time) time.Time
+}
+
+var timeRules = []timeRule{
+	{
+		keywords: []string{"上周", "上星期", "last week", "先週", "지난주"},
+		resolve: func(now time.Time) time.Time {
+			wd := int(now.Weekday())
+			if wd == 0 {
+				wd = 7
+			}
+			d := now.AddDate(0, 0, -(wd - 1 + 7))
+			return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
+		},
+	},
+	{
+		keywords: []string{"本周", "这周", "这星期", "this week", "今週", "이번주"},
+		resolve: func(now time.Time) time.Time {
+			wd := int(now.Weekday())
+			if wd == 0 {
+				wd = 7
+			}
+			d := now.AddDate(0, 0, -(wd - 1))
+			return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
+		},
+	},
+	{
+		keywords: []string{"上个月", "上月", "last month", "先月", "지난달"},
+		resolve: func(now time.Time) time.Time {
+			return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, -1, 0)
+		},
+	},
+	{
+		keywords: []string{"本月", "这个月", "this month", "今月", "이번달"},
+		resolve: func(now time.Time) time.Time {
+			return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		},
+	},
+	{
+		keywords: []string{"前天", "day before yesterday", "一昨日", "그저께", "avant-hier", "anteayer", "vorgestern"},
+		resolve: func(now time.Time) time.Time {
+			d := now.AddDate(0, 0, -2)
+			return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
+		},
+	},
+	{
+		keywords: []string{"昨天", "yesterday", "昨日"},
+		resolve: func(now time.Time) time.Time {
+			d := now.AddDate(0, 0, -1)
+			return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
+		},
+	},
+	{
+		keywords: []string{"这几天", "近期", "最近", "recently", "past few days"},
+		resolve: func(now time.Time) time.Time {
+			return now.AddDate(0, 0, -3)
+		},
+	},
+}
+
 func parseTimeRange(text string) time.Time {
 	lower := strings.ToLower(text)
 	now := time.Now()
@@ -446,49 +510,12 @@ func parseTimeRange(text string) time.Time {
 		}
 	}
 
-	if containsAny(lower, "上周", "上星期", "last week", "先週", "지난주") {
-		weekday := int(now.Weekday())
-		if weekday == 0 {
-			weekday = 7
+	for _, r := range timeRules {
+		if containsAny(lower, r.keywords...) {
+			return r.resolve(now)
 		}
-		lastMonday := now.AddDate(0, 0, -(weekday - 1 + 7))
-		return time.Date(lastMonday.Year(), lastMonday.Month(), lastMonday.Day(), 0, 0, 0, 0, now.Location())
 	}
 
-	if containsAny(lower, "本周", "这周", "这星期", "this week", "今週", "이번주") {
-		weekday := int(now.Weekday())
-		if weekday == 0 {
-			weekday = 7
-		}
-		monday := now.AddDate(0, 0, -(weekday - 1))
-		return time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, now.Location())
-	}
-
-	if containsAny(lower, "上个月", "上月", "last month", "先月", "지난달") {
-		firstOfThisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		firstOfLastMonth := firstOfThisMonth.AddDate(0, -1, 0)
-		return firstOfLastMonth
-	}
-
-	if containsAny(lower, "本月", "这个月", "this month", "今月", "이번달") {
-		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	}
-
-	if containsAny(lower, "前天", "day before yesterday", "一昨日", "그저께", "avant-hier", "anteayer", "vorgestern") {
-		d := now.AddDate(0, 0, -2)
-		return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
-	}
-
-	if containsAny(lower, "昨天", "yesterday", "昨日") {
-		y := now.AddDate(0, 0, -1)
-		return time.Date(y.Year(), y.Month(), y.Day(), 0, 0, 0, 0, now.Location())
-	}
-
-	if containsAny(lower, "这几天", "近期", "最近", "recently", "past few days") {
-		return now.AddDate(0, 0, -3)
-	}
-
-	// Default: today
 	return todayStart()
 }
 
@@ -514,6 +541,50 @@ func containsAny(s string, keywords ...string) bool {
 	}
 	return false
 }
+
+// flattenLang merges all values from a lang→words map into a single slice,
+// sorted by length descending so longer phrases are replaced first.
+func flattenLang(m map[string][]string) []string {
+	var all []string
+	for _, words := range m {
+		all = append(all, words...)
+	}
+	sort.Slice(all, func(i, j int) bool { return len(all[i]) > len(all[j]) })
+	return all
+}
+
+// --- Word lists for extractNameFromText (grouped by language) ---
+
+var timeWords = flattenLang(map[string][]string{
+	"zh": {"上星期", "这星期", "上个月", "这段时间", "这几天",
+		"上周", "这周", "上月", "本月", "前天", "近期",
+		"今天", "昨天", "本周", "最近", "过去"},
+	"en": {"last week", "last month", "this week", "this month", "past week", "past month",
+		"today", "yesterday", "recently", "last"},
+	"ja": {"一昨日", "先週", "今週", "先月", "今月", "最近"},
+	"ko": {"지난주", "이번주", "지난달", "이번달", "그저께", "최근"},
+	"fr": {"la semaine dernière", "cette semaine", "le mois dernier", "ce mois", "avant-hier", "récemment"},
+	"es": {"la semana pasada", "esta semana", "el mes pasado", "este mes", "anteayer", "recientemente"},
+	"de": {"letzte woche", "diese woche", "letzten monat", "diesen monat", "vorgestern", "kürzlich"},
+	"ru": {"на прошлой неделе", "на этой неделе", "в прошлом месяце", "в этом месяце", "позавчера", "недавно"},
+})
+
+var cjkFillers = flattenLang(map[string][]string{
+	"zh": {"一下", "下", "的", "消息", "聊天", "对话", "群聊", "群",
+		"跟", "和", "与", "我", "了",
+		"发给", "发送", "发到", "给", "他", "她", "它", "他们",
+		"笔记", "任务", "日程"},
+	"ja": {"チャット", "会話", "メッセージ", "要約して", "要約", "まとめて", "まとめ",
+		"の", "と", "を", "は", "が", "で", "に", "へ"},
+	"ko": {"과의", "와의", "과", "와", "의", "을", "를", "에서",
+		"채팅", "대화", "메시지", "요약"},
+})
+
+var enFillers = flattenLang(map[string][]string{
+	"en": {"messages", "chat", "conversation", "with", "my", "the", "of", "a",
+		"send", "to", "him", "her", "them",
+		"note", "task", "event"},
+})
 
 var reMention = regexp.MustCompile(`!\[:\w+\]\(\d+\)`)
 
@@ -546,54 +617,13 @@ func extractNameFromText(text string) string {
 
 	// Lowercase for filler removal
 	clean = strings.ToLower(clean)
-	// Remove time keywords (multi-word phrases first, then single words)
-	for _, kw := range []string{
-		// Multi-word phrases (must come before single-word removal)
-		// French
-		"la semaine dernière", "cette semaine", "le mois dernier", "ce mois", "avant-hier", "récemment",
-		// Spanish
-		"la semana pasada", "esta semana", "el mes pasado", "este mes", "anteayer", "recientemente",
-		// German
-		"letzte woche", "diese woche", "letzten monat", "diesen monat", "vorgestern", "kürzlich",
-		// Russian
-		"на прошлой неделе", "на этой неделе", "в прошлом месяце", "в этом месяце", "позавчера", "недавно",
-		// English multi-word
-		"last week", "last month", "this week", "this month", "past week", "past month",
-		// Chinese
-		"上星期", "这星期", "上个月", "这段时间", "这几天",
-		"上周", "这周", "上月", "本月", "前天", "近期",
-		"今天", "昨天", "本周", "最近", "过去",
-		// Japanese
-		"一昨日", "先週", "今週", "先月", "今月", "最近",
-		// Korean
-		"지난주", "이번주", "지난달", "이번달", "그저께", "최근",
-		// English single-word
-		"today", "yesterday", "recently", "last",
-	} {
+	for _, kw := range timeWords {
 		clean = strings.ReplaceAll(clean, kw, "")
 	}
-	// Remove CJK filler words (safe for substring removal — no Latin overlap)
-	for _, kw := range []string{
-		// Chinese
-		"一下", "下", "的", "消息", "聊天", "对话", "群聊", "群",
-		"跟", "和", "与", "我", "了",
-		"发给", "发送", "发到", "给", "他", "她", "它", "他们",
-		"笔记", "任务", "日程",
-		// Japanese
-		"の", "と", "を", "は", "が", "で", "に", "へ",
-		"チャット", "会話", "メッセージ", "要約して", "要約", "まとめて", "まとめ",
-		// Korean
-		"과의", "와의", "과", "와", "의", "을", "를", "에서",
-		"채팅", "대화", "메시지", "요약",
-	} {
+	for _, kw := range cjkFillers {
 		clean = strings.ReplaceAll(clean, kw, "")
 	}
-	// Remove English filler words (whole-word only to avoid stripping letters from names)
-	clean = removeWholeWords(clean, []string{
-		"messages", "chat", "conversation", "with", "my", "the", "of", "a",
-		"send", "to", "him", "her", "them",
-		"note", "task", "event",
-	})
+	clean = removeWholeWords(clean, enFillers)
 	// Remove digits
 	clean = reDigits.ReplaceAllString(clean, "")
 	// Remove punctuation and collapse whitespace
