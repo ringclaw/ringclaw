@@ -256,9 +256,6 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 
 	slog.Info("initialized", "component", "acp", "pid", pid, "result", string(result))
 
-	// Send "initialized" notification (no id = notification per JSON-RPC)
-	a.notify("initialized", nil)
-
 	return nil
 }
 

@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
@@ -35,16 +37,27 @@ var eventListCmd = &cobra.Command{
 		ctx, cancel := notifyContext(context.Background())
 		defer cancel()
 
+		cutoff := time.Now().AddDate(0, -3, 0).Format(time.RFC3339)
 		if len(args) == 1 {
 			list, err := client.ListGroupEvents(ctx, args[0])
 			if err != nil {
 				return fmt.Errorf("list group events failed: %w", err)
 			}
+			filtered := list.Records[:0]
+			for _, e := range list.Records {
+				if e.StartTime >= cutoff {
+					filtered = append(filtered, e)
+				}
+			}
+			sort.Slice(filtered, func(i, j int) bool {
+				return filtered[i].StartTime > filtered[j].StartTime
+			})
+			list.Records = filtered
 			if jsonOutput {
 				printJSON(list)
 			} else {
-				fmt.Printf("Events in %s (%d)\n", args[0], len(list.Records))
-				for _, e := range list.Records {
+				fmt.Printf("Events in %s (%d)\n", args[0], len(filtered))
+				for _, e := range filtered {
 					printEvent(&e)
 				}
 			}
@@ -55,11 +68,21 @@ var eventListCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("list events failed: %w", err)
 		}
+		filtered := list.Records[:0]
+		for _, e := range list.Records {
+			if e.StartTime >= cutoff {
+				filtered = append(filtered, e)
+			}
+		}
+		sort.Slice(filtered, func(i, j int) bool {
+			return filtered[i].StartTime > filtered[j].StartTime
+		})
+		list.Records = filtered
 		if jsonOutput {
 			printJSON(list)
 		} else {
-			fmt.Printf("Events (%d)\n", len(list.Records))
-			for _, e := range list.Records {
+			fmt.Printf("Events (%d)\n", len(filtered))
+			for _, e := range filtered {
 				printEvent(&e)
 			}
 		}

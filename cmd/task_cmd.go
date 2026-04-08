@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
@@ -40,11 +42,22 @@ var taskListCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("list tasks failed: %w", err)
 		}
+		cutoff := time.Now().AddDate(0, -3, 0).Format(time.RFC3339)
+		filtered := list.Records[:0]
+		for _, t := range list.Records {
+			if t.CreationTime >= cutoff {
+				filtered = append(filtered, t)
+			}
+		}
+		sort.Slice(filtered, func(i, j int) bool {
+			return filtered[i].CreationTime > filtered[j].CreationTime
+		})
+		list.Records = filtered
 		if jsonOutput {
 			printJSON(list)
 		} else {
-			fmt.Printf("Tasks (%d)\n", len(list.Records))
-			for _, t := range list.Records {
+			fmt.Printf("Tasks (%d)\n", len(filtered))
+			for _, t := range filtered {
 				fmt.Printf("  [%s] %s  %s\n", t.Status, t.ID, t.Subject)
 			}
 		}

@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
+
+func recentCutoff() string {
+	return time.Now().AddDate(0, -3, 0).Format(time.RFC3339)
+}
 
 // IsActionCommand checks if text starts with /task, /note, or /event.
 func IsActionCommand(text string) bool {
@@ -88,12 +94,22 @@ func taskList(ctx context.Context, client *ringcentral.Client, chatID string) st
 		slog.Error("list tasks failed", "error", err)
 		return fmt.Sprintf("Error: %v", err)
 	}
-	if len(list.Records) == 0 {
-		return "No tasks found in this chat."
-	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**Tasks** (%d)\n", len(list.Records)))
+	cutoff := recentCutoff()
+	filtered := list.Records[:0]
 	for _, t := range list.Records {
+		if t.CreationTime >= cutoff {
+			filtered = append(filtered, t)
+		}
+	}
+	if len(filtered) == 0 {
+		return "No tasks found in this chat (last 3 months)."
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].CreationTime > filtered[j].CreationTime
+	})
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**Tasks** (%d)\n", len(filtered)))
+	for _, t := range filtered {
 		status := statusEmoji(t.Status)
 		due := ""
 		if t.DueDate != "" {
@@ -223,12 +239,22 @@ func noteList(ctx context.Context, client *ringcentral.Client, chatID string) st
 		slog.Error("list notes failed", "error", err)
 		return fmt.Sprintf("Error: %v", err)
 	}
-	if len(list.Records) == 0 {
-		return "No notes found in this chat."
-	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**Notes** (%d)\n", len(list.Records)))
+	cutoff := recentCutoff()
+	filtered := list.Records[:0]
 	for _, n := range list.Records {
+		if n.CreationTime >= cutoff {
+			filtered = append(filtered, n)
+		}
+	}
+	if len(filtered) == 0 {
+		return "No notes found in this chat (last 3 months)."
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].CreationTime > filtered[j].CreationTime
+	})
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**Notes** (%d)\n", len(filtered)))
+	for _, n := range filtered {
 		preview := n.Preview
 		if len(preview) > 60 {
 			preview = preview[:60] + "..."
@@ -349,12 +375,22 @@ func eventList(ctx context.Context, client *ringcentral.Client) string {
 		slog.Error("list events failed", "error", err)
 		return fmt.Sprintf("Error: %v", err)
 	}
-	if len(list.Records) == 0 {
-		return "No events found."
-	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**Events** (%d)\n", len(list.Records)))
+	cutoff := recentCutoff()
+	filtered := list.Records[:0]
 	for _, e := range list.Records {
+		if e.StartTime >= cutoff {
+			filtered = append(filtered, e)
+		}
+	}
+	if len(filtered) == 0 {
+		return "No events found (last 3 months)."
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].StartTime > filtered[j].StartTime
+	})
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**Events** (%d)\n", len(filtered)))
+	for _, e := range filtered {
 		start := ""
 		if len(e.StartTime) >= 16 {
 			start = e.StartTime[:16]
@@ -370,11 +406,21 @@ func eventListGroup(ctx context.Context, client *ringcentral.Client, groupID str
 		slog.Error("list group events failed", "error", err)
 		return fmt.Sprintf("Error: %v", err)
 	}
-	if len(list.Records) == 0 {
-		return fmt.Sprintf("No events found in chat `%s`.", groupID)
+	cutoff := recentCutoff()
+	filtered := list.Records[:0]
+	for _, e := range list.Records {
+		if e.StartTime >= cutoff {
+			filtered = append(filtered, e)
+		}
 	}
+	if len(filtered) == 0 {
+		return fmt.Sprintf("No events found in chat `%s` (last 3 months).", groupID)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].StartTime > filtered[j].StartTime
+	})
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**Events in chat %s** (%d)\n", groupID, len(list.Records)))
+	sb.WriteString(fmt.Sprintf("**Events in chat %s** (%d)\n", groupID, len(filtered)))
 	for _, e := range list.Records {
 		start := ""
 		if len(e.StartTime) >= 16 {

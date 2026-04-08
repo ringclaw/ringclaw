@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
@@ -41,11 +43,22 @@ var noteListCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("list notes failed: %w", err)
 		}
+		cutoff := time.Now().AddDate(0, -3, 0).Format(time.RFC3339)
+		filtered := list.Records[:0]
+		for _, n := range list.Records {
+			if n.CreationTime >= cutoff {
+				filtered = append(filtered, n)
+			}
+		}
+		sort.Slice(filtered, func(i, j int) bool {
+			return filtered[i].CreationTime > filtered[j].CreationTime
+		})
+		list.Records = filtered
 		if jsonOutput {
 			printJSON(list)
 		} else {
-			fmt.Printf("Notes (%d)\n", len(list.Records))
-			for _, n := range list.Records {
+			fmt.Printf("Notes (%d)\n", len(filtered))
+			for _, n := range filtered {
 				fmt.Printf("  %s  [%s]  %s\n", n.ID, n.Status, n.Title)
 			}
 		}

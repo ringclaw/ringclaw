@@ -44,7 +44,7 @@ func TestHandleActionCommand_TaskList(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"records": []map[string]string{{"id": "t1", "subject": "Buy milk", "status": "Pending"}},
+			"records": []map[string]string{{"id": "t1", "subject": "Buy milk", "status": "Pending", "creationTime": time.Now().Format(time.RFC3339)}},
 		})
 	})
 	defer srv.Close()
