@@ -115,10 +115,10 @@ type promptParams struct {
 }
 
 type promptEntry struct {
-	Type      string `json:"type"`                // "text" or "image"
-	Text      string `json:"text,omitempty"`
-	Data      string `json:"data,omitempty"`       // base64 encoded image data
-	MediaType string `json:"mediaType,omitempty"`  // e.g. "image/png"
+	Type     string `json:"type"`               // "text" or "image"
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`      // base64 encoded image data
+	MimeType string `json:"mimeType,omitempty"`  // e.g. "image/png" (ACP spec)
 }
 
 type promptResult struct {
@@ -343,7 +343,7 @@ func (a *ACPAgent) ChatWithImages(ctx context.Context, conversationID string, me
 		entries = append(entries, promptEntry{
 			Type:      "image",
 			Data:      base64.StdEncoding.EncodeToString(img.Data),
-			MediaType: img.MediaType,
+			MimeType: img.MediaType,
 		})
 	}
 	return a.chatWithEntries(ctx, conversationID, entries)
