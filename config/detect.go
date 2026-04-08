@@ -61,8 +61,25 @@ func DetectAndConfigure(cfg *Config) bool {
 	modified := false
 
 	for _, candidate := range agentCandidates {
-		// Skip if this agent name is already configured
-		if _, exists := cfg.Agents[candidate.Name]; exists {
+		existing, exists := cfg.Agents[candidate.Name]
+
+		if exists {
+			// Try to upgrade non-ACP agents to ACP if a higher-priority ACP binary is available
+			if existing.Type == "acp" || candidate.Type != "acp" {
+				continue
+			}
+			path, err := lookPath(candidate.Binary)
+			if err != nil {
+				continue
+			}
+			slog.Info("upgrading agent to ACP", "component", "config", "name", candidate.Name, "from", existing.Type, "path", path)
+			cfg.Agents[candidate.Name] = AgentConfig{
+				Type:    "acp",
+				Command: path,
+				Args:    candidate.Args,
+				Model:   existing.Model,
+			}
+			modified = true
 			continue
 		}
 
