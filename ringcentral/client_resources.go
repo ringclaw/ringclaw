@@ -10,7 +10,7 @@ import (
 )
 
 func (c *Client) ListTasks(ctx context.Context, chatID string) (*TaskList, error) {
-	path := fmt.Sprintf("/team-messaging/v1/chats/%s/tasks?recordCount=50", chatID)
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/tasks?recordCount=250", chatID)
 	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
 		return nil, err
@@ -80,7 +80,7 @@ func (c *Client) CompleteTask(ctx context.Context, taskID string) error {
 // --- Note CRUD ---
 
 func (c *Client) ListNotes(ctx context.Context, chatID string) (*NoteList, error) {
-	path := fmt.Sprintf("/team-messaging/v1/chats/%s/notes?recordCount=50", chatID)
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/notes?recordCount=250", chatID)
 	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func (c *Client) PublishNote(ctx context.Context, noteID string) error {
 // --- Event CRUD ---
 
 func (c *Client) ListEvents(ctx context.Context) (*EventList, error) {
-	resp, err := c.doRequest(ctx, http.MethodGet, "/team-messaging/v1/events?recordCount=50", "", nil)
+	resp, err := c.doRequest(ctx, http.MethodGet, "/team-messaging/v1/events?recordCount=250", "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +337,7 @@ func (c *Client) ListRecentChats(ctx context.Context, chatType string, recordCou
 
 // ListGroupEvents returns calendar events for a specific chat/group.
 func (c *Client) ListGroupEvents(ctx context.Context, groupID string) (*EventList, error) {
-	path := fmt.Sprintf("/team-messaging/v1/groups/%s/events", groupID)
+	path := fmt.Sprintf("/team-messaging/v1/groups/%s/events?recordCount=250", groupID)
 	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
 		return nil, err
