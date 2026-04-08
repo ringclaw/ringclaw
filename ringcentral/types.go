@@ -25,6 +25,7 @@ type Attachment struct {
 	ContentURI string `json:"contentUri"`
 	Name       string `json:"name"`
 	Type       string `json:"type"`
+	MediaType  string `json:"mediaType"`
 }
 
 // Mention represents a mention in a post.

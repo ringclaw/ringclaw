@@ -122,10 +122,8 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 	if a.systemPrompt != "" {
 		args = append(args, "--append-system-prompt", a.systemPrompt)
 	}
-	// Append extra args from config (e.g. --dangerously-skip-permissions)
 	args = append(args, a.args...)
 
-	// Resume existing session for multi-turn conversation
 	a.mu.Lock()
 	sessionID, hasSession := a.sessions[conversationID]
 	a.mu.Unlock()
@@ -162,13 +160,12 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 
 	slog.Info("spawned process", "component", "cli", "command", a.command, "pid", cmd.Process.Pid, "conversation", conversationID)
 
-	// Parse streaming JSON events
 	var result string
 	var newSessionID string
 	var assistantTexts []string
 
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB buffer for large responses
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -181,7 +178,6 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 			continue
 		}
 
-		// Capture session ID from any event
 		if event.SessionID != "" {
 			newSessionID = event.SessionID
 		}
@@ -193,8 +189,6 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 			}
 			result = event.Result
 		case "assistant":
-			// Newer claude CLI versions send text in assistant events
-			// instead of the result event's result field.
 			if event.Message != nil {
 				for _, c := range event.Message.Content {
 					if c.Type == "text" && c.Text != "" {
@@ -205,7 +199,6 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 		}
 	}
 
-	// If the result event had an empty result, fall back to accumulated assistant texts.
 	if result == "" && len(assistantTexts) > 0 {
 		result = strings.Join(assistantTexts, "")
 	}
@@ -218,12 +211,10 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 			}
 			return "", fmt.Errorf("%s exited with error: %w", a.name, err)
 		}
-		// If we got a result but exit code is non-zero (e.g. hook failures), still return the result
 	}
 
 	slog.Info("process exited", "component", "cli", "command", a.command, "pid", cmd.Process.Pid)
 
-	// Save session ID for multi-turn conversation
 	if newSessionID != "" {
 		a.mu.Lock()
 		a.sessions[conversationID] = newSessionID

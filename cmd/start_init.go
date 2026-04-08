@@ -219,7 +219,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 		slog.Info("started ACP agent", "component", "agent", "name", name, "command", agCfg.Command, "type", agCfg.Type, "model", agCfg.Model)
 		return ag
 	case "cli":
-		ag := agent.NewCLIAgent(agent.CLIAgentConfig{
+		cli := agent.NewCLIAgent(agent.CLIAgentConfig{
 			Name:         name,
 			Command:      agCfg.Command,
 			Args:         agCfg.Args,
@@ -229,7 +229,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			SystemPrompt: agCfg.SystemPrompt,
 		})
 		slog.Info("created CLI agent", "component", "agent", "name", name, "command", agCfg.Command, "type", agCfg.Type, "model", agCfg.Model)
-		return ag
+		return cli
 	case "http":
 		if agCfg.Endpoint == "" {
 			slog.Warn("HTTP agent has no endpoint", "component", "agent", "name", name)

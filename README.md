@@ -34,6 +34,7 @@ On first start, RingClaw auto-detects installed AI agents and saves config to `~
 - **Proactive Messaging** — CLI and HTTP API for sending messages and media. [→ Media & API](https://ringclaw.github.io/ringclaw/features/media.html)
 - **Security** — API token auth, Host validation, ACP write permissions, credential redaction. [→ Security](https://ringclaw.github.io/ringclaw/security/)
 - **Full CLI** — manage messages, chats, tasks, notes, events, cards, users, files from the command line. [→ CLI](https://ringclaw.github.io/ringclaw/guide/commands.html#cli-command-map)
+- **Image Analysis** — send images to the bot for AI-powered visual analysis (ACP agents). [→ Image Analysis](https://ringclaw.github.io/ringclaw/features/image-analysis.html)
 - **Docker & systemd** — background mode, auto-start on boot. [→ Deployment](https://ringclaw.github.io/ringclaw/deployment/background.html)
 
 ## How It Works

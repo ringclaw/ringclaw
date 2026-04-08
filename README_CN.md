@@ -34,6 +34,7 @@ ringclaw start
 - **主动推送** — CLI 和 HTTP API 发送消息和媒体文件。[→ 媒体 & API](https://ringclaw.github.io/ringclaw/zh/features/media.html)
 - **安全加固** — API Token 认证、Host 验证、ACP 写权限控制、凭证脱敏。[→ 安全](https://ringclaw.github.io/ringclaw/zh/security/)
 - **完整 CLI** — 命令行管理消息、聊天、任务、笔记、日程、卡片、用户、文件。[→ CLI](https://ringclaw.github.io/ringclaw/zh/guide/commands.html#cli)
+- **图片解析** — 发送图片给 Bot，AI 自动分析图片内容（仅 ACP 模式）。[→ 图片解析](https://ringclaw.github.io/ringclaw/zh/features/image-analysis.html)
 - **Docker & systemd** — 后台运行，开机自启。[→ 部署](https://ringclaw.github.io/ringclaw/zh/deployment/background.html)
 
 ## 工作原理
