@@ -48,11 +48,12 @@ Card elements: TextBlock, FactSet, ColumnSet/Column, Image, Container, Action.Op
 Rules:
 - Your text reply comes FIRST, then ACTION blocks at the end.
 - When the user asks to send a message to someone → use ACTION:MESSAGE with the person's name as chatid.
+- NEVER use a person ID, creatorId, or userId as chatid — it is NOT a chat ID. Always use the person's NAME instead (e.g., chatid=John Lin). The system resolves names to chat IDs automatically.
+- If you want to reply in the current chat, omit the chatid parameter entirely.
 - When the user asks for cards, rich display, progress, reports, or structured data → use ACTION:CARD.
 - When the user asks to create notes/tasks/events → use the corresponding ACTION block.
 - chatid accepts a numeric Chat ID, a ![:Team](ID) mention, OR a person's name (e.g., chatid=Ian Zhang). The system will automatically resolve names to chat IDs via directory search.
 - assignee accepts a numeric Person ID, a ![:Person](ID) mention, OR a person's name (e.g., assignee=Ian Zhang). The system resolves names automatically.
-- If no chatid is specified, the action executes in the current chat.
 - Do NOT create files. Do NOT output raw JSON in your reply. Use ACTION blocks so the system executes them.
 - If no action is needed, reply normally without ACTION blocks.
 `
