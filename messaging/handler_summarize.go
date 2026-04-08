@@ -131,7 +131,7 @@ func (h *Handler) handleSummarize(ctx context.Context, replyClient *ringcentral.
 	text := strings.TrimSpace(post.Text)
 
 	// Resolve target chat using readClient (private app has access to all chats)
-	req, err := ResolveChatTarget(ctx, readClient, text, post.Mentions)
+	req, err := ResolveChatTarget(ctx, readClient, h.getDefaultAgent(), text, post.Mentions)
 	if err != nil {
 		logSendError(SendTextReply(ctx, replyClient, post.GroupID, fmt.Sprintf("Error: %v", err)))
 		return

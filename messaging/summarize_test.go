@@ -9,8 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
+
+type nameExtractorAgent struct {
+	reply string
+}
+
+func (m *nameExtractorAgent) Chat(_ context.Context, _, _ string) (string, error) {
+	return m.reply, nil
+}
+func (m *nameExtractorAgent) ResetSession(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (m *nameExtractorAgent) SetCwd(_ string)          {}
+func (m *nameExtractorAgent) Info() agent.AgentInfo     { return agent.AgentInfo{Name: "mock"} }
 
 func TestIsSummarizeCommand(t *testing.T) {
 	tests := []struct {
@@ -182,6 +196,26 @@ func TestExtractNameFromText(t *testing.T) {
 		got := extractNameFromText(tt.text)
 		if got != tt.want {
 			t.Errorf("extractNameFromText(%q) = %q, want %q", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestExtractNameViaAgent(t *testing.T) {
+	tests := []struct {
+		reply string
+		want  string
+	}{
+		{"John Lin", "john lin"},
+		{`"Maxwell Huang"`, "maxwell huang"},
+		{"NONE", ""},
+		{"", ""},
+		{"  Alice  ", "alice"},
+	}
+	for _, tt := range tests {
+		ag := &nameExtractorAgent{reply: tt.reply}
+		got := extractNameViaAgent(context.Background(), ag, "dummy")
+		if got != tt.want {
+			t.Errorf("extractNameViaAgent(reply=%q) = %q, want %q", tt.reply, got, tt.want)
 		}
 	}
 }
