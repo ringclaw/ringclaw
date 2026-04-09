@@ -290,6 +290,16 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
+	// Strip bot mention prefix (e.g. "![:Person](12345) /help" -> "/help")
+	if botID := client.OwnerID(); botID != "" {
+		prefix := "![:Person](" + botID + ")"
+		if strings.HasPrefix(text, prefix) {
+			text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+			// Also strip leading comma/colon that users sometimes add after mention
+			text = strings.TrimSpace(strings.TrimLeft(text, ",:"))
+		}
+	}
+
 	// Deduplicate by post ID to avoid processing the same message multiple times
 	if post.ID != "" {
 		if _, loaded := h.seenMsgs.LoadOrStore(post.ID, time.Now()); loaded {
