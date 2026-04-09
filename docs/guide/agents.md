@@ -20,7 +20,7 @@ CLI mode spawns a new process per message with **no multi-turn context** — eac
 
 | Agent | ACP Command | Install |
 |-------|-------------|---------|
-| Claude | `claude-agent-acp` | `npm i -g @zed-industries/claude-agent-acp` |
+| Claude | `claude-agent-acp` | `npm i -g @agentclientprotocol/claude-agent-acp` |
 | Codex | `codex-acp` | `npm i -g @zed-industries/codex-acp` |
 | Cursor | `cursor-agent acp` | Built into Cursor CLI |
 | Gemini | `gemini --acp` | Built into Gemini CLI |

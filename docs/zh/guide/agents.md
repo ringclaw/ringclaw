@@ -20,7 +20,7 @@ CLI 模式每条消息启动新进程，**没有多轮上下文**——每条消
 
 | Agent | ACP 命令 | 安装方式 |
 |-------|---------|---------|
-| Claude | `claude-agent-acp` | `npm i -g @zed-industries/claude-agent-acp` |
+| Claude | `claude-agent-acp` | `npm i -g @agentclientprotocol/claude-agent-acp` |
 | Codex | `codex-acp` | `npm i -g @zed-industries/codex-acp` |
 | Cursor | `cursor-agent acp` | Cursor CLI 内置 |
 | Gemini | `gemini --acp` | Gemini CLI 内置 |

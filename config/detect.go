@@ -24,7 +24,7 @@ type agentCandidate struct {
 
 // acpInstallHints maps agent names to their ACP adapter install commands.
 var acpInstallHints = map[string]string{
-	"claude": "npm install -g @zed-industries/claude-agent-acp",
+	"claude": "npm install -g @agentclientprotocol/claude-agent-acp",
 	"codex":  "npm install -g @zed-industries/codex-acp",
 }
 
@@ -38,7 +38,7 @@ func ACPInstallHint(name string) string {
 var agentCandidates = []agentCandidate{
 	// claude: prefer standalone ACP binary, then npx, then CLI fallback
 	{Name: "claude", Binary: "claude-agent-acp", Type: "acp", Model: "sonnet"},
-	{Name: "claude", NpxPkg: "@zed-industries/claude-agent-acp", Type: "acp", Model: "sonnet"},
+	{Name: "claude", NpxPkg: "@agentclientprotocol/claude-agent-acp", Type: "acp", Model: "sonnet"},
 	{Name: "claude", Binary: "claude", Type: "cli", Model: "sonnet"},
 	// codex: prefer standalone ACP binary, then npx, then CLI fallback
 	{Name: "codex", Binary: "codex-acp", Type: "acp", Model: ""},
