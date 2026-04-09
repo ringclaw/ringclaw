@@ -16,19 +16,33 @@ import (
 type agentCandidate struct {
 	Name   string   // agent name (e.g. "claude", "codex")
 	Binary string   // binary to look up in PATH
+	NpxPkg string   // npm package for npx fallback (e.g. "@zed-industries/codex-acp")
 	Args   []string // extra args (e.g. ["acp"] for cursor)
 	Type   string   // "acp", "cli"
 	Model  string   // default model
 }
 
+// acpInstallHints maps agent names to their ACP adapter install commands.
+var acpInstallHints = map[string]string{
+	"claude": "npm install -g @zed-industries/claude-agent-acp",
+	"codex":  "npm install -g @zed-industries/codex-acp",
+}
+
+// ACPInstallHint returns the install command for an agent's ACP adapter, if any.
+func ACPInstallHint(name string) string {
+	return acpInstallHints[name]
+}
+
 // agentCandidates is ordered by priority: for each agent name, earlier entries
 // are preferred. E.g. claude ACP is tried before claude CLI.
 var agentCandidates = []agentCandidate{
-	// claude: prefer ACP, fallback to CLI
+	// claude: prefer standalone ACP binary, then npx, then CLI fallback
 	{Name: "claude", Binary: "claude-agent-acp", Type: "acp", Model: "sonnet"},
+	{Name: "claude", NpxPkg: "@zed-industries/claude-agent-acp", Type: "acp", Model: "sonnet"},
 	{Name: "claude", Binary: "claude", Type: "cli", Model: "sonnet"},
-	// codex: prefer ACP, fallback to CLI
+	// codex: prefer standalone ACP binary, then npx, then CLI fallback
 	{Name: "codex", Binary: "codex-acp", Type: "acp", Model: ""},
+	{Name: "codex", NpxPkg: "@zed-industries/codex-acp", Type: "acp", Model: ""},
 	{Name: "codex", Binary: "codex", Type: "cli", Model: ""},
 	// ACP-only agents
 	{Name: "cursor", Binary: "cursor-agent", Args: []string{"acp"}, Type: "acp", Model: ""},
@@ -63,36 +77,33 @@ func DetectAndConfigure(cfg *Config) bool {
 	for _, candidate := range agentCandidates {
 		existing, exists := cfg.Agents[candidate.Name]
 
+		// Resolve command path: either binary lookup or npx package
+		command, args := resolveCandidate(candidate)
+		if command == "" {
+			continue
+		}
+
 		if exists {
 			// Try to upgrade non-ACP agents to ACP if a higher-priority ACP binary is available
 			if existing.Type == "acp" || candidate.Type != "acp" {
 				continue
 			}
-			path, err := lookPath(candidate.Binary)
-			if err != nil {
-				continue
-			}
-			slog.Info("upgrading agent to ACP", "component", "config", "name", candidate.Name, "from", existing.Type, "path", path)
+			slog.Info("upgrading agent to ACP", "component", "config", "name", candidate.Name, "from", existing.Type, "command", command)
 			cfg.Agents[candidate.Name] = AgentConfig{
 				Type:    "acp",
-				Command: path,
-				Args:    candidate.Args,
+				Command: command,
+				Args:    args,
 				Model:   existing.Model,
 			}
 			modified = true
 			continue
 		}
 
-		path, err := lookPath(candidate.Binary)
-		if err != nil {
-			continue
-		}
-
-		slog.Info("auto-detected agent", "component", "config", "name", candidate.Name, "path", path, "type", candidate.Type)
+		slog.Info("auto-detected agent", "component", "config", "name", candidate.Name, "command", command, "type", candidate.Type)
 		cfg.Agents[candidate.Name] = AgentConfig{
 			Type:    candidate.Type,
-			Command: path,
-			Args:    candidate.Args,
+			Command: command,
+			Args:    args,
 			Model:   candidate.Model,
 		}
 		modified = true
@@ -228,6 +239,28 @@ func loadOpenclawGateway() (gwURL, gwToken, gwPassword string) {
 func agentExists(cfg *Config, name string) bool {
 	_, ok := cfg.Agents[name]
 	return ok
+}
+
+// resolveCandidate resolves a candidate to (command, args).
+// Returns ("", nil) if the candidate cannot be resolved.
+func resolveCandidate(c agentCandidate) (string, []string) {
+	if c.Binary != "" {
+		path, err := lookPath(c.Binary)
+		if err != nil {
+			return "", nil
+		}
+		return path, c.Args
+	}
+	if c.NpxPkg != "" {
+		npxPath, err := lookPath("npx")
+		if err != nil {
+			return "", nil
+		}
+		slog.Info("resolved agent via npx", "component", "config", "package", c.NpxPkg)
+		args := append([]string{"-y", c.NpxPkg}, c.Args...)
+		return npxPath, args
+	}
+	return "", nil
 }
 
 // lookPath finds a binary by name. It first tries exec.LookPath (fast, uses
