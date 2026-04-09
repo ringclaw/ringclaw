@@ -254,6 +254,12 @@ func resolveCandidate(c agentCandidate) (string, []string) {
 	if c.NpxPkg != "" {
 		npxPath, err := lookPath("npx")
 		if err != nil {
+			slog.Debug("npx not found, skipping npx-based agent", "component", "config", "package", c.NpxPkg)
+			return "", nil
+		}
+		// Verify Node.js is actually available (npx can exist without a working node)
+		if _, err := lookPath("node"); err != nil {
+			slog.Warn("npx found but node is not available, skipping", "component", "config", "package", c.NpxPkg)
 			return "", nil
 		}
 		slog.Info("resolved agent via npx", "component", "config", "package", c.NpxPkg)
