@@ -44,6 +44,7 @@ type Handler struct {
 	seenMsgs      sync.Map // map[string]time.Time — dedup by post ID
 	seenMsgCount  int64    // approximate count for capacity limiting
 	cronStore     *CronStore
+	memoryStore   *MemoryStore
 
 	groupSummaryGroupID      string
 	groupSummaryMessageLimit int
@@ -87,6 +88,11 @@ func (h *Handler) SetCustomAliases(aliases map[string]string) {
 // SetCronStore sets the cron job store for /cron commands.
 func (h *Handler) SetCronStore(store *CronStore) {
 	h.cronStore = store
+}
+
+// SetMemoryStore sets the shared memory store for /remember commands.
+func (h *Handler) SetMemoryStore(store *MemoryStore) {
+	h.memoryStore = store
 }
 
 // SetGroupSummaryConfig configures optional summarize behavior for the current
@@ -350,6 +356,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			slog.Error("failed to send chatinfo reply", "component", "handler", "error", err)
 		}
 		return
+	} else if strings.HasPrefix(text, "/remember ") || text == "/memory" || strings.HasPrefix(text, "/forget ") {
+		reply := HandleMemoryCommand(h.memoryStore, text)
+		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
+			slog.Error("failed to send memory reply", "component", "handler", "error", err)
+		}
+		return
 	}
 
 	// Explicit action commands: /task, /note, /event (use readClient for API access)
@@ -532,6 +544,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
 		reply = cleanReply
+		actions = h.processRememberActions(actions)
 		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions)
 		if len(results) > 0 {
 			defer func() {
@@ -741,4 +754,28 @@ func (h *Handler) resetDefaultSession(ctx context.Context, conversationID string
 		return fmt.Sprintf("New %s session created\n%s", name, sessionID)
 	}
 	return fmt.Sprintf("New %s session created", name)
+}
+
+// processRememberActions extracts REMEMBER actions, saves them to memory,
+// and returns the remaining actions.
+func (h *Handler) processRememberActions(actions []AgentAction) []AgentAction {
+	if h.memoryStore == nil {
+		return actions
+	}
+	var remaining []AgentAction
+	for _, a := range actions {
+		if a.Type == "REMEMBER" {
+			content := strings.TrimSpace(a.Body)
+			if content != "" {
+				if err := h.memoryStore.Add(content); err != nil {
+					slog.Error("action: remember failed", "error", err)
+				} else {
+					slog.Info("action: remembered", "component", "memory", "content", content)
+				}
+			}
+		} else {
+			remaining = append(remaining, a)
+		}
+	}
+	return remaining
 }
