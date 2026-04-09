@@ -6,6 +6,43 @@ title: Agent Configuration
 
 RingClaw supports three agent types: **ACP**, **CLI**, and **HTTP**. Each agent is configured in the `agents` section of `config.json`.
 
+## Recommended: ACP Mode
+
+ACP (Agent Communication Protocol) is the **recommended** mode for all agents:
+
+- **Session persistence** — multi-turn conversations with full context
+- **Faster** — reuses a long-running process instead of spawning per message
+- **Automatic permissions** — no need for `--dangerously-skip-permissions` flags
+
+CLI mode spawns a new process per message with **no multi-turn context** — each message is independent.
+
+### ACP Compatibility Table
+
+| Agent | ACP Command | Install |
+|-------|-------------|---------|
+| Claude | `claude-agent-acp` | `npm i -g @zed-industries/claude-agent-acp` |
+| Codex | `codex-acp` | `npm i -g @zed-industries/codex-acp` |
+| Cursor | `cursor-agent acp` | Built into Cursor CLI |
+| Gemini | `gemini --acp` | Built into Gemini CLI |
+| Kimi | `kimi acp` | Built into Kimi CLI |
+| Copilot | `copilot --acp --stdio` | Built into Copilot CLI |
+| Droid | `droid exec --output-format acp` | Built into Factory Droid |
+| iFlow | `iflow --experimental-acp` | Built into iFlow CLI |
+| Kiro | `kiro-cli acp` | Built into Kiro CLI |
+| Qwen | `qwen --acp` | Built into Qwen CLI |
+| OpenCode | `opencode acp` | Built into OpenCode |
+| Pi | `pi-acp` | `npm i -g pi-acp` |
+
+### Upgrading from CLI to ACP
+
+1. Install the ACP adapter (e.g. `npm install -g @zed-industries/codex-acp`)
+2. Use `/reload` in chat — RingClaw re-detects and upgrades automatically
+3. Or restart RingClaw — auto-detection runs on startup
+
+::: tip
+RingClaw auto-detects installed agents on startup. If both CLI and ACP binaries exist, ACP is always preferred. You can also use `npx` — RingClaw falls back to `npx @zed-industries/codex-acp` if the standalone binary is not installed.
+:::
+
 ## Agent Types
 
 ### ACP (Agent Communication Protocol)

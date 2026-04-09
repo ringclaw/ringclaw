@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ringclaw/ringclaw/agent"
+	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/internal/util"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
@@ -738,7 +739,18 @@ func (h *Handler) switchDefault(ctx context.Context, name string) string {
 
 	info := ag.Info()
 	slog.Info("switched default agent", "component", "handler", "from", old, "to", name, "info", info)
-	return fmt.Sprintf("switch to %s", name)
+
+	reply := fmt.Sprintf("switch to %s", name)
+
+	// Warn if agent is running in CLI mode (no multi-turn context)
+	if info.Type == "cli" {
+		reply += " (CLI mode — no multi-turn context)"
+		if hint := config.ACPInstallHint(name); hint != "" {
+			reply += fmt.Sprintf("\nTip: install ACP adapter for session persistence:\n  %s\nThen use /reload to upgrade.", hint)
+		}
+	}
+
+	return reply
 }
 
 // resetDefaultSession resets the session for the given conversationID on the default agent.
