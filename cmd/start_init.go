@@ -114,6 +114,37 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 	}
 	handler.SetGroupSummaryConfig(cfg.RC.GroupSummaryGroup(), cfg.RC.GroupSummaryLimit())
 
+	// Set up reload callback for /reload command
+	handler.SetReloadAgents(func() ([]messaging.AgentMeta, map[string]string, []string) {
+		before := make(map[string]bool, len(cfg.Agents))
+		for name := range cfg.Agents {
+			before[name] = true
+		}
+
+		config.DetectAndConfigure(cfg)
+		_ = config.Save(cfg)
+
+		var metas []messaging.AgentMeta
+		var added []string
+		for name, agCfg := range cfg.Agents {
+			command := agCfg.Command
+			if agCfg.Type == "http" {
+				command = agCfg.Endpoint
+			}
+			metas = append(metas, messaging.AgentMeta{
+				Name:    name,
+				Type:    agCfg.Type,
+				Command: command,
+				Model:   agCfg.Model,
+			})
+			if !before[name] {
+				added = append(added, name)
+			}
+		}
+		aliases := config.BuildAliasMap(cfg.Agents)
+		return metas, aliases, added
+	})
+
 	// Start default agent in background
 	go func() {
 		if cfg.DefaultAgent == "" {

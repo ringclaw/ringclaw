@@ -103,6 +103,7 @@ func buildHelpText() string {
 /event list|create|get|update|delete
 /card get|delete
 /chatinfo [chatId] - Show chat details
+/reload - Re-detect installed agents
 
 Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)`
 }
@@ -152,6 +153,9 @@ func isPrivilegedCommand(text string) bool {
 		return true
 	}
 	if strings.HasPrefix(text, "/cron") {
+		return true
+	}
+	if text == "/reload" {
 		return true
 	}
 	return false
