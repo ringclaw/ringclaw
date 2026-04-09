@@ -105,9 +105,7 @@ func buildHelpText() string {
 /chatinfo [chatId] - Show chat details
 /cron add|list|delete - Scheduled tasks
 /reload - Re-detect installed agents
-/remember <text> - Save a shared memory
-/forget <number> - Delete a memory entry
-/memory - List all shared memories
+/mem add|del|list - Shared memory
 
 Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)`
 }
@@ -162,26 +160,29 @@ func isPrivilegedCommand(text string) bool {
 	if text == "/reload" {
 		return true
 	}
-	if strings.HasPrefix(text, "/remember") || strings.HasPrefix(text, "/forget") {
+	if strings.HasPrefix(text, "/mem") {
 		return true
 	}
 	return false
 }
 
-// HandleMemoryCommand routes /remember, /forget, /memory commands.
+// HandleMemoryCommand routes /mem subcommands.
 func HandleMemoryCommand(store *MemoryStore, text string) string {
 	if store == nil {
 		return "Memory is not configured (no agent_workspace set)."
 	}
 
-	if text == "/memory" {
+	// Strip "/mem" prefix and parse subcommand
+	arg := strings.TrimSpace(strings.TrimPrefix(text, "/mem"))
+
+	if arg == "" || arg == "list" {
 		return store.List()
 	}
 
-	if strings.HasPrefix(text, "/remember ") {
-		content := strings.TrimSpace(strings.TrimPrefix(text, "/remember"))
+	if strings.HasPrefix(arg, "add ") {
+		content := strings.TrimSpace(strings.TrimPrefix(arg, "add"))
 		if content == "" {
-			return "Usage: /remember <what to remember>"
+			return "Usage: /mem add <what to remember>"
 		}
 		if err := store.Add(content); err != nil {
 			return fmt.Sprintf("Error: %v", err)
@@ -189,11 +190,11 @@ func HandleMemoryCommand(store *MemoryStore, text string) string {
 		return fmt.Sprintf("Remembered: %s", content)
 	}
 
-	if strings.HasPrefix(text, "/forget ") {
-		arg := strings.TrimSpace(strings.TrimPrefix(text, "/forget"))
+	if strings.HasPrefix(arg, "del ") || strings.HasPrefix(arg, "delete ") {
+		numStr := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(arg, "delete"), "del"))
 		var index int
-		if _, err := fmt.Sscanf(arg, "%d", &index); err != nil {
-			return "Usage: /forget <number> (use /memory to see indices)"
+		if _, err := fmt.Sscanf(numStr, "%d", &index); err != nil {
+			return "Usage: /mem del <number> (use /mem list to see indices)"
 		}
 		if err := store.Delete(index); err != nil {
 			return fmt.Sprintf("Error: %v", err)
@@ -201,5 +202,5 @@ func HandleMemoryCommand(store *MemoryStore, text string) string {
 		return fmt.Sprintf("Forgot entry #%d.", index)
 	}
 
-	return "Usage: /remember <text> | /forget <number> | /memory"
+	return "Usage: /mem add <text> | /mem del <number> | /mem list"
 }

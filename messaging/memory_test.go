@@ -115,27 +115,32 @@ func TestHandleMemoryCommand(t *testing.T) {
 	dir := t.TempDir()
 	store := NewMemoryStore(dir)
 
-	result := HandleMemoryCommand(nil, "/memory")
+	result := HandleMemoryCommand(nil, "/mem")
 	if !strings.Contains(result, "not configured") {
 		t.Errorf("expected not configured: %s", result)
 	}
 
-	result = HandleMemoryCommand(store, "/remember Go 1.22")
+	result = HandleMemoryCommand(store, "/mem add Go 1.22")
 	if !strings.Contains(result, "Remembered") {
 		t.Errorf("unexpected result: %s", result)
 	}
 
-	result = HandleMemoryCommand(store, "/memory")
+	result = HandleMemoryCommand(store, "/mem list")
 	if !strings.Contains(result, "Go 1.22") {
 		t.Errorf("memory not listed: %s", result)
 	}
 
-	result = HandleMemoryCommand(store, "/forget 1")
+	result = HandleMemoryCommand(store, "/mem")
+	if !strings.Contains(result, "Go 1.22") {
+		t.Errorf("/mem without subcommand should list: %s", result)
+	}
+
+	result = HandleMemoryCommand(store, "/mem del 1")
 	if !strings.Contains(result, "Forgot") {
 		t.Errorf("unexpected result: %s", result)
 	}
 
-	result = HandleMemoryCommand(store, "/memory")
+	result = HandleMemoryCommand(store, "/mem list")
 	if !strings.Contains(result, "No memories") {
 		t.Errorf("memory should be empty: %s", result)
 	}

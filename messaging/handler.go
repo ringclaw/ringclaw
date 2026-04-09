@@ -383,7 +383,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			slog.Error("failed to send chatinfo reply", "component", "handler", "error", err)
 		}
 		return
-	} else if strings.HasPrefix(text, "/remember ") || text == "/memory" || strings.HasPrefix(text, "/forget ") {
+	} else if strings.HasPrefix(text, "/mem") {
 		reply := HandleMemoryCommand(h.memoryStore, text)
 		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
 			slog.Error("failed to send memory reply", "component", "handler", "error", err)
