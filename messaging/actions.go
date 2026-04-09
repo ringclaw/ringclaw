@@ -40,6 +40,10 @@ ACTION:CARD [chatid=<target chat ID>]
 <Adaptive Card JSON, version 1.3>
 END_ACTION
 
+ACTION:REMEMBER
+<fact, preference, or convention to remember across sessions>
+END_ACTION
+
 Adaptive Card example:
 {"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Title","weight":"bolder","size":"medium"},{"type":"FactSet","facts":[{"title":"Key","value":"Value"}]}]}
 
@@ -55,6 +59,7 @@ Rules:
 - chatid accepts a numeric Chat ID, a ![:Team](ID) mention, OR a person's name (e.g., chatid=Ian Zhang). The system will automatically resolve names to chat IDs via directory search.
 - assignee accepts a numeric Person ID, a ![:Person](ID) mention, OR a person's name (e.g., assignee=Ian Zhang). The system resolves names automatically.
 - If no chatid is specified, the action executes in the current chat.
+- When the user states a preference, convention, or important project decision, save it with ACTION:REMEMBER so it persists across sessions and agents.
 - Do NOT create files. Do NOT output raw JSON in your reply. Use ACTION blocks so the system executes them.
 - If no action is needed, reply normally without ACTION blocks.
 `

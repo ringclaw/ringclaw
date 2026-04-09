@@ -105,6 +105,9 @@ func buildHelpText() string {
 /chatinfo [chatId] - Show chat details
 /cron add|list|delete - Scheduled tasks
 /reload - Re-detect installed agents
+/remember <text> - Save a shared memory
+/forget <number> - Delete a memory entry
+/memory - List all shared memories
 
 Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)`
 }
@@ -159,5 +162,44 @@ func isPrivilegedCommand(text string) bool {
 	if text == "/reload" {
 		return true
 	}
+	if strings.HasPrefix(text, "/remember") || strings.HasPrefix(text, "/forget") {
+		return true
+	}
 	return false
+}
+
+// HandleMemoryCommand routes /remember, /forget, /memory commands.
+func HandleMemoryCommand(store *MemoryStore, text string) string {
+	if store == nil {
+		return "Memory is not configured (no agent_workspace set)."
+	}
+
+	if text == "/memory" {
+		return store.List()
+	}
+
+	if strings.HasPrefix(text, "/remember ") {
+		content := strings.TrimSpace(strings.TrimPrefix(text, "/remember"))
+		if content == "" {
+			return "Usage: /remember <what to remember>"
+		}
+		if err := store.Add(content); err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		return fmt.Sprintf("Remembered: %s", content)
+	}
+
+	if strings.HasPrefix(text, "/forget ") {
+		arg := strings.TrimSpace(strings.TrimPrefix(text, "/forget"))
+		var index int
+		if _, err := fmt.Sscanf(arg, "%d", &index); err != nil {
+			return "Usage: /forget <number> (use /memory to see indices)"
+		}
+		if err := store.Delete(index); err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		return fmt.Sprintf("Forgot entry #%d.", index)
+	}
+
+	return "Usage: /remember <text> | /forget <number> | /memory"
 }

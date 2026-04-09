@@ -202,6 +202,12 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 	}
 	handler.SetCronStore(cronStore)
 
+	// Shared memory store
+	memoryStore := messaging.NewMemoryStore(cfg.AgentWorkspace)
+	handler.SetMemoryStore(memoryStore)
+	messaging.EnsureBridgeFiles(cfg.AgentWorkspace)
+	slog.Info("shared memory initialized", "component", "memory", "path", memoryStore.Path(), "entries", memoryStore.Count())
+
 	cronScheduler := messaging.NewCronScheduler(cronStore, c.bot, defaultChatID, func(name string) agent.Agent {
 		if name == "" {
 			return handler.GetDefaultAgent()

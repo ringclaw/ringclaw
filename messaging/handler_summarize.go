@@ -203,6 +203,7 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 	}
 
 	if len(actions) > 0 {
+		actions = h.processRememberActions(actions)
 		results := ExecuteAgentActions(ctx, replyClient, readClient, chatID, actions)
 		if len(results) > 0 {
 			logSendError(SendTextReply(ctx, replyClient, chatID, strings.Join(results, "\n")))
