@@ -22,6 +22,9 @@ type AgentFactory func(ctx context.Context, name string) agent.Agent
 // SaveDefaultFunc persists the default agent name to config file.
 type SaveDefaultFunc func(name string) error
 
+// ReloadAgentsFunc re-detects agents and returns (newMetas, newAliases, added agent names).
+type ReloadAgentsFunc func() ([]AgentMeta, map[string]string, []string)
+
 // AgentMeta holds static config info about an agent (for /status display).
 type AgentMeta struct {
 	Name    string
@@ -44,6 +47,7 @@ type Handler struct {
 	seenMsgs      sync.Map // map[string]time.Time — dedup by post ID
 	seenMsgCount  int64    // approximate count for capacity limiting
 	cronStore     *CronStore
+	reloadAgents  ReloadAgentsFunc
 
 	groupSummaryGroupID      string
 	groupSummaryMessageLimit int
@@ -87,6 +91,11 @@ func (h *Handler) SetCustomAliases(aliases map[string]string) {
 // SetCronStore sets the cron job store for /cron commands.
 func (h *Handler) SetCronStore(store *CronStore) {
 	h.cronStore = store
+}
+
+// SetReloadAgents sets the callback for /reload to re-detect agents.
+func (h *Handler) SetReloadAgents(fn ReloadAgentsFunc) {
+	h.reloadAgents = fn
 }
 
 // SetGroupSummaryConfig configures optional summarize behavior for the current
@@ -306,6 +315,13 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	}
 
 	// Built-in commands (no typing needed)
+	if text == "/reload" {
+		reply := h.handleReload()
+		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
+			slog.Error("failed to send reload reply", "component", "handler", "error", err)
+		}
+		return
+	}
 	if text == "/info" || text == "/status" {
 		cardJSON := h.buildStatusCard()
 		if _, err := client.CreateAdaptiveCard(ctx, chatID, cardJSON); err != nil {
@@ -741,4 +757,22 @@ func (h *Handler) resetDefaultSession(ctx context.Context, conversationID string
 		return fmt.Sprintf("New %s session created\n%s", name, sessionID)
 	}
 	return fmt.Sprintf("New %s session created", name)
+}
+
+// handleReload re-detects installed agents and updates the handler.
+func (h *Handler) handleReload() string {
+	if h.reloadAgents == nil {
+		return "Reload is not available."
+	}
+	metas, aliases, added := h.reloadAgents()
+
+	h.mu.Lock()
+	h.agentMetas = metas
+	h.customAliases = aliases
+	h.mu.Unlock()
+
+	if len(added) == 0 {
+		return "Reloaded. No new agents detected."
+	}
+	return fmt.Sprintf("Reloaded. New agents detected: %s", strings.Join(added, ", "))
 }
