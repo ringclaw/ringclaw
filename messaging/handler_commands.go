@@ -116,6 +116,10 @@ func buildHelpCard() json.RawMessage {
 		Value string `json:"value"`
 	}
 
+	mono := func(text string) map[string]any {
+		return map[string]any{"type": "TextBlock", "text": text, "fontType": "monospace", "size": "small", "wrap": true}
+	}
+
 	generalCmds := []fact{
 		{"/agent <msg>", "Send to a specific agent"},
 		{"/a /b <msg>", "Broadcast to multiple agents"},
@@ -124,6 +128,21 @@ func buildHelpCard() json.RawMessage {
 		{"/info", "Show current agent info"},
 		{"/reload", "Re-detect installed agents"},
 		{"/help", "Show this help"},
+	}
+
+	generalExamples := map[string]any{
+		"type":  "Action.ShowCard",
+		"title": "Show Examples",
+		"card": map[string]any{
+			"type": "AdaptiveCard",
+			"body": []any{
+				mono("/cc help me write a sort function"),
+				mono("/cc /cx review this code"),
+				mono("/claude  → switch default to claude"),
+				mono("/new     → start fresh session"),
+				mono("/cwd /home/user/my-project"),
+			},
+		},
 	}
 
 	rcCmds := []fact{
@@ -135,14 +154,35 @@ func buildHelpCard() json.RawMessage {
 		{"/cron", "add | list | delete"},
 	}
 
+	rcExamples := map[string]any{
+		"type":  "Action.ShowCard",
+		"title": "Show Examples",
+		"card": map[string]any{
+			"type": "AdaptiveCard",
+			"body": []any{
+				mono("/task list"),
+				mono("/task create \"Review PR\" assignee=John"),
+				mono("/note create \"Meeting Notes\""),
+				mono("/event create \"Standup\" 2026-04-10T09:00:00Z 2026-04-10T09:30:00Z"),
+				mono("/cron add \"0 9 * * 1-5\" morning standup summary"),
+				mono("/chatinfo 158994374662"),
+			},
+		},
+	}
+
 	aliases := "/cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)"
 
 	body := []any{
 		map[string]any{"type": "TextBlock", "text": "RingClaw Commands", "weight": "bolder", "size": "medium"},
+
 		map[string]any{"type": "TextBlock", "text": "General", "weight": "bolder", "spacing": "medium", "separator": true},
 		map[string]any{"type": "FactSet", "facts": generalCmds},
+		map[string]any{"type": "ActionSet", "actions": []any{generalExamples}},
+
 		map[string]any{"type": "TextBlock", "text": "RingCentral Resources", "weight": "bolder", "spacing": "medium", "separator": true},
 		map[string]any{"type": "FactSet", "facts": rcCmds},
+		map[string]any{"type": "ActionSet", "actions": []any{rcExamples}},
+
 		map[string]any{"type": "TextBlock", "text": "Agent Aliases", "weight": "bolder", "spacing": "medium", "separator": true},
 		map[string]any{"type": "TextBlock", "text": aliases, "wrap": true, "size": "small"},
 	}
