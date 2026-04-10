@@ -46,6 +46,7 @@ type ACPAgent struct {
 	stderr         *acpStderrWriter // captures stderr for error reporting
 	droppedUpdates atomic.Int64     // counter for dropped notification updates
 	loggedMethods  sync.Map         // tracks already-logged unhandled methods
+	termMgr        *terminalManager // terminal process manager for ACP client interface
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
@@ -90,7 +91,8 @@ type initParams struct {
 }
 
 type clientCapabilities struct {
-	FS *fsCapabilities `json:"fs,omitempty"`
+	FS       *fsCapabilities `json:"fs,omitempty"`
+	Terminal bool            `json:"terminal,omitempty"`
 }
 
 type fsCapabilities struct {
@@ -168,6 +170,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		sessions:     make(map[string]string),
 		pending:      make(map[int64]chan *rpcResponse),
 		notifyCh:     make(map[string]chan *sessionUpdate),
+		termMgr:      newTerminalManager(cfg.Cwd),
 	}
 }
 
@@ -232,7 +235,8 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	result, err := a.call(initCtx, "initialize", initParams{
 		ProtocolVersion: 1,
 		ClientCapabilities: clientCapabilities{
-			FS: &fsCapabilities{ReadTextFile: true, WriteTextFile: a.allowWrite},
+			FS:       &fsCapabilities{ReadTextFile: true, WriteTextFile: a.allowWrite},
+			Terminal: true,
 		},
 	})
 	if err != nil {
@@ -300,6 +304,9 @@ func (a *ACPAgent) Stop() {
 		}
 		<-done
 	}
+
+	// Cleanup all terminal processes
+	a.termMgr.cleanup()
 
 	a.mu.Lock()
 	a.started = false
@@ -571,12 +578,28 @@ func (a *ACPAgent) readLoop() {
 			a.handleSessionUpdate(msg.Params)
 
 		case "session/request_permission":
-			// Auto-allow all permissions
 			a.handlePermissionRequest(line)
+
+		// ACP client terminal interface
+		case "terminal/create":
+			a.handleTerminalCreate(line)
+		case "terminal/output":
+			a.handleTerminalOutput(line)
+		case "terminal/wait_for_exit":
+			a.handleTerminalWaitForExit(line)
+		case "terminal/kill":
+			a.handleTerminalKill(line)
+		case "terminal/release":
+			a.handleTerminalRelease(line)
+
+		// ACP client filesystem interface
+		case "fs/read_text_file":
+			a.handleFSReadTextFile(line)
+		case "fs/write_text_file":
+			a.handleFSWriteTextFile(line)
 
 		default:
 			if msg.Method != "" {
-				// Only log each unhandled method once to avoid noise
 				if _, loaded := a.loggedMethods.LoadOrStore(msg.Method, true); !loaded {
 					raw := line
 					if len(raw) > 200 {
