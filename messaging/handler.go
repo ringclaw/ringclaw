@@ -581,6 +581,11 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		reply = wrapAnswer(reply)
 	}
 
+	// Mention the questioner in bot group chats so they get a notification
+	if client.IsBot() && !client.IsBotDM(chatID) && post.CreatorID != "" {
+		reply = fmt.Sprintf("![:Person](%s) %s", post.CreatorID, reply)
+	}
+
 	// Update the placeholder with the real reply, or send a new post
 	if strings.TrimSpace(reply) == "" {
 		// No text reply -- delete the placeholder instead of leaving it empty
