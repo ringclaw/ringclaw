@@ -57,6 +57,18 @@ func (c *Client) markSentPost(id string) {
 	}
 }
 
+// newHTTPClient creates a shared HTTP client with connection pooling.
+func newHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: requestTimeout,
+		Transport: &http.Transport{
+			MaxIdleConns:        20,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+}
+
 // NewClient creates a new RingCentral API client.
 func NewClient(creds *Credentials) *Client {
 	serverURL := creds.ServerURL
@@ -65,16 +77,9 @@ func NewClient(creds *Credentials) *Client {
 	}
 	auth := NewAuth(creds.ClientID, creds.ClientSecret, creds.JWTToken, serverURL)
 	return &Client{
-		serverURL: serverURL,
-		auth:      auth,
-		httpClient: &http.Client{
-			Timeout: requestTimeout,
-			Transport: &http.Transport{
-				MaxIdleConns:        20,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		},
+		serverURL:  serverURL,
+		auth:       auth,
+		httpClient: newHTTPClient(),
 	}
 }
 
@@ -89,17 +94,10 @@ func NewBotClient(serverURL, botToken string) *Client {
 	// Set the bot token with a far-future expiry so AccessToken() never triggers refresh
 	auth.SetTokenForTest(botToken, time.Now().Add(365*24*time.Hour))
 	return &Client{
-		serverURL: serverURL,
-		auth:      auth,
-		isBot:     true,
-		httpClient: &http.Client{
-			Timeout: requestTimeout,
-			Transport: &http.Transport{
-				MaxIdleConns:        20,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		},
+		serverURL:  serverURL,
+		auth:       auth,
+		isBot:      true,
+		httpClient: newHTTPClient(),
 	}
 }
 
