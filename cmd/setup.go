@@ -56,7 +56,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	cfg.RC.BotToken = promptWithDefault(reader, "Bot Token", cfg.RC.BotToken)
-	cfg.RC.ServerURL = promptWithDefault(reader, "Server URL", withDefault(cfg.RC.ServerURL, "https://platform.ringcentral.com"))
+	cfg.RC.ServerURL = promptPlain(reader, "Server URL", withDefault(cfg.RC.ServerURL, "https://platform.ringcentral.com"))
 
 	if cfg.RC.BotToken != "" {
 		fmt.Println()
@@ -204,6 +204,20 @@ func validateBotToken(cfg *config.Config) error {
 	}
 	fmt.Printf("(bot extension ID: %s) ", id)
 	return nil
+}
+
+func promptPlain(reader *bufio.Reader, label, defaultVal string) string {
+	if defaultVal != "" {
+		fmt.Printf("  %s [%s]: ", label, defaultVal)
+	} else {
+		fmt.Printf("  %s: ", label)
+	}
+	line, _ := reader.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return defaultVal
+	}
+	return line
 }
 
 func promptWithDefault(reader *bufio.Reader, label, defaultVal string) string {

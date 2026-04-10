@@ -346,9 +346,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		}
 		return
 	} else if text == "/help" {
-		reply := buildHelpText()
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send reply", "component", "handler", "error", err)
+		cardJSON := buildHelpCard()
+		if _, err := client.CreateAdaptiveCard(ctx, chatID, cardJSON); err != nil {
+			slog.Error("failed to send help card, falling back to text", "component", "handler", "error", err)
+			if err := SendTextReply(ctx, client, chatID, buildHelpText()); err != nil {
+				slog.Error("failed to send reply", "component", "handler", "error", err)
+			}
 		}
 		return
 	} else if strings.HasPrefix(text, "/cron") {
