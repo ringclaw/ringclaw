@@ -503,14 +503,22 @@ func parseAgentRequest(raw string) (json.RawMessage, json.RawMessage, error) {
 	return msg.ID, msg.Params, nil
 }
 
+// rpcResponseOut is a JSON-RPC response with json.RawMessage ID to avoid
+// double-encoding ([]byte → base64) that happens with map[string]interface{}.
+type rpcResponseOut struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  interface{}     `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+}
+
 // sendResponse sends a JSON-RPC success response.
 func (a *ACPAgent) sendResponse(id json.RawMessage, result interface{}) {
-	resp := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"result":  result,
-	}
-	data, err := json.Marshal(resp)
+	data, err := json.Marshal(rpcResponseOut{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  result,
+	})
 	if err != nil {
 		slog.Error("failed to marshal response", "component", "acp", "error", err)
 		return
@@ -522,15 +530,11 @@ func (a *ACPAgent) sendResponse(id json.RawMessage, result interface{}) {
 
 // sendErrorResponse sends a JSON-RPC error response.
 func (a *ACPAgent) sendErrorResponse(id json.RawMessage, code int, message string) {
-	resp := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"error": map[string]interface{}{
-			"code":    code,
-			"message": message,
-		},
-	}
-	data, err := json.Marshal(resp)
+	data, err := json.Marshal(rpcResponseOut{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error:   &rpcError{Code: code, Message: message},
+	})
 	if err != nil {
 		slog.Error("failed to marshal error response", "component", "acp", "error", err)
 		return

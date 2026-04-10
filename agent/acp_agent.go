@@ -721,27 +721,21 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		}
 	}
 
-	// Send response
-	resp := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      req.ID,
-		"result": map[string]interface{}{
-			"outcome": map[string]interface{}{
-				"outcome":  "selected",
-				"optionId": optionID,
-			},
+	// Send response using rpcResponseOut to avoid json.RawMessage double-encoding
+	type permissionOutcome struct {
+		Outcome  string `json:"outcome"`
+		OptionID string `json:"optionId"`
+	}
+	type permissionResult struct {
+		Outcome permissionOutcome `json:"outcome"`
+	}
+
+	a.sendResponse(req.ID, permissionResult{
+		Outcome: permissionOutcome{
+			Outcome:  "selected",
+			OptionID: optionID,
 		},
-	}
-
-	data, err := json.Marshal(resp)
-	if err != nil {
-		slog.Error("failed to marshal permission response", "component", "acp", "error", err)
-		return
-	}
-
-	a.mu.Lock()
-	fmt.Fprintf(a.stdin, "%s\n", data)
-	a.mu.Unlock()
+	})
 
 	slog.Info("auto-allowed permission request", "component", "acp",
 		"optionId", optionID, "toolCall", truncateRaw(req.Params.ToolCall, 300))
