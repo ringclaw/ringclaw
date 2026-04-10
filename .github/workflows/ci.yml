@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.26.2'
 
       - name: Build
         run: go build ./...
@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.26.2'
 
       - name: Determine version
         id: version
