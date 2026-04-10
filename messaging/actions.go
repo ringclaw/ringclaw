@@ -5,81 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/ringclaw/ringclaw/internal/util"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
-
-// defaultActionPrompt is the built-in prompt for ACTION blocks.
-const defaultActionPrompt = `
-
-IMPORTANT: You are running inside a RingCentral Team Messaging bot. You have REAL actions that execute via API — do NOT generate files, do NOT suggest manual steps. Instead, append ACTION blocks and the system will execute them automatically.
-
-Available actions (append at the END of your response):
-
-ACTION:MESSAGE chatid=<target chat ID or person name>
-<message content>
-END_ACTION
-
-ACTION:NOTE title=<title> [chatid=<target chat ID>]
-<body content>
-END_ACTION
-
-ACTION:TASK subject=<subject> [assignee=<person ID>] [chatid=<target chat ID>]
-END_ACTION
-
-ACTION:EVENT title=<title> start=<ISO8601> end=<ISO8601>
-END_ACTION
-Example: ACTION:EVENT title=Team Meeting start=2026-03-30T14:00:00Z end=2026-03-30T15:00:00Z
-
-ACTION:CARD [chatid=<target chat ID>]
-<Adaptive Card JSON, version 1.3>
-END_ACTION
-
-Adaptive Card example:
-{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Title","weight":"bolder","size":"medium"},{"type":"FactSet","facts":[{"title":"Key","value":"Value"}]}]}
-
-Card elements: TextBlock, FactSet, ColumnSet/Column, Image, Container, Action.OpenUrl, Action.Submit
-
-Rules:
-- Your text reply comes FIRST, then ACTION blocks at the end.
-- When the user asks to send a message to someone → use ACTION:MESSAGE with the person's name as chatid.
-- NEVER use a person ID, creatorId, or userId as chatid — it is NOT a chat ID. Always use the person's NAME instead (e.g., chatid=John Lin). The system resolves names to chat IDs automatically.
-- If you want to reply in the current chat, omit the chatid parameter entirely.
-- When the user asks for cards, rich display, progress, reports, or structured data → use ACTION:CARD.
-- When the user asks to create notes/tasks/events → use the corresponding ACTION block.
-- chatid accepts a numeric Chat ID, a ![:Team](ID) mention, OR a person's name (e.g., John Test). The system will automatically resolve names to chat IDs via directory search.
-- assignee accepts a numeric Person ID, a ![:Person](ID) mention, OR a person's name (e.g., assignee=John Test). The system resolves names automatically.
-- If no chatid is specified, the action executes in the current chat.
-- Do NOT create files. Do NOT output raw JSON in your reply. Use ACTION blocks so the system executes them.
-- If no action is needed, reply normally without ACTION blocks.
-`
-
-var (
-	actionPromptOnce sync.Once
-	actionPromptText string
-)
-
-// ActionPrompt returns the action prompt, loading from ~/.ringclaw/action_prompt.md if it exists.
-func ActionPrompt() string {
-	actionPromptOnce.Do(func() {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			customPath := filepath.Join(home, ".ringclaw", "action_prompt.md")
-			if data, err := os.ReadFile(customPath); err == nil && len(data) > 0 {
-				actionPromptText = "\n" + string(data) + "\n"
-				slog.Info("loaded custom action prompt", "path", customPath)
-				return
-			}
-		}
-		actionPromptText = defaultActionPrompt
-	})
-	return actionPromptText
-}
 
 // AgentAction represents a parsed action from the agent's response.
 type AgentAction struct {

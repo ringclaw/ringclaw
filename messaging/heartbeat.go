@@ -120,7 +120,7 @@ func (r *HeartbeatRunner) tick(ctx context.Context) {
 		return
 	}
 
-	prompt := fmt.Sprintf("This is a scheduled heartbeat check. Follow the instructions below and report anything that needs attention. If everything is fine, reply with exactly: %s\n\n%s", heartbeatOKToken, content)
+	prompt := fmt.Sprintf(HeartbeatPrompt(), heartbeatOKToken, content)
 	slog.Info("running heartbeat", "component", "heartbeat")
 
 	reply, err := ag.Chat(ctx, "heartbeat", prompt)
