@@ -477,6 +477,17 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
 
+	// Best-effort: set mode to full-auto so headless MCP tool calls are not blocked
+	// by the agent's internal approval policy (e.g. codex untrusted workspace).
+	if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
+		"sessionId": sessionResult.SessionID,
+		"modeId":    "full-auto",
+	}); err != nil {
+		slog.Debug("set_mode best-effort failed (agent may not support it)", "component", "acp", "error", err)
+	} else {
+		slog.Info("set session mode to full-auto", "component", "acp", "session", sessionResult.SessionID)
+	}
+
 	return sessionResult.SessionID, true, nil
 }
 
