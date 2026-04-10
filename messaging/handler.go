@@ -461,55 +461,10 @@ func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) st
 	return fmt.Sprintf("rc:chat:%s:user:%s", chatID, creatorID)
 }
 
-// sendToDefaultAgent sends the message to the default agent and replies.
-func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string) {
-	chatID := post.GroupID
+// dispatchToAgent handles the common pattern: placeholder → extract images → chat → reply with actions.
+func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, ag agent.Agent, message, placeholderID string) {
 	conversationID := conversationIDForPost(client, post)
-
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
-	if placeholderErr != nil {
-		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
-	}
-
 	images := extractImageAttachments(ctx, client, post)
-
-	ag := h.getDefaultAgent()
-	var reply string
-	if ag != nil {
-		var err error
-		reply, err = h.chatWithAgentOrImages(ctx, ag, conversationID, text+ActionPrompt(), images)
-		if err != nil {
-			reply = fmt.Sprintf("Error: %v", err)
-		}
-	} else {
-		slog.Warn("agent not ready, using echo mode", "component", "handler", "creatorID", post.CreatorID)
-		reply = "[echo] " + text
-	}
-
-	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
-}
-
-// sendToNamedAgent sends the message to a specific agent and replies.
-func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, name, message string) {
-	chatID := post.GroupID
-	conversationID := conversationIDForPost(client, post)
-
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, chatID)
-	if placeholderErr != nil {
-		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
-	}
-
-	images := extractImageAttachments(ctx, client, post)
-
-	ag, agErr := h.getAgent(ctx, name)
-	if agErr != nil {
-		slog.Error("agent not available", "component", "handler", "agent", name, "error", agErr)
-		reply := fmt.Sprintf("Agent %q is not available: %v", name, agErr)
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send reply", "component", "handler", "error", err)
-		}
-		return
-	}
 
 	reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
 	if err != nil {
@@ -519,8 +474,45 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
 }
 
+// sendToDefaultAgent sends the message to the default agent and replies.
+func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string) {
+	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, post.GroupID)
+	if placeholderErr != nil {
+		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
+	}
+
+	ag := h.getDefaultAgent()
+	if ag == nil {
+		slog.Warn("agent not ready, using echo mode", "component", "handler", "creatorID", post.CreatorID)
+		reply := "[echo] " + text
+		h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
+		return
+	}
+
+	h.dispatchToAgent(ctx, client, readClient, post, ag, text, placeholderID)
+}
+
+// sendToNamedAgent sends the message to a specific agent and replies.
+func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, name, message string) {
+	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, post.GroupID)
+	if placeholderErr != nil {
+		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
+	}
+
+	ag, agErr := h.getAgent(ctx, name)
+	if agErr != nil {
+		slog.Error("agent not available", "component", "handler", "agent", name, "error", agErr)
+		reply := fmt.Sprintf("Agent %q is not available: %v", name, agErr)
+		if err := SendTextReply(ctx, client, post.GroupID, reply); err != nil {
+			slog.Error("failed to send reply", "component", "handler", "error", err)
+		}
+		return
+	}
+
+	h.dispatchToAgent(ctx, client, readClient, post, ag, message, placeholderID)
+}
+
 // broadcastToAgents sends the message to multiple agents in parallel.
-// Each reply is sent as a separate message with the agent name prefix.
 func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, names []string, message string) {
 	conversationID := conversationIDForPost(client, post)
 	images := extractImageAttachments(ctx, client, post)
