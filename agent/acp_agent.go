@@ -138,6 +138,13 @@ type sessionUpdate struct {
 	// For agent_message_chunk
 	Type string `json:"type,omitempty"`
 	Text string `json:"text,omitempty"`
+	// For tool_call / tool_call_update
+	ToolCallID string          `json:"toolCallId,omitempty"`
+	Title      string          `json:"title,omitempty"`
+	Status     string          `json:"status,omitempty"`
+	Kind       string          `json:"kind,omitempty"`
+	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+	RawOutput  json.RawMessage `json:"rawOutput,omitempty"`
 }
 
 type permissionRequestParams struct {
@@ -637,9 +644,22 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 		return
 	}
 
-	// Filter noisy thought chunks from logs (ported from weclaw 39015a5)
-	if p.Update.SessionUpdate != "agent_thought_chunk" {
-		slog.Debug("session/update", "component", "acp", "session", p.SessionID, "type", p.Update.SessionUpdate, "text_len", len(p.Update.Text), "content_len", len(p.Update.Content))
+	switch p.Update.SessionUpdate {
+	case "tool_call":
+		slog.Info("tool_call", "component", "acp", "session", p.SessionID,
+			"toolCallId", p.Update.ToolCallID, "title", p.Update.Title,
+			"status", p.Update.Status, "kind", p.Update.Kind,
+			"rawInput", truncateRaw(p.Update.RawInput, 500))
+	case "tool_call_update":
+		slog.Info("tool_call_update", "component", "acp", "session", p.SessionID,
+			"toolCallId", p.Update.ToolCallID, "title", p.Update.Title,
+			"status", p.Update.Status,
+			"rawOutput", truncateRaw(p.Update.RawOutput, 500))
+	case "agent_message_chunk", "agent_thought_chunk":
+		// Suppress noisy streaming chunks; final text is logged in "agent replied"
+	default:
+		slog.Debug("session/update", "component", "acp", "session", p.SessionID,
+			"type", p.Update.SessionUpdate)
 	}
 
 	a.notifyMu.Lock()
@@ -656,6 +676,18 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 			}
 		}
 	}
+}
+
+// truncateRaw truncates a JSON raw message for logging.
+func truncateRaw(data json.RawMessage, maxLen int) string {
+	if len(data) == 0 {
+		return ""
+	}
+	s := string(data)
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
 }
 
 func (a *ACPAgent) handlePermissionRequest(raw string) {
@@ -700,7 +732,8 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 	fmt.Fprintf(a.stdin, "%s\n", data)
 	a.mu.Unlock()
 
-	slog.Info("auto-allowed permission request", "component", "acp")
+	slog.Info("auto-allowed permission request", "component", "acp",
+		"optionId", optionID, "toolCall", truncateRaw(req.Params.ToolCall, 300))
 }
 
 // Info returns metadata about this agent.
