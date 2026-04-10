@@ -479,13 +479,17 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 
 	// Best-effort: set mode to full-auto so headless MCP tool calls are not blocked
 	// by the agent's internal approval policy (e.g. codex untrusted workspace).
+	// Valid mode IDs: "read-only", "auto", "full-access"
+	// "full-access" sets AskForApproval::Never + DangerFullAccess so MCP tool calls
+	// bypass the approval path that otherwise cancels them in headless mode.
 	if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
 		"sessionId": sessionResult.SessionID,
-		"modeId":    "full-auto",
+		"modeId":    "full-access",
 	}); err != nil {
-		slog.Debug("set_mode best-effort failed (agent may not support it)", "component", "acp", "error", err)
+		slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
+			"component", "acp", "session", sessionResult.SessionID, "error", err)
 	} else {
-		slog.Info("set session mode to full-auto", "component", "acp", "session", sessionResult.SessionID)
+		slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
 	}
 
 	return sessionResult.SessionID, true, nil
@@ -534,13 +538,13 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 		}
 		if resp.Error != nil {
 			msg := resp.Error.Message
-			// Enrich with stderr context if available
-			if a.stderr != nil {
+			// Enrich with stderr context when the RPC error message is generic
+			if a.stderr != nil && (msg == "" || msg == "Internal error" || msg == "internal error") {
 				if detail := a.stderr.LastError(); detail != "" {
 					msg = detail
 				}
 			}
-			return nil, fmt.Errorf("agent error: %s", msg)
+			return nil, fmt.Errorf("agent error (code %d): %s", resp.Error.Code, msg)
 		}
 		return resp.Result, nil
 	}
@@ -702,6 +706,8 @@ func truncateRaw(data json.RawMessage, maxLen int) string {
 }
 
 func (a *ACPAgent) handlePermissionRequest(raw string) {
+	slog.Debug("permission request raw", "component", "acp", "raw", truncateRaw(json.RawMessage(raw), 500))
+
 	// Parse the request to get the ID and auto-allow
 	var req struct {
 		ID     json.RawMessage         `json:"id"`
