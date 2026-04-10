@@ -18,6 +18,30 @@ graph LR
 
 RingClaw connects to RingCentral Team Messaging via WebSocket to receive messages in real-time. When a message arrives, it routes it to the configured AI agent, then posts the reply back to the chat. While the agent is processing, a "Thinking..." placeholder message is shown and updated with the final reply.
 
+## Message Routing
+
+Every incoming message goes through deduplication, permission checks, and a multi-stage routing pipeline:
+
+```mermaid
+flowchart TD
+    Msg[Incoming message] --> Dedup{Dedup check}
+    Dedup -->|Duplicate| Drop[Drop]
+    Dedup -->|New| Strip[Strip bot @mention]
+    Strip --> Priv{Privileged command?}
+    Priv -->|Yes, non-owner| Block[Denied]
+    Priv -->|Yes, owner or DM| Cmd[Execute command]
+    Priv -->|No| BuiltIn{Built-in command?}
+    BuiltIn -->|/help /status /cron...| Cmd
+    BuiltIn -->|/task /note /event| CRUD[Execute CRUD]
+    BuiltIn -->|No| Intent{Intent trigger word?}
+    Intent -->|Yes| Classify[AI classification]
+    Intent -->|No| Parse[Parse /agent prefix]
+    Parse --> HasAgent{Has agent prefix?}
+    HasAgent -->|None| Default[Send to default Agent]
+    HasAgent -->|1 agent| Named[Send to named Agent]
+    HasAgent -->|Multiple| Broadcast[Parallel broadcast]
+```
+
 ## Agent Modes
 
 | Mode | How it works | Examples |

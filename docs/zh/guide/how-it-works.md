@@ -18,6 +18,30 @@ graph LR
 
 RingClaw 通过 WebSocket 连接 RingCentral Team Messaging 实时接收消息。当消息到达时，路由到配置的 AI Agent 处理，然后将回复发回聊天。Agent 处理期间，会显示 "Thinking..." 占位消息，处理完成后更新为最终回复。
 
+## 消息路由
+
+每条消息经过去重、权限检查和多阶段路由：
+
+```mermaid
+flowchart TD
+    Msg[收到消息] --> Dedup{去重检查}
+    Dedup -->|重复| Drop[丢弃]
+    Dedup -->|新消息| Strip[去除 Bot @mention]
+    Strip --> Priv{特权命令?}
+    Priv -->|是, 非 owner| Block[拒绝]
+    Priv -->|是, owner 或 DM| Cmd[执行命令]
+    Priv -->|否| BuiltIn{内置命令?}
+    BuiltIn -->|/help /status /cron...| Cmd
+    BuiltIn -->|/task /note /event| CRUD[执行 CRUD]
+    BuiltIn -->|否| Intent{Intent 触发词?}
+    Intent -->|是| Classify[AI 分类]
+    Intent -->|否| Parse[解析 /agent 前缀]
+    Parse --> HasAgent{有 agent 前缀?}
+    HasAgent -->|无| Default[发给默认 Agent]
+    HasAgent -->|1个| Named[发给指定 Agent]
+    HasAgent -->|多个| Broadcast[并行广播]
+```
+
 ## Agent 接入模式
 
 | 模式 | 工作方式 | 支持的 Agent |

@@ -6,6 +6,38 @@ title: AI-Driven Actions
 
 AI agents can automatically create notes, tasks, events, and adaptive cards during conversation. When a user's request implies creating these resources, the agent appends ACTION blocks to its response and RingClaw executes them via the RC API.
 
+## How It Works
+
+When an agent's response contains ACTION blocks, RingClaw parses them, sends the text reply, then executes each action against the RingCentral API:
+
+```mermaid
+sequenceDiagram
+    participant AI as AI Agent
+    participant R as RingClaw
+    participant RC as RingCentral
+
+    AI-->>R: Reply (with ACTION blocks)
+    R->>R: ParseAgentActions()
+    R->>R: Separate text reply and ACTIONs
+    R->>RC: Send text reply
+    loop Each ACTION
+        R->>R: Parse type and params
+        alt NOTE
+            R->>RC: CreateNote + PublishNote
+        else TASK
+            R->>RC: CreateTask
+        else EVENT
+            R->>RC: CreateEvent
+        else CARD
+            R->>RC: CreateAdaptiveCard
+        else MESSAGE
+            R->>R: Resolve chatid / person name
+            R->>RC: SendPost
+        end
+    end
+    R->>RC: Send ACTION execution results
+```
+
 ## ACTION Block Format
 
 ```

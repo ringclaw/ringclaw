@@ -6,6 +6,38 @@ title: AI 驱动操作
 
 AI Agent 在对话中可以自动创建笔记、任务、日历事件和 Adaptive Card。当用户的请求暗示需要创建这些资源时，Agent 会在回复中附加 ACTION 块，RingClaw 通过 RC API 自动执行。
 
+## 工作流程
+
+当 Agent 的回复包含 ACTION 块时，RingClaw 解析它们，先发送文本回复，再逐个执行 ACTION：
+
+```mermaid
+sequenceDiagram
+    participant AI as AI Agent
+    participant R as RingClaw
+    participant RC as RingCentral
+
+    AI-->>R: 回复 (含 ACTION 块)
+    R->>R: ParseAgentActions()
+    R->>R: 分离文本回复和 ACTION
+    R->>RC: 发送文本回复
+    loop 每个 ACTION
+        R->>R: 解析类型和参数
+        alt NOTE
+            R->>RC: CreateNote + PublishNote
+        else TASK
+            R->>RC: CreateTask
+        else EVENT
+            R->>RC: CreateEvent
+        else CARD
+            R->>RC: CreateAdaptiveCard
+        else MESSAGE
+            R->>R: 解析 chatid / 人名
+            R->>RC: SendPost
+        end
+    end
+    R->>RC: 发送 ACTION 执行结果
+```
+
 ## ACTION 块格式
 
 ```
