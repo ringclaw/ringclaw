@@ -15,10 +15,6 @@ func newCLIClient() (*ringcentral.Client, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	if cfg.RC.BotToken != "" {
-		return ringcentral.NewBotClient(cfg.RC.ServerURL, cfg.RC.BotToken), nil
-	}
-
 	if cfg.RC.HasPrivateApp() {
 		creds := &ringcentral.Credentials{
 			ClientID:     cfg.RC.ClientID,
@@ -31,6 +27,10 @@ func newCLIClient() (*ringcentral.Client, error) {
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}
 		return client, nil
+	}
+
+	if cfg.RC.BotToken != "" {
+		return ringcentral.NewBotClient(cfg.RC.ServerURL, cfg.RC.BotToken), nil
 	}
 
 	return nil, fmt.Errorf("no credentials configured. Set RC_BOT_TOKEN or run 'ringclaw setup'")

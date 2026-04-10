@@ -52,9 +52,7 @@ var sendCmd = &cobra.Command{
 		}
 
 		var client *ringcentral.Client
-		if cfg.RC.BotToken != "" {
-			client = ringcentral.NewBotClient(cfg.RC.ServerURL, cfg.RC.BotToken)
-		} else if cfg.RC.HasPrivateApp() {
+		if cfg.RC.HasPrivateApp() {
 			creds := &ringcentral.Credentials{
 				ClientID:     cfg.RC.ClientID,
 				ClientSecret: cfg.RC.ClientSecret,
@@ -65,6 +63,8 @@ var sendCmd = &cobra.Command{
 			if err := client.Authenticate(); err != nil {
 				return fmt.Errorf("authentication failed: %w", err)
 			}
+		} else if cfg.RC.BotToken != "" {
+			client = ringcentral.NewBotClient(cfg.RC.ServerURL, cfg.RC.BotToken)
 		} else {
 			return fmt.Errorf("no credentials configured. Set RC_BOT_TOKEN or run 'ringclaw setup'")
 		}
