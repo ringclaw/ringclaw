@@ -661,13 +661,16 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 
 	switch p.Update.SessionUpdate {
 	case "tool_call":
+		tool, args := extractToolAndArgs(p.Update.RawInput)
+		if tool == "" {
+			tool = strings.TrimPrefix(p.Update.Title, "Tool: ")
+		}
 		slog.Info("tool_call", "component", "acp",
-			"tool", p.Update.Title, "status", p.Update.Status,
-			"input", prettyRaw(p.Update.RawInput, 300))
+			"tool", tool, "status", p.Update.Status, "args", args)
 	case "tool_call_update":
 		slog.Info("tool_call_update", "component", "acp",
-			"tool", p.Update.ToolCallID, "status", p.Update.Status,
-			"output", prettyRaw(p.Update.RawOutput, 300))
+			"status", p.Update.Status,
+			"output", extractToolOutput(p.Update.RawOutput, 200))
 	case "agent_message_chunk", "agent_thought_chunk":
 		// Suppress noisy streaming chunks; final text is logged in "agent replied"
 	default:
@@ -703,20 +706,61 @@ func truncateRaw(data json.RawMessage, maxLen int) string {
 	return s
 }
 
-// prettyRaw unquotes and compacts JSON for human-readable log output.
-// For a string like `"{\"server\":\"jira\"}"`, it returns `{"server":"jira"}`.
-// For raw objects/arrays, it returns the compact JSON directly.
-func prettyRaw(data json.RawMessage, maxLen int) string {
+// extractToolAndArgs parses rawInput like {"server":"jira","tool":"jira_search","arguments":{...}}
+// and returns "jira/jira_search" and a compact args string.
+func extractToolAndArgs(data json.RawMessage) (string, string) {
+	if len(data) == 0 {
+		return "", ""
+	}
+	var v struct {
+		Server string          `json:"server"`
+		Tool   string          `json:"tool"`
+		Args   json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil || v.Tool == "" {
+		return "", truncateRaw(data, 200)
+	}
+	tool := v.Tool
+	if v.Server != "" {
+		tool = v.Server + "/" + v.Tool
+	}
+	args := string(v.Args)
+	if len(args) > 200 {
+		args = args[:200] + "..."
+	}
+	return tool, args
+}
+
+// extractToolOutput extracts a readable preview from rawOutput.
+// rawOutput is typically {"content":[{"type":"text","text":"..."}],...}
+func extractToolOutput(data json.RawMessage, maxLen int) string {
 	if len(data) == 0 {
 		return ""
 	}
+	// Try to unquote if the raw value is a JSON string
 	s := string(data)
-	// Try to unquote if the raw value is a JSON string containing embedded JSON
 	if len(s) > 1 && s[0] == '"' {
 		var unquoted string
 		if err := json.Unmarshal(data, &unquoted); err == nil {
 			s = unquoted
 		}
+	}
+	// Try to extract content[0].text from the standard MCP response format
+	var resp struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal([]byte(s), &resp); err == nil && len(resp.Content) > 0 {
+		text := resp.Content[0].Text
+		if resp.IsError {
+			text = "[error] " + text
+		}
+		if len(text) > maxLen {
+			return text[:maxLen] + "..."
+		}
+		return text
 	}
 	if len(s) > maxLen {
 		return s[:maxLen] + "..."
