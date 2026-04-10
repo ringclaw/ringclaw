@@ -177,7 +177,7 @@ func (m *Monitor) connectAndListen(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read connection details: %w", err)
 	}
-	slog.Info("connected", "component", "monitor", "details", string(msg))
+	slog.Debug("connected", "component", "monitor", "details", string(msg))
 
 	// Subscribe to team messaging post events
 	if err := m.subscribe(conn); err != nil {

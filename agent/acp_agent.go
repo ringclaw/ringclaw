@@ -46,6 +46,7 @@ type ACPAgent struct {
 	stderr         *acpStderrWriter // captures stderr for error reporting
 	droppedUpdates atomic.Int64     // counter for dropped notification updates
 	loggedMethods  sync.Map         // tracks already-logged unhandled methods
+	termMgr        *terminalManager // terminal process manager for ACP client interface
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
@@ -90,7 +91,8 @@ type initParams struct {
 }
 
 type clientCapabilities struct {
-	FS *fsCapabilities `json:"fs,omitempty"`
+	FS       *fsCapabilities `json:"fs,omitempty"`
+	Terminal bool            `json:"terminal,omitempty"`
 }
 
 type fsCapabilities struct {
@@ -136,6 +138,13 @@ type sessionUpdate struct {
 	// For agent_message_chunk
 	Type string `json:"type,omitempty"`
 	Text string `json:"text,omitempty"`
+	// For tool_call / tool_call_update
+	ToolCallID string          `json:"toolCallId,omitempty"`
+	Title      string          `json:"title,omitempty"`
+	Status     string          `json:"status,omitempty"`
+	Kind       string          `json:"kind,omitempty"`
+	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+	RawOutput  json.RawMessage `json:"rawOutput,omitempty"`
 }
 
 type permissionRequestParams struct {
@@ -168,6 +177,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		sessions:     make(map[string]string),
 		pending:      make(map[int64]chan *rpcResponse),
 		notifyCh:     make(map[string]chan *sessionUpdate),
+		termMgr:      newTerminalManager(cfg.Cwd),
 	}
 }
 
@@ -232,7 +242,8 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	result, err := a.call(initCtx, "initialize", initParams{
 		ProtocolVersion: 1,
 		ClientCapabilities: clientCapabilities{
-			FS: &fsCapabilities{ReadTextFile: true, WriteTextFile: a.allowWrite},
+			FS:       &fsCapabilities{ReadTextFile: true, WriteTextFile: a.allowWrite},
+			Terminal: true,
 		},
 	})
 	if err != nil {
@@ -254,7 +265,7 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 		return fmt.Errorf("agent startup failed (pid=%d): %w", pid, err)
 	}
 
-	slog.Info("initialized", "component", "acp", "pid", pid, "result", string(result))
+	slog.Debug("initialized", "component", "acp", "pid", pid, "result", string(result))
 
 	return nil
 }
@@ -300,6 +311,9 @@ func (a *ACPAgent) Stop() {
 		}
 		<-done
 	}
+
+	// Cleanup all terminal processes
+	a.termMgr.cleanup()
 
 	a.mu.Lock()
 	a.started = false
@@ -463,6 +477,21 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
 
+	// Best-effort: set mode to full-auto so headless MCP tool calls are not blocked
+	// by the agent's internal approval policy (e.g. codex untrusted workspace).
+	// Valid mode IDs: "read-only", "auto", "full-access"
+	// "full-access" sets AskForApproval::Never + DangerFullAccess so MCP tool calls
+	// bypass the approval path that otherwise cancels them in headless mode.
+	if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
+		"sessionId": sessionResult.SessionID,
+		"modeId":    "full-access",
+	}); err != nil {
+		slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
+			"component", "acp", "session", sessionResult.SessionID, "error", err)
+	} else {
+		slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
+	}
+
 	return sessionResult.SessionID, true, nil
 }
 
@@ -509,13 +538,13 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 		}
 		if resp.Error != nil {
 			msg := resp.Error.Message
-			// Enrich with stderr context if available
-			if a.stderr != nil {
+			// Enrich with stderr context when the RPC error message is generic
+			if a.stderr != nil && (msg == "" || msg == "Internal error" || msg == "internal error") {
 				if detail := a.stderr.LastError(); detail != "" {
 					msg = detail
 				}
 			}
-			return nil, fmt.Errorf("agent error: %s", msg)
+			return nil, fmt.Errorf("agent error (code %d): %s", resp.Error.Code, msg)
 		}
 		return resp.Result, nil
 	}
@@ -571,12 +600,28 @@ func (a *ACPAgent) readLoop() {
 			a.handleSessionUpdate(msg.Params)
 
 		case "session/request_permission":
-			// Auto-allow all permissions
 			a.handlePermissionRequest(line)
+
+		// ACP client terminal interface
+		case "terminal/create":
+			a.handleTerminalCreate(line)
+		case "terminal/output":
+			a.handleTerminalOutput(line)
+		case "terminal/wait_for_exit":
+			a.handleTerminalWaitForExit(line)
+		case "terminal/kill":
+			a.handleTerminalKill(line)
+		case "terminal/release":
+			a.handleTerminalRelease(line)
+
+		// ACP client filesystem interface
+		case "fs/read_text_file":
+			a.handleFSReadTextFile(line)
+		case "fs/write_text_file":
+			a.handleFSWriteTextFile(line)
 
 		default:
 			if msg.Method != "" {
-				// Only log each unhandled method once to avoid noise
 				if _, loaded := a.loggedMethods.LoadOrStore(msg.Method, true); !loaded {
 					raw := line
 					if len(raw) > 200 {
@@ -614,9 +659,23 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 		return
 	}
 
-	// Filter noisy thought chunks from logs (ported from weclaw 39015a5)
-	if p.Update.SessionUpdate != "agent_thought_chunk" {
-		slog.Debug("session/update", "component", "acp", "session", p.SessionID, "type", p.Update.SessionUpdate, "text_len", len(p.Update.Text), "content_len", len(p.Update.Content))
+	switch p.Update.SessionUpdate {
+	case "tool_call":
+		tool, args := extractToolAndArgs(p.Update.RawInput)
+		if tool == "" {
+			tool = strings.TrimPrefix(p.Update.Title, "Tool: ")
+		}
+		slog.Info("tool_call", "component", "acp",
+			"tool", tool, "status", p.Update.Status, "args", args)
+	case "tool_call_update":
+		slog.Info("tool_call_update", "component", "acp",
+			"status", p.Update.Status,
+			"output", extractToolOutput(p.Update.RawOutput, 200))
+	case "agent_message_chunk", "agent_thought_chunk":
+		// Suppress noisy streaming chunks; final text is logged in "agent replied"
+	default:
+		slog.Debug("session/update", "component", "acp", "session", p.SessionID,
+			"type", p.Update.SessionUpdate)
 	}
 
 	a.notifyMu.Lock()
@@ -633,6 +692,80 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 			}
 		}
 	}
+}
+
+// truncateRaw truncates a JSON raw message for logging.
+func truncateRaw(data json.RawMessage, maxLen int) string {
+	if len(data) == 0 {
+		return ""
+	}
+	s := string(data)
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
+}
+
+// extractToolAndArgs parses rawInput like {"server":"jira","tool":"jira_search","arguments":{...}}
+// and returns "jira/jira_search" and a compact args string.
+func extractToolAndArgs(data json.RawMessage) (string, string) {
+	if len(data) == 0 {
+		return "", ""
+	}
+	var v struct {
+		Server string          `json:"server"`
+		Tool   string          `json:"tool"`
+		Args   json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil || v.Tool == "" {
+		return "", truncateRaw(data, 200)
+	}
+	tool := v.Tool
+	if v.Server != "" {
+		tool = v.Server + "/" + v.Tool
+	}
+	args := string(v.Args)
+	if len(args) > 200 {
+		args = args[:200] + "..."
+	}
+	return tool, args
+}
+
+// extractToolOutput extracts a readable preview from rawOutput.
+// rawOutput is typically {"content":[{"type":"text","text":"..."}],...}
+func extractToolOutput(data json.RawMessage, maxLen int) string {
+	if len(data) == 0 {
+		return ""
+	}
+	// Try to unquote if the raw value is a JSON string
+	s := string(data)
+	if len(s) > 1 && s[0] == '"' {
+		var unquoted string
+		if err := json.Unmarshal(data, &unquoted); err == nil {
+			s = unquoted
+		}
+	}
+	// Try to extract content[0].text from the standard MCP response format
+	var resp struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal([]byte(s), &resp); err == nil && len(resp.Content) > 0 {
+		text := resp.Content[0].Text
+		if resp.IsError {
+			text = "[error] " + text
+		}
+		if len(text) > maxLen {
+			return text[:maxLen] + "..."
+		}
+		return text
+	}
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
 }
 
 func (a *ACPAgent) handlePermissionRequest(raw string) {
@@ -655,29 +788,24 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		}
 	}
 
-	// Send response
-	resp := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      req.ID,
-		"result": map[string]interface{}{
-			"outcome": map[string]interface{}{
-				"outcome":  "selected",
-				"optionId": optionID,
-			},
+	// Send response using rpcResponseOut to avoid json.RawMessage double-encoding
+	type permissionOutcome struct {
+		Outcome  string `json:"outcome"`
+		OptionID string `json:"optionId"`
+	}
+	type permissionResult struct {
+		Outcome permissionOutcome `json:"outcome"`
+	}
+
+	a.sendResponse(req.ID, permissionResult{
+		Outcome: permissionOutcome{
+			Outcome:  "selected",
+			OptionID: optionID,
 		},
-	}
+	})
 
-	data, err := json.Marshal(resp)
-	if err != nil {
-		slog.Error("failed to marshal permission response", "component", "acp", "error", err)
-		return
-	}
-
-	a.mu.Lock()
-	fmt.Fprintf(a.stdin, "%s\n", data)
-	a.mu.Unlock()
-
-	slog.Info("auto-allowed permission request", "component", "acp")
+	slog.Debug("auto-allowed permission request", "component", "acp",
+		"optionId", optionID)
 }
 
 // Info returns metadata about this agent.
