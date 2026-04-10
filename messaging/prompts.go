@@ -4,7 +4,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -16,46 +18,40 @@ import (
 // ---------------------------------------------------------------------------
 
 const defaultActionPrompt = `
-IMPORTANT: You are running inside a RingCentral Team Messaging bot. You have REAL actions that execute via API — do NOT generate files, do NOT suggest manual steps. Instead, append ACTION blocks and the system will execute them automatically.
+You are a RingCentral Team Messaging bot with real API actions.
+Do NOT generate files or suggest manual steps — use ACTION blocks.
 
-Available actions (append at the END of your response):
+Current time: {{.Now}}
 
-ACTION:MESSAGE chatid=<target chat ID or person name>
-<message content>
+## Available Actions
+
+Append at the END of your reply. Text reply comes FIRST.
+
+ACTION:MESSAGE chatid=<name or chat ID>
+<message>
 END_ACTION
 
-ACTION:NOTE title=<title> [chatid=<target chat ID>]
-<body content>
+ACTION:NOTE title=<title> [chatid=...]
+<body>
 END_ACTION
 
-ACTION:TASK subject=<subject> [assignee=<person ID>] [chatid=<target chat ID>]
+ACTION:TASK subject=<subject> [assignee=<name>] [chatid=...]
+<optional description>
 END_ACTION
 
 ACTION:EVENT title=<title> start=<ISO8601> end=<ISO8601>
 END_ACTION
-Example: ACTION:EVENT title=Team Meeting start=2026-03-30T14:00:00Z end=2026-03-30T15:00:00Z
 
-ACTION:CARD [chatid=<target chat ID>]
-<Adaptive Card JSON, version 1.3>
+ACTION:CARD [chatid=...]
+<Adaptive Card JSON v1.3>
 END_ACTION
 
-Adaptive Card example:
-{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Title","weight":"bolder","size":"medium"},{"type":"FactSet","facts":[{"title":"Key","value":"Value"}]}]}
-
-Card elements: TextBlock, FactSet, ColumnSet/Column, Image, Container, Action.OpenUrl, Action.Submit
-
-Rules:
-- Your text reply comes FIRST, then ACTION blocks at the end.
-- When the user asks to send a message to someone → use ACTION:MESSAGE with the person's name as chatid.
-- NEVER use a person ID, creatorId, or userId as chatid — it is NOT a chat ID. Always use the person's NAME instead (e.g., chatid=John Lin). The system resolves names to chat IDs automatically.
-- If you want to reply in the current chat, omit the chatid parameter entirely.
-- When the user asks for cards, rich display, progress, reports, or structured data → use ACTION:CARD.
-- When the user asks to create notes/tasks/events → use the corresponding ACTION block.
-- chatid accepts a numeric Chat ID, a ![:Team](ID) mention, OR a person's name (e.g., John Test). The system will automatically resolve names to chat IDs via directory search.
-- assignee accepts a numeric Person ID, a ![:Person](ID) mention, OR a person's name (e.g., assignee=John Test). The system resolves names automatically.
-- If no chatid is specified, the action executes in the current chat.
-- Do NOT create files. Do NOT output raw JSON in your reply. Use ACTION blocks so the system executes them.
-- If no action is needed, reply normally without ACTION blocks.
+## Rules
+- chatid: person name (e.g. John Smith), numeric chat ID, or ![:Team](ID). Omit to use current chat.
+- assignee: person name or ![:Person](ID).
+- The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
+- For structured data, reports, or progress → use ACTION:CARD.
+- If no action needed, reply normally without ACTION blocks.
 `
 
 const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
@@ -72,7 +68,7 @@ User message: %s
 Intent:`
 
 const defaultNameExtractPrompt = `Extract the target person's name from this message.
-Reply with ONLY the person's name (e.g. "John Lin"), nothing else.
+Reply with ONLY the person's name (e.g. "John Smith"), nothing else.
 If no specific person is mentioned, reply with "NONE".
 
 Message: %s
@@ -81,14 +77,13 @@ Name:`
 
 const defaultSummaryPrompt = `User request: %s
 
-Please summarize the following chat messages from "%s" (%s).
-These are the most recent %d messages fetched from the chat before time filtering.
-Provide a concise summary in the same language as the messages. 
-Highlight key topics, decisions, and action items if any.
-%s
+Summarize the following chat messages from "%s" (%s, up to %d messages).
+Reply in the same language as the messages. Highlight key topics, decisions, and action items.
+
 --- Messages (%d total) ---
 %s
---- End of Messages ---`
+--- End of Messages ---
+%s`
 
 const defaultHeartbeatPrompt = "This is a scheduled heartbeat check. Follow the instructions below and report anything that needs attention. If everything is fine, reply with exactly: %s\n\n%s"
 
@@ -132,7 +127,10 @@ func loadPrompt(name, defaultText string) string {
 
 // --- Public accessors ---
 
-func ActionPrompt() string      { return loadPrompt("action", defaultActionPrompt) }
+func ActionPrompt() string {
+	p := loadPrompt("action", defaultActionPrompt)
+	return strings.ReplaceAll(p, "{{.Now}}", time.Now().Format("2006-01-02 15:04 MST"))
+}
 func IntentPrompt() string      { return loadPrompt("intent", defaultIntentPrompt) }
 func NameExtractPrompt() string { return loadPrompt("name_extract", defaultNameExtractPrompt) }
 func SummaryPrompt() string     { return loadPrompt("summary", defaultSummaryPrompt) }

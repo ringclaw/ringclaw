@@ -418,7 +418,7 @@ func BuildSummaryPrompt(ctx context.Context, client *ringcentral.Client, req *Su
 	}
 
 	prompt := fmt.Sprintf(SummaryPrompt(),
-		userReq, chatLabel, timeDesc, limit, ActionPrompt(), len(lines), strings.Join(lines, "\n"))
+		userReq, chatLabel, timeDesc, limit, len(lines), strings.Join(lines, "\n"), ActionPrompt())
 
 	slog.Info("built prompt", "component", "summarize", "chatLabel", chatLabel, "messages", len(lines), "chars", len(prompt))
 	return prompt, nil
