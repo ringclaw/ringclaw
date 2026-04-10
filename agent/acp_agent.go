@@ -265,7 +265,7 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 		return fmt.Errorf("agent startup failed (pid=%d): %w", pid, err)
 	}
 
-	slog.Info("initialized", "component", "acp", "pid", pid, "result", string(result))
+	slog.Debug("initialized", "component", "acp", "pid", pid, "result", string(result))
 
 	return nil
 }
@@ -661,15 +661,13 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 
 	switch p.Update.SessionUpdate {
 	case "tool_call":
-		slog.Info("tool_call", "component", "acp", "session", p.SessionID,
-			"toolCallId", p.Update.ToolCallID, "title", p.Update.Title,
-			"status", p.Update.Status, "kind", p.Update.Kind,
-			"rawInput", truncateRaw(p.Update.RawInput, 500))
+		slog.Info("tool_call", "component", "acp",
+			"tool", p.Update.Title, "status", p.Update.Status,
+			"input", prettyRaw(p.Update.RawInput, 300))
 	case "tool_call_update":
-		slog.Info("tool_call_update", "component", "acp", "session", p.SessionID,
-			"toolCallId", p.Update.ToolCallID, "title", p.Update.Title,
-			"status", p.Update.Status,
-			"rawOutput", truncateRaw(p.Update.RawOutput, 500))
+		slog.Info("tool_call_update", "component", "acp",
+			"tool", p.Update.ToolCallID, "status", p.Update.Status,
+			"output", prettyRaw(p.Update.RawOutput, 300))
 	case "agent_message_chunk", "agent_thought_chunk":
 		// Suppress noisy streaming chunks; final text is logged in "agent replied"
 	default:
@@ -699,6 +697,27 @@ func truncateRaw(data json.RawMessage, maxLen int) string {
 		return ""
 	}
 	s := string(data)
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
+}
+
+// prettyRaw unquotes and compacts JSON for human-readable log output.
+// For a string like `"{\"server\":\"jira\"}"`, it returns `{"server":"jira"}`.
+// For raw objects/arrays, it returns the compact JSON directly.
+func prettyRaw(data json.RawMessage, maxLen int) string {
+	if len(data) == 0 {
+		return ""
+	}
+	s := string(data)
+	// Try to unquote if the raw value is a JSON string containing embedded JSON
+	if len(s) > 1 && s[0] == '"' {
+		var unquoted string
+		if err := json.Unmarshal(data, &unquoted); err == nil {
+			s = unquoted
+		}
+	}
 	if len(s) > maxLen {
 		return s[:maxLen] + "..."
 	}
@@ -743,8 +762,8 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		},
 	})
 
-	slog.Info("auto-allowed permission request", "component", "acp",
-		"optionId", optionID, "toolCall", truncateRaw(req.Params.ToolCall, 300))
+	slog.Debug("auto-allowed permission request", "component", "acp",
+		"optionId", optionID)
 }
 
 // Info returns metadata about this agent.

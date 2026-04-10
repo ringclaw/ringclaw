@@ -124,7 +124,8 @@ func (h *Handler) SetDefaultAgent(name string, ag agent.Agent) {
 	defer h.mu.Unlock()
 	h.defaultName = name
 	h.agents[name] = ag
-	slog.Info("default agent ready", "component", "handler", "name", name, "info", ag.Info())
+	info := ag.Info()
+	slog.Info("default agent ready", "component", "handler", "agent", name, "type", info.Type, "pid", info.PID)
 }
 
 // getAgent returns a running agent by name, or starts it on demand via factory.
@@ -620,18 +621,18 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 // chatWithAgent sends a message to an agent and returns the reply.
 func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, message string) (string, error) {
 	info := ag.Info()
-	slog.Info("dispatching to agent", "component", "handler", "info", info, "conversationID", userID)
+	slog.Info("dispatching to agent", "component", "handler", "agent", info.Name, "conversationID", userID)
 
 	start := time.Now()
 	reply, err := ag.Chat(ctx, userID, message)
 	elapsed := time.Since(start)
 
 	if err != nil {
-		slog.Error("agent error", "component", "handler", "info", info, "conversationID", userID, "elapsed", elapsed, "error", err)
+		slog.Error("agent error", "component", "handler", "agent", info.Name, "elapsed", elapsed, "error", err)
 		return "", err
 	}
 
-	slog.Info("agent replied", "component", "handler", "info", info, "conversationID", userID, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
+	slog.Info("agent replied", "component", "handler", "agent", info.Name, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
 	return reply, nil
 }
 
@@ -640,15 +641,15 @@ func (h *Handler) chatWithAgentOrImages(ctx context.Context, ag agent.Agent, con
 	if len(images) > 0 {
 		if is, ok := ag.(agent.ImageSupporter); ok {
 			info := ag.Info()
-			slog.Info("dispatching to agent with images", "component", "handler", "info", info, "conversationID", conversationID, "images", len(images))
+			slog.Info("dispatching to agent with images", "component", "handler", "agent", info.Name, "conversationID", conversationID, "images", len(images))
 			start := time.Now()
 			reply, err := is.ChatWithImages(ctx, conversationID, message, images)
 			elapsed := time.Since(start)
 			if err != nil {
-				slog.Error("agent error", "component", "handler", "info", info, "conversationID", conversationID, "elapsed", elapsed, "error", err)
+				slog.Error("agent error", "component", "handler", "agent", info.Name, "elapsed", elapsed, "error", err)
 				return "", err
 			}
-			slog.Info("agent replied", "component", "handler", "info", info, "conversationID", conversationID, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
+			slog.Info("agent replied", "component", "handler", "agent", info.Name, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
 			return reply, nil
 		}
 		message += fmt.Sprintf("\n\n[Note: %d image(s) were attached but this agent does not support image input.]", len(images))
