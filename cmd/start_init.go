@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/api"
@@ -81,7 +80,7 @@ func initClients(ctx context.Context, cfg *config.Config) (*clients, error) {
 func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 	handler := messaging.NewHandler(
 		func(ctx context.Context, name string) agent.Agent {
-			return createAgentByName(ctx, cfg, name)
+			return agent.Create(ctx, cfg, name)
 		},
 		func(name string) error {
 			cfg.DefaultAgent = name
@@ -152,7 +151,7 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 			return
 		}
 		slog.Info("initializing default agent in background", "agent", cfg.DefaultAgent)
-		ag := createAgentByName(ctx, cfg, cfg.DefaultAgent)
+		ag := agent.Create(ctx, cfg, cfg.DefaultAgent)
 		if ag == nil {
 			slog.Warn("failed to initialize default agent, staying in echo mode", "agent", cfg.DefaultAgent)
 		} else {
@@ -220,87 +219,6 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 			go hbRunner.Start(ctx)
 		}
 	}
-}
-
-// createAgentByName creates and starts an agent by its config name.
-func createAgentByName(ctx context.Context, cfg *config.Config, name string) agent.Agent {
-	agCfg, ok := cfg.Agents[name]
-	if !ok {
-		slog.Warn("agent not found in config", "component", "agent", "name", name)
-		return nil
-	}
-
-	cwd := agentWorkspace(cfg, agCfg)
-
-	switch agCfg.Type {
-	case "acp":
-		ag := agent.NewACPAgent(agent.ACPAgentConfig{
-			Command:      agCfg.Command,
-			Args:         agCfg.Args,
-			Cwd:          cwd,
-			Env:          agCfg.Env,
-			Model:        agCfg.Model,
-			SystemPrompt: agCfg.SystemPrompt,
-			AllowWrite:   agCfg.AllowWrite,
-		})
-		if err := ag.Start(ctx); err != nil {
-			slog.Error("failed to start ACP agent", "component", "agent", "name", name, "error", err)
-			return nil
-		}
-		slog.Info("started ACP agent", "component", "agent", "name", name, "command", agCfg.Command, "type", agCfg.Type, "model", agCfg.Model)
-		return ag
-	case "cli":
-		cli := agent.NewCLIAgent(agent.CLIAgentConfig{
-			Name:         name,
-			Command:      agCfg.Command,
-			Args:         agCfg.Args,
-			Cwd:          cwd,
-			Env:          agCfg.Env,
-			Model:        agCfg.Model,
-			SystemPrompt: agCfg.SystemPrompt,
-		})
-		slog.Info("created CLI agent", "component", "agent", "name", name, "command", agCfg.Command, "type", agCfg.Type, "model", agCfg.Model)
-		return cli
-	case "http":
-		if agCfg.Endpoint == "" {
-			slog.Warn("HTTP agent has no endpoint", "component", "agent", "name", name)
-			return nil
-		}
-		var timeout time.Duration
-		if agCfg.Timeout > 0 {
-			timeout = time.Duration(agCfg.Timeout) * time.Second
-		}
-		ag := agent.NewHTTPAgent(agent.HTTPAgentConfig{
-			Name:         name,
-			Endpoint:     agCfg.Endpoint,
-			APIKey:       agCfg.APIKey,
-			Headers:      agCfg.Headers,
-			Model:        agCfg.Model,
-			SystemPrompt: agCfg.SystemPrompt,
-			MaxHistory:   agCfg.MaxHistory,
-			Format:       agCfg.Format,
-			Cwd:          cwd,
-			Sender:       agCfg.Sender,
-			ContextMode:  agCfg.ContextMode,
-			GroupJID:     agCfg.GroupJID,
-			Timeout:      timeout,
-		})
-		slog.Info("created HTTP agent", "component", "agent", "name", name, "endpoint", agCfg.Endpoint, "model", agCfg.Model, "format", agCfg.Format)
-		return ag
-	default:
-		slog.Warn("unknown agent type", "component", "agent", "type", agCfg.Type, "name", name)
-		return nil
-	}
-}
-
-func agentWorkspace(cfg *config.Config, agCfg config.AgentConfig) string {
-	if agCfg.Cwd != "" {
-		return agCfg.Cwd
-	}
-	if cfg != nil {
-		return cfg.AgentWorkspace
-	}
-	return ""
 }
 
 // checkAliasConflicts warns about alias conflicts at startup.
