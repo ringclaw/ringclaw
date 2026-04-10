@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// ACPAgent communicates with ACP-compatible agents (claude-agent-acp, codex-acp, cursor agent, etc.) via stdio JSON-RPC 2.0.
+// ACPAgent communicates with ACP-compatible agents via stdio JSON-RPC 2.0.
 type ACPAgent struct {
 	command      string
 	args         []string
@@ -43,44 +43,21 @@ type ACPAgent struct {
 	notifyMu sync.Mutex
 	notifyCh map[string]chan *sessionUpdate // sessionID -> channel
 
-	stderr         *acpStderrWriter // captures stderr for error reporting
-	droppedUpdates atomic.Int64     // counter for dropped notification updates
-	loggedMethods  sync.Map         // tracks already-logged unhandled methods
-	termMgr        *terminalManager // terminal process manager for ACP client interface
+	stderr         *acpStderrWriter
+	droppedUpdates atomic.Int64
+	loggedMethods  sync.Map
+	termMgr        *terminalManager
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
 type ACPAgentConfig struct {
-	Command      string            // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
-	Args         []string          // extra args for command (e.g. ["acp"] for cursor)
+	Command      string
+	Args         []string
 	Model        string
 	SystemPrompt string
-	Cwd          string            // working directory
-	Env          map[string]string // extra environment variables
-	AllowWrite   bool              // grant file write permission (default: false)
-}
-
-// --- JSON-RPC types ---
-
-type rpcRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int64       `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-}
-
-type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
-
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Cwd          string
+	Env          map[string]string
+	AllowWrite   bool
 }
 
 // --- ACP protocol types ---
@@ -117,10 +94,10 @@ type promptParams struct {
 }
 
 type promptEntry struct {
-	Type     string `json:"type"`               // "text" or "image"
+	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
-	Data     string `json:"data,omitempty"`      // base64 encoded image data
-	MimeType string `json:"mimeType,omitempty"`  // e.g. "image/png" (ACP spec)
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }
 
 type promptResult struct {
@@ -135,16 +112,14 @@ type sessionUpdateParams struct {
 type sessionUpdate struct {
 	SessionUpdate string          `json:"sessionUpdate"`
 	Content       json.RawMessage `json:"content,omitempty"`
-	// For agent_message_chunk
-	Type string `json:"type,omitempty"`
-	Text string `json:"text,omitempty"`
-	// For tool_call / tool_call_update
-	ToolCallID string          `json:"toolCallId,omitempty"`
-	Title      string          `json:"title,omitempty"`
-	Status     string          `json:"status,omitempty"`
-	Kind       string          `json:"kind,omitempty"`
-	RawInput   json.RawMessage `json:"rawInput,omitempty"`
-	RawOutput  json.RawMessage `json:"rawOutput,omitempty"`
+	Type          string          `json:"type,omitempty"`
+	Text          string          `json:"text,omitempty"`
+	ToolCallID    string          `json:"toolCallId,omitempty"`
+	Title         string          `json:"title,omitempty"`
+	Status        string          `json:"status,omitempty"`
+	Kind          string          `json:"kind,omitempty"`
+	RawInput      json.RawMessage `json:"rawInput,omitempty"`
+	RawOutput     json.RawMessage `json:"rawOutput,omitempty"`
 }
 
 type permissionRequestParams struct {
@@ -181,7 +156,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	}
 }
 
-// Start launches the claude-agent-acp subprocess and initializes the connection.
+// Start launches the ACP subprocess and initializes the connection.
 func (a *ACPAgent) Start(ctx context.Context) error {
 	a.mu.Lock()
 	if a.started {
@@ -199,7 +174,6 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 		}
 		a.cmd.Env = cmdEnv
 	}
-	// Capture stderr for debugging and error reporting
 	a.stderr = &acpStderrWriter{prefix: "[acp-stderr]"}
 	a.cmd.Stderr = a.stderr
 
@@ -225,16 +199,13 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	slog.Info("started subprocess", "component", "acp", "command", a.command, "pid", pid)
 
 	a.scanner = bufio.NewScanner(stdout)
-	a.scanner.Buffer(make([]byte, 0, 4*1024*1024), 4*1024*1024) // 4MB
+	a.scanner.Buffer(make([]byte, 0, 4*1024*1024), 4*1024*1024)
 	a.started = true
 
-	// Start reading loop
 	go a.readLoop()
 
-	// Release lock before calling initialize — call() needs a.mu to write to stdin
 	a.mu.Unlock()
 
-	// Initialize handshake with timeout
 	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -253,11 +224,9 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 		a.stdin.Close()
 		a.cmd.Process.Kill()
 		a.cmd.Wait()
-		// Use stderr detail if available (e.g. "connect ECONNREFUSED")
 		if detail := a.stderr.LastError(); detail != "" {
 			return fmt.Errorf("agent startup failed: %s", detail)
 		}
-		// Provide a helpful hint when the binary looks like a Claude CLI that doesn't support ACP
 		base := strings.ToLower(filepath.Base(a.command))
 		if base == "claude" || base == "claude.exe" {
 			return fmt.Errorf("agent startup failed (pid=%d): %w\n\nHint: the 'claude' CLI does not support ACP protocol directly.\nSet type to \"cli\" in your config, or install claude-agent-acp and set command to \"claude-agent-acp\".", pid, err)
@@ -266,7 +235,6 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	}
 
 	slog.Debug("initialized", "component", "acp", "pid", pid, "result", string(result))
-
 	return nil
 }
 
@@ -277,27 +245,23 @@ func (a *ACPAgent) Stop() {
 		a.mu.Unlock()
 		return
 	}
-	// Snapshot active sessions and close stdin to signal EOF
 	sessions := make(map[string]string, len(a.sessions))
 	for k, v := range a.sessions {
 		sessions[k] = v
 	}
 	a.mu.Unlock()
 
-	// Best-effort: end active sessions
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	for _, sid := range sessions {
 		a.notify("session/end", map[string]string{"sessionId": sid})
 	}
 
-	// Close stdin so the subprocess sees EOF
 	a.mu.Lock()
 	a.stdin.Close()
 	proc := a.cmd.Process
 	a.mu.Unlock()
 
-	// Wait briefly for graceful exit, then force kill
 	done := make(chan struct{})
 	go func() {
 		a.cmd.Wait()
@@ -312,7 +276,6 @@ func (a *ACPAgent) Stop() {
 		<-done
 	}
 
-	// Cleanup all terminal processes
 	a.termMgr.cleanup()
 
 	a.mu.Lock()
@@ -327,8 +290,7 @@ func (a *ACPAgent) SetCwd(cwd string) {
 	a.cwd = cwd
 }
 
-// ResetSession clears the existing session for the given conversationID and
-// immediately creates a new one, returning the new session ID.
+// ResetSession clears the existing session and creates a new one.
 func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (string, error) {
 	a.mu.Lock()
 	delete(a.sessions, conversationID)
@@ -352,8 +314,8 @@ func (a *ACPAgent) ChatWithImages(ctx context.Context, conversationID string, me
 	entries := []promptEntry{{Type: "text", Text: message}}
 	for _, img := range images {
 		entries = append(entries, promptEntry{
-			Type:      "image",
-			Data:      base64.StdEncoding.EncodeToString(img.Data),
+			Type:     "image",
+			Data:     base64.StdEncoding.EncodeToString(img.Data),
 			MimeType: img.MediaType,
 		})
 	}
@@ -477,11 +439,6 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
 
-	// Best-effort: set mode to full-auto so headless MCP tool calls are not blocked
-	// by the agent's internal approval policy (e.g. codex untrusted workspace).
-	// Valid mode IDs: "read-only", "auto", "full-access"
-	// "full-access" sets AskForApproval::Never + DangerFullAccess so MCP tool calls
-	// bypass the approval path that otherwise cancels them in headless mode.
 	if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
 		"sessionId": sessionResult.SessionID,
 		"modeId":    "full-access",
@@ -493,319 +450,6 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	}
 
 	return sessionResult.SessionID, true, nil
-}
-
-// call sends a JSON-RPC request and waits for the response.
-func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
-	id := a.nextID.Add(1)
-
-	ch := make(chan *rpcResponse, 1)
-	a.pendingMu.Lock()
-	a.pending[id] = ch
-	a.pendingMu.Unlock()
-
-	defer func() {
-		a.pendingMu.Lock()
-		delete(a.pending, id)
-		a.pendingMu.Unlock()
-	}()
-
-	req := rpcRequest{
-		JSONRPC: "2.0",
-		ID:      id,
-		Method:  method,
-		Params:  params,
-	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	a.mu.Lock()
-	_, err = fmt.Fprintf(a.stdin, "%s\n", data)
-	a.mu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("write to stdin: %w", err)
-	}
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case resp, ok := <-ch:
-		if !ok {
-			return nil, fmt.Errorf("agent process exited unexpectedly")
-		}
-		if resp.Error != nil {
-			msg := resp.Error.Message
-			// Enrich with stderr context when the RPC error message is generic
-			if a.stderr != nil && (msg == "" || msg == "Internal error" || msg == "internal error") {
-				if detail := a.stderr.LastError(); detail != "" {
-					msg = detail
-				}
-			}
-			return nil, fmt.Errorf("agent error (code %d): %s", resp.Error.Code, msg)
-		}
-		return resp.Result, nil
-	}
-}
-
-// notify sends a JSON-RPC notification (no id, no response expected).
-func (a *ACPAgent) notify(method string, params interface{}) {
-	msg := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"method":  method,
-	}
-	if params != nil {
-		msg["params"] = params
-	}
-	data, err := json.Marshal(msg)
-	if err != nil {
-		slog.Error("failed to marshal notification", "component", "acp", "method", method, "error", err)
-		return
-	}
-	a.mu.Lock()
-	fmt.Fprintf(a.stdin, "%s\n", data)
-	a.mu.Unlock()
-}
-
-// readLoop reads NDJSON lines from stdout and dispatches to pending requests or notification channels.
-func (a *ACPAgent) readLoop() {
-	for a.scanner.Scan() {
-		line := a.scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		var msg rpcResponse
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			slog.Error("failed to parse message", "component", "acp", "error", err)
-			continue
-		}
-
-		// Response to a request we made (has id, no method)
-		if msg.ID != nil && msg.Method == "" {
-			a.pendingMu.Lock()
-			ch, ok := a.pending[*msg.ID]
-			a.pendingMu.Unlock()
-			if ok {
-				ch <- &msg
-			}
-			continue
-		}
-
-		// Request from agent or notification
-		switch msg.Method {
-		case "session/update":
-			a.handleSessionUpdate(msg.Params)
-
-		case "session/request_permission":
-			a.handlePermissionRequest(line)
-
-		// ACP client terminal interface
-		case "terminal/create":
-			a.handleTerminalCreate(line)
-		case "terminal/output":
-			a.handleTerminalOutput(line)
-		case "terminal/wait_for_exit":
-			a.handleTerminalWaitForExit(line)
-		case "terminal/kill":
-			a.handleTerminalKill(line)
-		case "terminal/release":
-			a.handleTerminalRelease(line)
-
-		// ACP client filesystem interface
-		case "fs/read_text_file":
-			a.handleFSReadTextFile(line)
-		case "fs/write_text_file":
-			a.handleFSWriteTextFile(line)
-
-		default:
-			if msg.Method != "" {
-				if _, loaded := a.loggedMethods.LoadOrStore(msg.Method, true); !loaded {
-					raw := line
-					if len(raw) > 200 {
-						raw = raw[:200]
-					}
-					slog.Debug("unhandled method", "component", "acp", "method", msg.Method, "raw", raw)
-				}
-			}
-		}
-	}
-
-	if err := a.scanner.Err(); err != nil {
-		slog.Error("read loop error", "component", "acp", "error", err)
-	}
-	slog.Info("read loop ended", "component", "acp")
-
-	// Close all pending request channels so callers don't block forever
-	a.pendingMu.Lock()
-	for id, ch := range a.pending {
-		close(ch)
-		delete(a.pending, id)
-	}
-	a.pendingMu.Unlock()
-
-	// Mark as not started so next Chat() call triggers auto-restart
-	a.mu.Lock()
-	a.started = false
-	a.mu.Unlock()
-}
-
-func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
-	var p sessionUpdateParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		slog.Error("failed to parse session/update", "component", "acp", "error", err, "raw", string(params))
-		return
-	}
-
-	switch p.Update.SessionUpdate {
-	case "tool_call":
-		tool, args := extractToolAndArgs(p.Update.RawInput)
-		if tool == "" {
-			tool = strings.TrimPrefix(p.Update.Title, "Tool: ")
-		}
-		slog.Info("tool_call", "component", "acp",
-			"tool", tool, "status", p.Update.Status, "args", args)
-	case "tool_call_update":
-		slog.Info("tool_call_update", "component", "acp",
-			"status", p.Update.Status,
-			"output", extractToolOutput(p.Update.RawOutput, 200))
-	case "agent_message_chunk", "agent_thought_chunk":
-		// Suppress noisy streaming chunks; final text is logged in "agent replied"
-	default:
-		slog.Debug("session/update", "component", "acp", "session", p.SessionID,
-			"type", p.Update.SessionUpdate)
-	}
-
-	a.notifyMu.Lock()
-	ch, ok := a.notifyCh[p.SessionID]
-	a.notifyMu.Unlock()
-
-	if ok {
-		select {
-		case ch <- &p.Update:
-		default:
-			dropped := a.droppedUpdates.Add(1)
-			if dropped == 1 || dropped%100 == 0 {
-				slog.Warn("notification channel full", "component", "acp", "dropped", dropped, "session", p.SessionID)
-			}
-		}
-	}
-}
-
-// truncateRaw truncates a JSON raw message for logging.
-func truncateRaw(data json.RawMessage, maxLen int) string {
-	if len(data) == 0 {
-		return ""
-	}
-	s := string(data)
-	if len(s) > maxLen {
-		return s[:maxLen] + "..."
-	}
-	return s
-}
-
-// extractToolAndArgs parses rawInput like {"server":"jira","tool":"jira_search","arguments":{...}}
-// and returns "jira/jira_search" and a compact args string.
-func extractToolAndArgs(data json.RawMessage) (string, string) {
-	if len(data) == 0 {
-		return "", ""
-	}
-	var v struct {
-		Server string          `json:"server"`
-		Tool   string          `json:"tool"`
-		Args   json.RawMessage `json:"arguments"`
-	}
-	if err := json.Unmarshal(data, &v); err != nil || v.Tool == "" {
-		return "", truncateRaw(data, 200)
-	}
-	tool := v.Tool
-	if v.Server != "" {
-		tool = v.Server + "/" + v.Tool
-	}
-	args := string(v.Args)
-	if len(args) > 200 {
-		args = args[:200] + "..."
-	}
-	return tool, args
-}
-
-// extractToolOutput extracts a readable preview from rawOutput.
-// rawOutput is typically {"content":[{"type":"text","text":"..."}],...}
-func extractToolOutput(data json.RawMessage, maxLen int) string {
-	if len(data) == 0 {
-		return ""
-	}
-	// Try to unquote if the raw value is a JSON string
-	s := string(data)
-	if len(s) > 1 && s[0] == '"' {
-		var unquoted string
-		if err := json.Unmarshal(data, &unquoted); err == nil {
-			s = unquoted
-		}
-	}
-	// Try to extract content[0].text from the standard MCP response format
-	var resp struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-		IsError bool `json:"isError"`
-	}
-	if err := json.Unmarshal([]byte(s), &resp); err == nil && len(resp.Content) > 0 {
-		text := resp.Content[0].Text
-		if resp.IsError {
-			text = "[error] " + text
-		}
-		if len(text) > maxLen {
-			return text[:maxLen] + "..."
-		}
-		return text
-	}
-	if len(s) > maxLen {
-		return s[:maxLen] + "..."
-	}
-	return s
-}
-
-func (a *ACPAgent) handlePermissionRequest(raw string) {
-	// Parse the request to get the ID and auto-allow
-	var req struct {
-		ID     json.RawMessage         `json:"id"`
-		Params permissionRequestParams `json:"params"`
-	}
-	if err := json.Unmarshal([]byte(raw), &req); err != nil {
-		slog.Error("failed to parse permission request", "component", "acp", "error", err)
-		return
-	}
-
-	// Find the "allow" option
-	optionID := "allow"
-	for _, opt := range req.Params.Options {
-		if opt.Kind == "allow" {
-			optionID = opt.OptionID
-			break
-		}
-	}
-
-	// Send response using rpcResponseOut to avoid json.RawMessage double-encoding
-	type permissionOutcome struct {
-		Outcome  string `json:"outcome"`
-		OptionID string `json:"optionId"`
-	}
-	type permissionResult struct {
-		Outcome permissionOutcome `json:"outcome"`
-	}
-
-	a.sendResponse(req.ID, permissionResult{
-		Outcome: permissionOutcome{
-			Outcome:  "selected",
-			OptionID: optionID,
-		},
-	})
-
-	slog.Debug("auto-allowed permission request", "component", "acp",
-		"optionId", optionID)
 }
 
 // Info returns metadata about this agent.
@@ -825,12 +469,9 @@ func (a *ACPAgent) Info() AgentInfo {
 }
 
 func extractChunkText(update *sessionUpdate) string {
-	// The content field in agent_message_chunk can be a text content block
 	if update.Text != "" {
 		return update.Text
 	}
-
-	// Try to extract from content JSON
 	if update.Content != nil {
 		var content struct {
 			Type string `json:"type"`
@@ -840,34 +481,26 @@ func extractChunkText(update *sessionUpdate) string {
 			return content.Text
 		}
 	}
-
 	return ""
 }
 
-// extractPromptResultText tries to extract text from the session/prompt response.
-// Some ACP agents include response content in the result alongside stopReason.
 func extractPromptResultText(result json.RawMessage) string {
 	if result == nil {
 		return ""
 	}
-
-	// Try to extract content array from result
 	var r struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		// Some agents use a flat text field
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal(result, &r); err != nil {
 		return ""
 	}
-
 	if r.Text != "" {
 		return r.Text
 	}
-
 	var parts []string
 	for _, c := range r.Content {
 		if c.Type == "text" && c.Text != "" {
@@ -875,37 +508,4 @@ func extractPromptResultText(result json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, "")
-}
-
-// acpStderrWriter forwards the ACP subprocess stderr to the application log
-// and captures the last meaningful error line.
-type acpStderrWriter struct {
-	prefix string
-	mu     sync.Mutex
-	last   string // last non-empty, non-traceback line
-}
-
-func (w *acpStderrWriter) Write(p []byte) (int, error) {
-	lines := strings.Split(strings.TrimRight(string(p), "\n"), "\n")
-	w.mu.Lock()
-	for _, line := range lines {
-		if line != "" {
-			slog.Debug("subprocess stderr", "prefix", w.prefix, "line", line)
-			// Capture lines that look like actual error messages (not traceback frames)
-			if !strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "Traceback") && !strings.HasPrefix(line, "...") {
-				w.last = line
-			}
-		}
-	}
-	w.mu.Unlock()
-	return len(p), nil
-}
-
-// LastError returns the last captured error line and resets it.
-func (w *acpStderrWriter) LastError() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	s := w.last
-	w.last = ""
-	return s
 }

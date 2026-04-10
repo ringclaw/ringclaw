@@ -328,41 +328,27 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 
 	// Built-in commands (no typing needed)
 	if text == "/reload" {
-		reply := h.handleReload()
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send reload reply", "component", "handler", "error", err)
-		}
+		logSendError(SendTextReply(ctx, client, chatID, h.handleReload()))
 		return
 	}
 	if text == "/info" || text == "/status" {
 		cardJSON := h.buildStatusCard()
 		if _, err := client.CreateAdaptiveCard(ctx, chatID, cardJSON); err != nil {
 			slog.Error("failed to send status card, falling back to text", "component", "handler", "error", err)
-			reply := h.buildStatus()
-			if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-				slog.Error("failed to send reply", "component", "handler", "error", err)
-			}
+			logSendError(SendTextReply(ctx, client, chatID, h.buildStatus()))
 		}
 		return
 	} else if text == "/new" || text == "/clear" {
-		reply := h.resetDefaultSession(ctx, conversationIDForPost(client, post))
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send reply", "component", "handler", "error", err)
-		}
+		logSendError(SendTextReply(ctx, client, chatID, h.resetDefaultSession(ctx, conversationIDForPost(client, post))))
 		return
 	} else if strings.HasPrefix(text, "/cwd") {
-		reply := h.handleCwd(text)
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send reply", "component", "handler", "error", err)
-		}
+		logSendError(SendTextReply(ctx, client, chatID, h.handleCwd(text)))
 		return
 	} else if text == "/help" {
 		cardJSON := buildHelpCard()
 		if _, err := client.CreateAdaptiveCard(ctx, chatID, cardJSON); err != nil {
 			slog.Error("failed to send help card, falling back to text", "component", "handler", "error", err)
-			if err := SendTextReply(ctx, client, chatID, buildHelpText()); err != nil {
-				slog.Error("failed to send reply", "component", "handler", "error", err)
-			}
+			logSendError(SendTextReply(ctx, client, chatID, buildHelpText()))
 		}
 		return
 	} else if strings.HasPrefix(text, "/cron") {
@@ -370,25 +356,16 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			logSendError(SendTextReply(ctx, client, chatID, "Cron is not configured."))
 			return
 		}
-		reply := HandleCronCommand(h.cronStore, text, chatID)
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send cron reply", "component", "handler", "error", err)
-		}
+		logSendError(SendTextReply(ctx, client, chatID, HandleCronCommand(h.cronStore, text, chatID)))
 		return
 	} else if strings.HasPrefix(text, "/chatinfo") {
-		reply := handleChatInfo(ctx, readClient, chatID, text)
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send chatinfo reply", "component", "handler", "error", err)
-		}
+		logSendError(SendTextReply(ctx, client, chatID, handleChatInfo(ctx, readClient, chatID, text)))
 		return
 	}
 
 	// Explicit action commands: /task, /note, /event (use readClient for API access)
 	if IsActionCommand(text) {
-		reply := HandleActionCommand(ctx, readClient, chatID, text)
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send action reply", "component", "handler", "error", err)
-		}
+		logSendError(SendTextReply(ctx, client, chatID, HandleActionCommand(ctx, readClient, chatID, text)))
 		return
 	}
 
@@ -417,17 +394,11 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 				logSendError(SendTextReply(ctx, client, chatID, "Only the bot owner can switch agents in group chats."))
 				return
 			}
-			reply := h.switchDefault(ctx, agentNames[0])
-			if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-				slog.Error("failed to send reply", "component", "handler", "error", err)
-			}
+			logSendError(SendTextReply(ctx, client, chatID, h.switchDefault(ctx, agentNames[0])))
 		} else if len(agentNames) == 1 && !h.isKnownAgent(agentNames[0]) {
 			h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		} else {
-			reply := "Usage: specify one agent to switch, or add a message to broadcast"
-			if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-				slog.Error("failed to send reply", "component", "handler", "error", err)
-			}
+			logSendError(SendTextReply(ctx, client, chatID, "Usage: specify one agent to switch, or add a message to broadcast"))
 		}
 		return
 	}
@@ -504,10 +475,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 	ag, agErr := h.getAgent(ctx, name)
 	if agErr != nil {
 		slog.Error("agent not available", "component", "handler", "agent", name, "error", agErr)
-		reply := fmt.Sprintf("Agent %q is not available: %v", name, agErr)
-		if err := SendTextReply(ctx, client, chatID, reply); err != nil {
-			slog.Error("failed to send reply", "component", "handler", "error", err)
-		}
+		logSendError(SendTextReply(ctx, client, chatID, fmt.Sprintf("Agent %q is not available: %v", name, agErr)))
 		return
 	}
 
