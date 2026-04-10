@@ -523,7 +523,6 @@ func (a *ACPAgent) sendResponse(id json.RawMessage, result interface{}) {
 		slog.Error("failed to marshal response", "component", "acp", "error", err)
 		return
 	}
-	slog.Debug("sending response", "component", "acp", "id", string(id), "response", string(data))
 	a.mu.Lock()
 	fmt.Fprintf(a.stdin, "%s\n", data)
 	a.mu.Unlock()

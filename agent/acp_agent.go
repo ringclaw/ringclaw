@@ -769,8 +769,6 @@ func extractToolOutput(data json.RawMessage, maxLen int) string {
 }
 
 func (a *ACPAgent) handlePermissionRequest(raw string) {
-	slog.Debug("permission request raw", "component", "acp", "raw", truncateRaw(json.RawMessage(raw), 500))
-
 	// Parse the request to get the ID and auto-allow
 	var req struct {
 		ID     json.RawMessage         `json:"id"`
