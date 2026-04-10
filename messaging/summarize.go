@@ -417,16 +417,7 @@ func BuildSummaryPrompt(ctx context.Context, client *ringcentral.Client, req *Su
 		userReq = "summarize the chat"
 	}
 
-	prompt := fmt.Sprintf(`User request: %s
-
-Please summarize the following chat messages from "%s" (%s).
-These are the most recent %d messages fetched from the chat before time filtering.
-Provide a concise summary in the same language as the messages. 
-Highlight key topics, decisions, and action items if any.
-%s
---- Messages (%d total) ---
-%s
---- End of Messages ---`,
+	prompt := fmt.Sprintf(SummaryPrompt(),
 		userReq, chatLabel, timeDesc, limit, ActionPrompt(), len(lines), strings.Join(lines, "\n"))
 
 	slog.Info("built prompt", "component", "summarize", "chatLabel", chatLabel, "messages", len(lines), "chars", len(prompt))
@@ -620,20 +611,12 @@ var reInstructionSplit = regexp.MustCompile(`(?i)(?:` +
 
 const nameExtractConversationID = "name:extractor"
 
-const nameExtractPrompt = `Extract the target person's name from this message.
-Reply with ONLY the person's name (e.g. "John Lin"), nothing else.
-If no specific person is mentioned, reply with "NONE".
-
-Message: %s
-
-Name:`
-
 func extractNameViaAgent(ctx context.Context, ag agent.Agent, text string) string {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	start := time.Now()
-	reply, err := ag.Chat(ctx, nameExtractConversationID, fmt.Sprintf(nameExtractPrompt, text))
+	reply, err := ag.Chat(ctx, nameExtractConversationID, fmt.Sprintf(NameExtractPrompt(), text))
 	elapsed := time.Since(start)
 	if err != nil {
 		slog.Warn("agent name extraction failed", "component", "summarize", "error", err, "elapsed", elapsed)

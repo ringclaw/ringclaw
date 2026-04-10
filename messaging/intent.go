@@ -45,19 +45,6 @@ var intentTriggers = []string{
 
 const intentConversationID = "intent:classifier"
 
-const intentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
-- "summarize" if the user wants to summarize CHAT HISTORY or MESSAGES (even if they also want to send/note/task the result)
-- "task" if the PRIMARY goal is to CREATE a task/todo/action item
-- "note" if the PRIMARY goal is to CREATE a note (not just send results as a note)
-- "event" if the PRIMARY goal is to CREATE a calendar event/meeting
-- "chat" if this is a normal conversation, question, or any other request (including asking an AI to summarize code, documents, or articles)
-
-IMPORTANT: If the message contains BOTH "summarize" AND another action (create note/task/send), the primary intent is ALWAYS "summarize".
-
-User message: %s
-
-Intent:`
-
 // matchesIntentTrigger checks if the text contains any loose intent keyword.
 func matchesIntentTrigger(text string) bool {
 	lower := strings.ToLower(text)
@@ -72,7 +59,7 @@ func matchesIntentTrigger(text string) bool {
 // classifyIntent uses the default agent to determine the user's intent.
 // Returns IntentChat if the agent is unavailable or returns an unrecognized response.
 func classifyIntent(ctx context.Context, ag agent.Agent, text string) Intent {
-	prompt := fmt.Sprintf(intentPrompt, text)
+	prompt := fmt.Sprintf(IntentPrompt(), text)
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
