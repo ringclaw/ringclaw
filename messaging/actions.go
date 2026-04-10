@@ -52,8 +52,8 @@ Rules:
 - If you want to reply in the current chat, omit the chatid parameter entirely.
 - When the user asks for cards, rich display, progress, reports, or structured data → use ACTION:CARD.
 - When the user asks to create notes/tasks/events → use the corresponding ACTION block.
-- chatid accepts a numeric Chat ID, a ![:Team](ID) mention, OR a person's name (e.g., chatid=Ian Zhang). The system will automatically resolve names to chat IDs via directory search.
-- assignee accepts a numeric Person ID, a ![:Person](ID) mention, OR a person's name (e.g., assignee=Ian Zhang). The system resolves names automatically.
+- chatid accepts a numeric Chat ID, a ![:Team](ID) mention, OR a person's name (e.g., John Test). The system will automatically resolve names to chat IDs via directory search.
+- assignee accepts a numeric Person ID, a ![:Person](ID) mention, OR a person's name (e.g., assignee=John Test). The system resolves names automatically.
 - If no chatid is specified, the action executes in the current chat.
 - Do NOT create files. Do NOT output raw JSON in your reply. Use ACTION blocks so the system executes them.
 - If no action is needed, reply normally without ACTION blocks.

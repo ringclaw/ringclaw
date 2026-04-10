@@ -435,7 +435,7 @@ func TestIsNumericID(t *testing.T) {
 		{"abc", false},
 		{"123abc", false},
 		{"12 34", false},
-		{"Ian Zhang", false},
+		{"John Lin", false},
 	}
 	for _, tt := range tests {
 		if got := isNumericID(tt.input); got != tt.want {
