@@ -1,4 +1,4 @@
-package messaging
+package heartbeat
 
 import (
 	"testing"
@@ -71,7 +71,7 @@ func TestNewHeartbeatRunner_RejectsNonPositiveInterval(t *testing.T) {
 	}
 	for _, tt := range tests {
 		cfg := config.HeartbeatConfig{Enabled: true, Interval: tt.interval}
-		_, err := NewHeartbeatRunner(cfg, nil, "", nil)
+		_, err := NewHeartbeatRunner(cfg, nil, "", nil, nil)
 		if tt.wantErr && err == nil {
 			t.Errorf("interval %q: expected error", tt.interval)
 		}

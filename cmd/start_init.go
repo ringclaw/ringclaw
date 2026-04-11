@@ -9,6 +9,7 @@ import (
 	"github.com/ringclaw/ringclaw/api"
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/messaging"
+	"github.com/ringclaw/ringclaw/messaging/heartbeat"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -212,7 +213,10 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 
 	// Heartbeat runner
 	if cfg.Heartbeat.Enabled {
-		hbRunner, err := messaging.NewHeartbeatRunner(cfg.Heartbeat, c.bot, defaultChatID, handler.GetDefaultAgent)
+		sendFn := func(ctx context.Context, chatID, text string) error {
+			return messaging.SendTextReply(ctx, c.bot, chatID, text)
+		}
+		hbRunner, err := heartbeat.NewHeartbeatRunner(cfg.Heartbeat, sendFn, defaultChatID, handler.GetDefaultAgent, messaging.HeartbeatPrompt)
 		if err != nil {
 			slog.Error("failed to start heartbeat runner", "error", err)
 		} else {
