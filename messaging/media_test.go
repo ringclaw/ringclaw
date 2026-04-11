@@ -125,6 +125,108 @@ func TestIsPrivateIP(t *testing.T) {
 	}
 }
 
+func TestResolveAndValidate_PublicIP(t *testing.T) {
+	ip, err := resolveAndValidate(context.Background(), "8.8.8.8")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ip != "8.8.8.8" {
+		t.Errorf("got %q, want 8.8.8.8", ip)
+	}
+}
+
+func TestResolveAndValidate_PrivateIP(t *testing.T) {
+	_, err := resolveAndValidate(context.Background(), "10.0.0.1")
+	if err == nil {
+		t.Error("expected error for private IP")
+	}
+}
+
+func TestResolveAndValidate_LoopbackIP(t *testing.T) {
+	_, err := resolveAndValidate(context.Background(), "127.0.0.1")
+	if err == nil {
+		t.Error("expected error for loopback IP")
+	}
+}
+
+func TestResolveAndValidate_IPv6Loopback(t *testing.T) {
+	_, err := resolveAndValidate(context.Background(), "::1")
+	if err == nil {
+		t.Error("expected error for IPv6 loopback")
+	}
+}
+
+func TestResolveAndValidate_UnspecifiedIP(t *testing.T) {
+	_, err := resolveAndValidate(context.Background(), "0.0.0.0")
+	if err == nil {
+		t.Error("expected error for unspecified IP")
+	}
+}
+
+func TestResolveAndValidate_Hostname(t *testing.T) {
+	// Use a well-known public hostname
+	ip, err := resolveAndValidate(context.Background(), "dns.google")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		t.Errorf("returned %q is not a valid IP", ip)
+	}
+}
+
+func TestResolveAndValidate_UnresolvableHost(t *testing.T) {
+	_, err := resolveAndValidate(context.Background(), "this-host-does-not-exist-xyz.invalid")
+	if err == nil {
+		t.Error("expected error for unresolvable host")
+	}
+}
+
+func TestValidateMediaURL_ValidHTTPS(t *testing.T) {
+	url, err := validateMediaURL(context.Background(), "https://dns.google/test.png")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if url == "" {
+		t.Error("expected non-empty URL")
+	}
+}
+
+func TestValidateMediaURL_HTTPRejected(t *testing.T) {
+	_, err := validateMediaURL(context.Background(), "http://example.com/test.png")
+	if err == nil {
+		t.Error("expected error for http:// URL")
+	}
+}
+
+func TestValidateMediaURL_InvalidURL(t *testing.T) {
+	_, err := validateMediaURL(context.Background(), "://bad")
+	if err == nil {
+		t.Error("expected error for invalid URL")
+	}
+}
+
+func TestValidateMediaURL_PrivateHost(t *testing.T) {
+	_, err := validateMediaURL(context.Background(), "https://10.0.0.1/test.png")
+	if err == nil {
+		t.Error("expected error for private host")
+	}
+}
+
+func TestSafeDialContext_PrivateBlocked(t *testing.T) {
+	_, err := safeDialContext(context.Background(), "tcp", "127.0.0.1:443")
+	if err == nil {
+		t.Error("expected error for private IP dial")
+	}
+}
+
+func TestSafeDialContext_InvalidAddr(t *testing.T) {
+	_, err := safeDialContext(context.Background(), "tcp", "no-port")
+	if err == nil {
+		t.Error("expected error for address without port")
+	}
+}
+
 func TestDownloadFile_BlocksPrivateIP(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("should not reach"))
