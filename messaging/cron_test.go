@@ -279,6 +279,85 @@ func containsStr(s, sub string) bool {
 	return false
 }
 
+func TestCronStore_UpdateState(t *testing.T) {
+	dir := t.TempDir()
+	store := NewCronStore(filepath.Join(dir, "jobs.json"))
+	_ = store.Load()
+
+	job := CronJob{Name: "state-test", Enabled: true, Schedule: "every:1h", Message: "hello"}
+	_ = store.Add(job)
+	id := store.List()[0].ID
+
+	now := time.Now()
+	state := JobState{
+		NextRunAt:  now.Add(time.Hour),
+		LastRunAt:  now,
+		LastStatus: "ok",
+		RunCount:   5,
+	}
+	store.UpdateState(id, state)
+
+	j, ok := store.Get(id)
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if j.State.LastStatus != "ok" {
+		t.Errorf("expected 'ok', got %q", j.State.LastStatus)
+	}
+	if j.State.RunCount != 5 {
+		t.Errorf("expected RunCount=5, got %d", j.State.RunCount)
+	}
+	if j.State.NextRunAt.IsZero() {
+		t.Error("expected NextRunAt to be set")
+	}
+}
+
+func TestCronStore_UpdateState_NonExistent(t *testing.T) {
+	dir := t.TempDir()
+	store := NewCronStore(filepath.Join(dir, "jobs.json"))
+	_ = store.Load()
+
+	// Should not panic
+	store.UpdateState("nonexistent-id", JobState{LastStatus: "ok"})
+}
+
+func TestCronStore_Save(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jobs.json")
+	store := NewCronStore(path)
+	_ = store.Load()
+
+	_ = store.Add(CronJob{Name: "save-test", Enabled: true, Schedule: "every:1h", Message: "hello"})
+
+	// Explicitly call Save
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify saved by loading from new store
+	store2 := NewCronStore(path)
+	if err := store2.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(store2.List()) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(store2.List()))
+	}
+	if store2.List()[0].Name != "save-test" {
+		t.Errorf("expected 'save-test', got %q", store2.List()[0].Name)
+	}
+}
+
+func TestCronStore_Get_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	store := NewCronStore(filepath.Join(dir, "jobs.json"))
+	_ = store.Load()
+
+	_, ok := store.Get("nonexistent")
+	if ok {
+		t.Error("expected not found")
+	}
+}
+
 // Verify store file is valid JSON
 func TestCronStore_FileFormat(t *testing.T) {
 	dir := t.TempDir()

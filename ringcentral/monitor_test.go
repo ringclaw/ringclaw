@@ -3,6 +3,8 @@ package ringcentral
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -701,6 +703,299 @@ func TestTruncate(t *testing.T) {
 		got := util.Truncate(tt.s, tt.n)
 		if got != tt.want {
 			t.Errorf("truncate(%q, %d) = %q, want %q", tt.s, tt.n, got, tt.want)
+		}
+	}
+}
+
+// --- handleWSMessage edge cases ---
+
+func TestHandleWSMessage_MalformedJSON(t *testing.T) {
+	var called bool
+	m := newTestMonitor("chat-1", func(ctx context.Context, client *Client, _ *Client, post Post) {
+		called = true
+	})
+
+	m.handleWSMessage(context.Background(), []byte(`not valid json`))
+	time.Sleep(50 * time.Millisecond)
+
+	if called {
+		t.Error("handler should not be called for malformed JSON")
+	}
+}
+
+func TestHandleWSMessage_NoEventType(t *testing.T) {
+	var called bool
+	m := newTestMonitor("chat-1", func(ctx context.Context, client *Client, _ *Client, post Post) {
+		called = true
+	})
+
+	// Post with no eventType
+	msg := makeWSMessage(Post{
+		ID:      "p10",
+		GroupID: "chat-1",
+		Type:    "TextMessage",
+		Text:    "hello",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	if called {
+		t.Error("handler should not be called when eventType is empty")
+	}
+}
+
+func TestHandleWSMessage_NonPostAddedEvent(t *testing.T) {
+	var called bool
+	m := newTestMonitor("chat-1", func(ctx context.Context, client *Client, _ *Client, post Post) {
+		called = true
+	})
+
+	msg := makeWSMessage(Post{
+		ID:        "p11",
+		GroupID:   "chat-1",
+		Type:      "TextMessage",
+		Text:      "hello",
+		CreatorID: "user-1",
+		EventType: "PostRemoved",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	if called {
+		t.Error("handler should not be called for PostRemoved event type")
+	}
+}
+
+func TestHandleWSMessage_SingleObjectFormat(t *testing.T) {
+	var mu sync.Mutex
+	var received []Post
+	m := newTestMonitor("chat-1", func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		received = append(received, post)
+		mu.Unlock()
+	})
+
+	// Send as a single WSEvent object (not an array)
+	event := WSEvent{
+		UUID:  "test-uuid",
+		Event: "/team-messaging/v1/posts",
+		Body: Post{
+			ID:        "p12",
+			GroupID:   "chat-1",
+			Type:      "TextMessage",
+			Text:      "hello single",
+			CreatorID: "user-1",
+			EventType: "PostAdded",
+		},
+	}
+	data, _ := json.Marshal(event)
+	m.handleWSMessage(context.Background(), data)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(received))
+	}
+	if received[0].ID != "p12" {
+		t.Errorf("expected p12, got %s", received[0].ID)
+	}
+}
+
+func TestMonitor_EvictExpired(t *testing.T) {
+	m := &Monitor{sentPosts: make(map[string]time.Time)}
+
+	// Add a mix of expired and valid entries
+	m.mu.Lock()
+	m.sentPosts["expired-1"] = time.Now().Add(-10 * time.Minute)
+	m.sentPosts["expired-2"] = time.Now().Add(-6 * time.Minute)
+	m.sentPosts["valid-1"] = time.Now().Add(-1 * time.Minute)
+	m.sentPosts["valid-2"] = time.Now()
+	m.mu.Unlock()
+
+	// Trigger eviction via MarkSentPost with stale lastEvict
+	m.mu.Lock()
+	m.lastEvict = time.Now().Add(-2 * time.Minute)
+	m.mu.Unlock()
+
+	m.MarkSentPost("new-post")
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.sentPosts["expired-1"]; ok {
+		t.Error("expected expired-1 to be evicted")
+	}
+	if _, ok := m.sentPosts["expired-2"]; ok {
+		t.Error("expected expired-2 to be evicted")
+	}
+	if _, ok := m.sentPosts["valid-1"]; !ok {
+		t.Error("expected valid-1 to still exist")
+	}
+	if _, ok := m.sentPosts["valid-2"]; !ok {
+		t.Error("expected valid-2 to still exist")
+	}
+	if _, ok := m.sentPosts["new-post"]; !ok {
+		t.Error("expected new-post to exist")
+	}
+}
+
+func TestNewMonitor_DMChatInAllowed(t *testing.T) {
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetDMChatID("dm-special")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {}, []string{"chat-1"}, nil, false)
+
+	if !m.allowedChatIDs["chat-1"] {
+		t.Error("expected chat-1 in allowed list")
+	}
+	if !m.allowedChatIDs["dm-special"] {
+		t.Error("expected dm-special (bot DM) in allowed list")
+	}
+}
+
+func TestMonitor_ConcurrentMarkAndCheck(t *testing.T) {
+	m := &Monitor{sentPosts: make(map[string]time.Time)}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := "post-" + string(rune('A'+i%26))
+			m.MarkSentPost(id)
+			m.IsSentPost(id)
+		}(i)
+	}
+	wg.Wait()
+
+	// Just verify no panics and some posts exist
+	m.mu.Lock()
+	count := len(m.sentPosts)
+	m.mu.Unlock()
+	if count == 0 {
+		t.Error("expected some sent posts after concurrent access")
+	}
+}
+
+func TestMonitor_HandleWSMessage_AnswerPrefix(t *testing.T) {
+	var called bool
+	m := newTestMonitor("chat-1", func(ctx context.Context, client *Client, _ *Client, post Post) {
+		called = true
+	})
+
+	msg := makeWSMessage(Post{
+		ID:        "p20",
+		GroupID:   "chat-1",
+		Type:      "TextMessage",
+		Text:      "--------answer--------\nSome bot reply\n---------end----------",
+		CreatorID: "bot-1",
+		EventType: "PostAdded",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	if called {
+		t.Error("handler should not be called for answer-prefixed bot messages")
+	}
+}
+
+func TestMonitor_CalcBackoff_FirstFailure(t *testing.T) {
+	m := &Monitor{sentPosts: make(map[string]time.Time)}
+
+	m.failures = 0
+	d := m.calcBackoff()
+	if d != initialBackoff {
+		t.Errorf("failures=0: got %v, want %v", d, initialBackoff)
+	}
+}
+
+func TestMonitor_IsBotMentioned_EmptyOwnerID(t *testing.T) {
+	bot := NewBotClient("", "fake-bot-token")
+	// Don't set OwnerID
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {}, nil, nil, true)
+
+	got := m.isBotMentioned([]Mention{{ID: "someone"}})
+	if got {
+		t.Error("isBotMentioned should return false when OwnerID is empty")
+	}
+}
+
+func TestMonitor_Run_CancelledContext(t *testing.T) {
+	bot := NewBotClient("", "fake-bot-token")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {}, nil, nil, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := m.Run(ctx)
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestMonitor_Run_ConnectFailThenCancel(t *testing.T) {
+	// Create a bot with auth that will fail on GetWSToken (needs to reach /restapi/oauth/wstoken)
+	// Use a server that returns 500 for wstoken, then cancel after first failure
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/restapi/oauth/token":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(TokenResponse{AccessToken: "tok", ExpiresIn: 3600})
+		case "/restapi/oauth/wstoken":
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("ws error"))
+		}
+	}))
+	defer srv.Close()
+
+	auth := NewAuth("id", "secret", "jwt", srv.URL)
+	auth.httpClient = srv.Client()
+	auth.SetTokenForTest("tok", time.Now().Add(time.Hour))
+	bot := &Client{
+		serverURL:  srv.URL,
+		auth:       auth,
+		isBot:      true,
+		httpClient: srv.Client(),
+	}
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {}, nil, nil, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	err := m.Run(ctx)
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+	if m.failures < 1 {
+		t.Error("expected at least 1 failure recorded")
+	}
+}
+
+func TestMonitor_CalcBackoff_Progression(t *testing.T) {
+	m := &Monitor{sentPosts: make(map[string]time.Time)}
+
+	tests := []struct {
+		failures int
+		want     time.Duration
+	}{
+		{1, initialBackoff},
+		{2, initialBackoff * 2},
+		{3, initialBackoff * 4},
+		{4, initialBackoff * 8},
+		{5, initialBackoff * 16},
+	}
+	for _, tt := range tests {
+		m.failures = tt.failures
+		got := m.calcBackoff()
+		expected := tt.want
+		if expected > maxBackoff {
+			expected = maxBackoff
+		}
+		if got != expected {
+			t.Errorf("failures=%d: got %v, want %v", tt.failures, got, expected)
 		}
 	}
 }
