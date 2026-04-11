@@ -440,7 +440,7 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 
 	reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
 	if err != nil {
-		reply = fmt.Sprintf("Error: %v", err)
+		reply = agent.UserMessage(err)
 	}
 
 	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
@@ -496,12 +496,12 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 		go func(n string) {
 			ag, err := h.getAgent(ctx, n)
 			if err != nil {
-				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
+				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
 			}
 			reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
 			if err != nil {
-				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
+				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
 			}
 			ch <- result{name: n, reply: reply}

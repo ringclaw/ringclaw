@@ -2,7 +2,7 @@
 
 **日期:** 2026-04-11
 **优先级:** P2
-**状态:** Draft
+**状态:** Implemented
 **参考:** acpx `ACPX_ERROR_STRATEGY.md`, acpx `src/errors.ts`
 
 ## 问题描述

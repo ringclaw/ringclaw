@@ -396,7 +396,7 @@ func (a *ACPAgent) chatWithEntries(ctx context.Context, conversationID string, e
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", Timeout(ctx.Err())
 		case update := <-notifyCh:
 			if update.SessionUpdate == "agent_message_chunk" {
 				text := extractChunkText(update)
@@ -420,14 +420,14 @@ func (a *ACPAgent) chatWithEntries(ctx context.Context, conversationID string, e
 			}
 		drained:
 			if done.err != nil {
-				return "", fmt.Errorf("prompt error: %w", done.err)
+				return "", Crash(done.err)
 			}
 			result := strings.TrimSpace(strings.Join(textParts, ""))
 			if result == "" {
 				result = extractPromptResultText(done.result)
 			}
 			if result == "" {
-				return "", fmt.Errorf("agent returned empty response")
+				return "", Empty()
 			}
 			return result, nil
 		}

@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-11
 **Priority:** P2
-**Status:** Draft
+**Status:** Implemented
 **Reference:** acpx `ACPX_ERROR_STRATEGY.md`, acpx `src/errors.ts`
 
 ## Problem Statement
