@@ -28,16 +28,16 @@ type Server struct {
 
 // rateLimiter is a simple token bucket per-IP rate limiter.
 type rateLimiter struct {
-	mu        sync.Mutex
-	visitors  map[string]*visitor
-	rate      int           // max requests per window
-	window    time.Duration
-	calls     int           // total allow() calls since last cleanup
+	mu       sync.Mutex
+	visitors map[string]*visitor
+	rate     int
+	window   time.Duration
+	calls    int
 }
 
 type visitor struct {
-	count    int
-	resetAt  time.Time
+	count   int
+	resetAt time.Time
 }
 
 func newRateLimiter(rate int, window time.Duration) *rateLimiter {
@@ -53,7 +53,6 @@ func (rl *rateLimiter) allow(ip string) bool {
 	defer rl.mu.Unlock()
 	now := time.Now()
 
-	// Cleanup expired visitors every 100 calls
 	rl.calls++
 	if rl.calls%100 == 0 {
 		for k, v := range rl.visitors {
@@ -76,7 +75,6 @@ func (rl *rateLimiter) allow(ip string) bool {
 }
 
 // NewServer creates an API server.
-// Returns an error if addr binds to a non-loopback address.
 func NewServer(client *ringcentral.Client, addr, defaultChatID, token string) (*Server, error) {
 	if addr == "" {
 		addr = "127.0.0.1:18011"
@@ -93,7 +91,7 @@ func NewServer(client *ringcentral.Client, addr, defaultChatID, token string) (*
 		defaultChatID: defaultChatID,
 		addr:          addr,
 		token:         token,
-		limiter:       newRateLimiter(60, 1*time.Minute), // 60 req/min per IP
+		limiter:       newRateLimiter(60, 1*time.Minute),
 	}, nil
 }
 
@@ -104,33 +102,87 @@ type SendRequest struct {
 	MediaURL string `json:"media_url,omitempty"`
 }
 
+// --- Middleware ---
+
+// middleware applies rate limiting, host validation, and token auth.
+func (s *Server) middleware(next http.HandlerFunc) http.HandlerFunc {
+	return hostGuard(s.authMiddleware(s.rateLimitMiddleware(next)))
+}
+
+func (s *Server) rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip == "" {
+			ip = r.RemoteAddr
+		}
+		if !s.limiter.allow(ip) {
+			s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// --- JSON helpers ---
+
+func (s *Server) jsonReply(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) jsonError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// decodeJSON reads and decodes a JSON request body with size limiting.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v interface{}) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// extractID gets the last path segment: /api/tasks/123 -> 123
+func extractID(path, prefix string) string {
+	return strings.TrimPrefix(path, prefix)
+}
+
+// resolveChatID returns the chat ID from the request, falling back to the server default.
+func (s *Server) resolveChatID(chatID string) (string, bool) {
+	if chatID == "" {
+		chatID = s.defaultChatID
+	}
+	return chatID, chatID != ""
+}
+
+// --- Server lifecycle ---
+
 // Run starts the HTTP server. Blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	// protect wraps handlers with host validation and token auth.
-	protect := func(h http.HandlerFunc) http.HandlerFunc {
-		return hostGuard(s.authMiddleware(h))
-	}
-
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/send", protect(s.handleSend))
+	mux.HandleFunc("/api/send", s.middleware(s.handleSend))
 
 	// Task endpoints
-	mux.HandleFunc("/api/tasks", protect(s.handleTasks))
-	mux.HandleFunc("/api/tasks/", protect(s.handleTaskByID))
+	mux.HandleFunc("/api/tasks", s.middleware(s.handleTasks))
+	mux.HandleFunc("/api/tasks/", s.middleware(s.handleTaskByID))
 
 	// Note endpoints
-	mux.HandleFunc("/api/notes", protect(s.handleNotes))
-	mux.HandleFunc("/api/notes/", protect(s.handleNoteByID))
+	mux.HandleFunc("/api/notes", s.middleware(s.handleNotes))
+	mux.HandleFunc("/api/notes/", s.middleware(s.handleNoteByID))
 
 	// Event endpoints
-	mux.HandleFunc("/api/events", protect(s.handleEvents))
-	mux.HandleFunc("/api/events/", protect(s.handleEventByID))
+	mux.HandleFunc("/api/events", s.middleware(s.handleEvents))
+	mux.HandleFunc("/api/events/", s.middleware(s.handleEventByID))
 
 	// Adaptive Card endpoints
-	mux.HandleFunc("/api/cards", protect(s.handleCards))
-	mux.HandleFunc("/api/cards/", protect(s.handleCardByID))
+	mux.HandleFunc("/api/cards", s.middleware(s.handleCards))
+	mux.HandleFunc("/api/cards/", s.middleware(s.handleCardByID))
 
-	// /health is exempt from auth (monitoring probes) but still checks host
+	// /health is exempt from auth and rate limiting but still checks host
 	mux.HandleFunc("/health", hostGuard(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
@@ -150,25 +202,19 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
+// --- Send handler ---
+
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if !s.limiter.allow(r.RemoteAddr) {
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	var req SendRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
-	// Use specified chat ID or fall back to configured default
 	chatID := req.To
 	if chatID == "" {
 		chatID = s.defaultChatID
@@ -192,7 +238,6 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("sent text", "component", "api", "chatID", chatID, "text", req.Text)
 
-		// Extract and send any markdown images embedded in text
 		for _, imgURL := range messaging.ExtractImageURLs(req.Text) {
 			if err := messaging.SendMediaFromURL(ctx, s.client, chatID, imgURL); err != nil {
 				slog.Error("send extracted image failed", "component", "api", "error", err)
@@ -215,39 +260,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func (s *Server) jsonReply(w http.ResponseWriter, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
-}
-
-func (s *Server) jsonError(w http.ResponseWriter, msg string, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}
-
-// extractID gets the last path segment: /api/tasks/123 -> 123
-func extractID(path, prefix string) string {
-	return strings.TrimPrefix(path, prefix)
-}
-
-// --- Task HTTP handlers ---
+// --- Task handlers ---
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr) {
-		s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
 	ctx := r.Context()
 	switch r.Method {
 	case http.MethodGet:
 		chatID := r.URL.Query().Get("chat_id")
-		if chatID == "" {
-			chatID = s.defaultChatID
-		}
-		if chatID == "" {
+		if id, ok := s.resolveChatID(chatID); !ok {
 			s.jsonError(w, "chat_id required", http.StatusBadRequest)
 			return
+		} else {
+			chatID = id
 		}
 		list, err := s.client.ListTasks(ctx, chatID)
 		if err != nil {
@@ -256,18 +280,17 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		s.jsonReply(w, list)
 	case http.MethodPost:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req struct {
 			ChatID string `json:"chat_id"`
 			ringcentral.CreateTaskRequest
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jsonError(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
-		chatID := req.ChatID
-		if chatID == "" {
-			chatID = s.defaultChatID
+		chatID, ok := s.resolveChatID(req.ChatID)
+		if !ok {
+			s.jsonError(w, "chat_id is required", http.StatusBadRequest)
+			return
 		}
 		task, err := s.client.CreateTask(ctx, chatID, &req.CreateTaskRequest)
 		if err != nil {
@@ -282,10 +305,6 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr) {
-		s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
 	ctx := r.Context()
 	path := r.URL.Path
 
@@ -314,10 +333,8 @@ func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		}
 		s.jsonReply(w, task)
 	case http.MethodPatch:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req ringcentral.UpdateTaskRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jsonError(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
 		task, err := s.client.UpdateTask(ctx, taskID, &req)
@@ -337,23 +354,18 @@ func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- Note HTTP handlers ---
+// --- Note handlers ---
 
 func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr) {
-		s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
 	ctx := r.Context()
 	switch r.Method {
 	case http.MethodGet:
 		chatID := r.URL.Query().Get("chat_id")
-		if chatID == "" {
-			chatID = s.defaultChatID
-		}
-		if chatID == "" {
+		if id, ok := s.resolveChatID(chatID); !ok {
 			s.jsonError(w, "chat_id required", http.StatusBadRequest)
 			return
+		} else {
+			chatID = id
 		}
 		list, err := s.client.ListNotes(ctx, chatID)
 		if err != nil {
@@ -362,18 +374,17 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		}
 		s.jsonReply(w, list)
 	case http.MethodPost:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req struct {
 			ChatID string `json:"chat_id"`
 			ringcentral.CreateNoteRequest
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jsonError(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
-		chatID := req.ChatID
-		if chatID == "" {
-			chatID = s.defaultChatID
+		chatID, ok := s.resolveChatID(req.ChatID)
+		if !ok {
+			s.jsonError(w, "chat_id is required", http.StatusBadRequest)
+			return
 		}
 		note, err := s.client.CreateNote(ctx, chatID, &req.CreateNoteRequest)
 		if err != nil {
@@ -392,10 +403,6 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNoteByID(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr) {
-		s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
 	ctx := r.Context()
 	noteID := extractID(r.URL.Path, "/api/notes/")
 	switch r.Method {
@@ -407,10 +414,8 @@ func (s *Server) handleNoteByID(w http.ResponseWriter, r *http.Request) {
 		}
 		s.jsonReply(w, note)
 	case http.MethodPatch:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req ringcentral.UpdateNoteRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jsonError(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
 		note, err := s.client.UpdateNote(ctx, noteID, &req)
@@ -430,13 +435,9 @@ func (s *Server) handleNoteByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- Event HTTP handlers ---
+// --- Event handlers ---
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr) {
-		s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
 	ctx := r.Context()
 	switch r.Method {
 	case http.MethodGet:
@@ -447,10 +448,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		s.jsonReply(w, list)
 	case http.MethodPost:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req ringcentral.CreateEventRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jsonError(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
 		event, err := s.client.CreateEvent(ctx, &req)
@@ -466,10 +465,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEventByID(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr) {
-		s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
 	ctx := r.Context()
 	eventID := extractID(r.URL.Path, "/api/events/")
 	switch r.Method {
@@ -481,10 +476,8 @@ func (s *Server) handleEventByID(w http.ResponseWriter, r *http.Request) {
 		}
 		s.jsonReply(w, event)
 	case http.MethodPut:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req ringcentral.UpdateEventRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jsonError(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
 		event, err := s.client.UpdateEvent(ctx, eventID, &req)
@@ -504,34 +497,24 @@ func (s *Server) handleEventByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- Adaptive Card HTTP handlers ---
+// --- Adaptive Card handlers ---
 
 func (s *Server) handleCards(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr) {
-		s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
-	ctx := r.Context()
 	switch r.Method {
 	case http.MethodPost:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req struct {
 			ChatID string          `json:"chat_id"`
 			Card   json.RawMessage `json:"card"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jsonError(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &req) {
 			return
 		}
-		chatID := req.ChatID
-		if chatID == "" {
-			chatID = s.defaultChatID
-		}
-		if chatID == "" {
+		chatID, ok := s.resolveChatID(req.ChatID)
+		if !ok {
 			s.jsonError(w, "chat_id required", http.StatusBadRequest)
 			return
 		}
-		card, err := s.client.CreateAdaptiveCard(ctx, chatID, req.Card)
+		card, err := s.client.CreateAdaptiveCard(r.Context(), chatID, req.Card)
 		if err != nil {
 			s.jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -544,10 +527,6 @@ func (s *Server) handleCards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCardByID(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr) {
-		s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
 	ctx := r.Context()
 	cardID := extractID(r.URL.Path, "/api/cards/")
 	switch r.Method {
@@ -559,10 +538,8 @@ func (s *Server) handleCardByID(w http.ResponseWriter, r *http.Request) {
 		}
 		s.jsonReply(w, card)
 	case http.MethodPut:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var card json.RawMessage
-		if err := json.NewDecoder(r.Body).Decode(&card); err != nil {
-			s.jsonError(w, "invalid JSON", http.StatusBadRequest)
+		if !decodeJSON(w, r, &card) {
 			return
 		}
 		updated, err := s.client.UpdateAdaptiveCard(ctx, cardID, card)

@@ -392,6 +392,431 @@ func TestHandleSend_MissingFields(t *testing.T) {
 	}
 }
 
+// --- Middleware chain tests ---
+
+func TestMiddleware_FullChain(t *testing.T) {
+	s := newTestServer()
+	handler := s.middleware(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	// Valid request with token and loopback host
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("X-RingClaw-Token", testAPIToken)
+	req.Host = "127.0.0.1:18011"
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMiddleware_RateLimited(t *testing.T) {
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	s.limiter = newRateLimiter(1, time.Minute)
+	handler := s.middleware(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	makeReq := func() int {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("X-RingClaw-Token", testAPIToken)
+		req.Host = "127.0.0.1:18011"
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		handler(w, req)
+		return w.Code
+	}
+
+	if code := makeReq(); code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d", code)
+	}
+	if code := makeReq(); code != http.StatusTooManyRequests {
+		t.Errorf("second request: expected 429, got %d", code)
+	}
+}
+
+func TestRateLimitMiddleware_ExtractsIP(t *testing.T) {
+	s := newTestServer()
+	s.limiter = newRateLimiter(1, time.Minute)
+	handler := s.rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Same IP, different ports — should share rate limit bucket
+	for _, port := range []string{"11111", "22222"} {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.RemoteAddr = "1.2.3.4:" + port
+		w := httptest.NewRecorder()
+		handler(w, req)
+	}
+	// Third from same IP should be blocked (rate=1)
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.RemoteAddr = "1.2.3.4:33333"
+	w := httptest.NewRecorder()
+	handler(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429 for rate-limited IP, got %d", w.Code)
+	}
+}
+
+// --- Rate limiter tests ---
+
+func TestRateLimiter_AllowAndDeny(t *testing.T) {
+	rl := newRateLimiter(3, time.Minute)
+	for i := 0; i < 3; i++ {
+		if !rl.allow("1.2.3.4") {
+			t.Fatalf("request %d should be allowed", i+1)
+		}
+	}
+	if rl.allow("1.2.3.4") {
+		t.Error("4th request should be denied")
+	}
+	// Different IP should still be allowed
+	if !rl.allow("5.6.7.8") {
+		t.Error("different IP should be allowed")
+	}
+}
+
+func TestRateLimiter_WindowReset(t *testing.T) {
+	rl := newRateLimiter(1, 1*time.Millisecond)
+	if !rl.allow("1.2.3.4") {
+		t.Fatal("first request should be allowed")
+	}
+	if rl.allow("1.2.3.4") {
+		t.Fatal("second request should be denied")
+	}
+	time.Sleep(5 * time.Millisecond)
+	if !rl.allow("1.2.3.4") {
+		t.Error("request after window reset should be allowed")
+	}
+}
+
+// --- Task API: Patch ---
+
+func TestHandleTaskByID_Patch(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "t1", "subject": "Updated"})
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/", s.handleTaskByID)
+
+	body, _ := json.Marshal(map[string]string{"subject": "Updated"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/tasks/t1", bytes.NewBuffer(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleTaskByID_InvalidMethod(t *testing.T) {
+	s := newTestServer()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/", s.handleTaskByID)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/tasks/t1", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		// jsonError writes 405 via response body
+		var resp map[string]string
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["error"] != "method not allowed" {
+			t.Errorf("expected method not allowed error, got %v", resp)
+		}
+	}
+}
+
+// --- Note API: Patch, Delete ---
+
+func TestHandleNoteByID_Patch(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "n1", "title": "Updated"})
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/notes/", s.handleNoteByID)
+
+	body, _ := json.Marshal(map[string]string{"title": "Updated"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/notes/n1", bytes.NewBuffer(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleNoteByID_Delete(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/notes/", s.handleNoteByID)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/notes/n1", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected 204, got %d", w.Code)
+	}
+}
+
+// --- Event API: Get, Put ---
+
+func TestHandleEventByID_Get(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "e1", "title": "Meeting"})
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/events/", s.handleEventByID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/events/e1", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleEventByID_Put(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "e1", "title": "Updated"})
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/events/", s.handleEventByID)
+
+	body, _ := json.Marshal(map[string]string{"title": "Updated"})
+	req := httptest.NewRequest(http.MethodPut, "/api/events/e1", bytes.NewBuffer(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- Card API ---
+
+func TestHandleCards_Create(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "card1"})
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/cards", s.handleCards)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"chat_id": "c1",
+		"card":    map[string]string{"type": "AdaptiveCard"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/cards", bytes.NewBuffer(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCards_InvalidMethod(t *testing.T) {
+	s := newTestServer()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/cards", s.handleCards)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/cards", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	var resp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "method not allowed" {
+		t.Errorf("expected method not allowed, got %v", resp)
+	}
+}
+
+func TestHandleCards_NoChatID(t *testing.T) {
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/cards", s.handleCards)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"card": map[string]string{"type": "AdaptiveCard"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/cards", bytes.NewBuffer(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCardByID_Get(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "card1"})
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/cards/", s.handleCardByID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/cards/card1", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCardByID_Put(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "card1"})
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/cards/", s.handleCardByID)
+
+	body, _ := json.Marshal(map[string]string{"type": "AdaptiveCard"})
+	req := httptest.NewRequest(http.MethodPut, "/api/cards/card1", bytes.NewBuffer(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCardByID_Delete(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+
+	s := newTestServerWithBackend(backend)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/cards/", s.handleCardByID)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/cards/card1", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected 204, got %d", w.Code)
+	}
+}
+
+// --- Missing chat_id tests ---
+
+func TestHandleTasks_ListNoChatID(t *testing.T) {
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks", s.handleTasks)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleNotes_ListNoChatID(t *testing.T) {
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/notes", s.handleNotes)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/notes", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleTasks_CreateNoChatID(t *testing.T) {
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks", s.handleTasks)
+
+	body, _ := json.Marshal(map[string]string{"subject": "test"})
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBuffer(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleNotes_CreateNoChatID(t *testing.T) {
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/notes", s.handleNotes)
+
+	body, _ := json.Marshal(map[string]string{"title": "test"})
+	req := httptest.NewRequest(http.MethodPost, "/api/notes", bytes.NewBuffer(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestNewServer_LoopbackOnly(t *testing.T) {
 	creds := &ringcentral.Credentials{
 		ClientID:     "id",

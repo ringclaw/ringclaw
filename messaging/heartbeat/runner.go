@@ -1,4 +1,4 @@
-package messaging
+package heartbeat
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
-	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
 const (
@@ -22,12 +21,19 @@ const (
 	defaultHeartbeatFile = "HEARTBEAT.md"
 )
 
+// SendFunc sends a text message to a chat. Implemented by messaging.SendTextReply.
+type SendFunc func(ctx context.Context, chatID, text string) error
+
+// PromptFunc returns the heartbeat prompt template. Implemented by messaging.HeartbeatPrompt.
+type PromptFunc func() string
+
 // HeartbeatRunner periodically reads HEARTBEAT.md and sends it to the default agent.
 type HeartbeatRunner struct {
 	cfg         config.HeartbeatConfig
-	client      *ringcentral.Client
+	send        SendFunc
 	chatID      string
 	getAgent    func() agent.Agent
+	prompt      PromptFunc
 	interval    time.Duration
 	location    *time.Location
 	activeStart int // minutes from midnight
@@ -37,7 +43,7 @@ type HeartbeatRunner struct {
 }
 
 // NewHeartbeatRunner creates a heartbeat runner.
-func NewHeartbeatRunner(cfg config.HeartbeatConfig, client *ringcentral.Client, chatID string, getAgent func() agent.Agent) (*HeartbeatRunner, error) {
+func NewHeartbeatRunner(cfg config.HeartbeatConfig, send SendFunc, chatID string, getAgent func() agent.Agent, prompt PromptFunc) (*HeartbeatRunner, error) {
 	interval := 30 * time.Minute
 	if cfg.Interval != "" {
 		d, err := time.ParseDuration(cfg.Interval)
@@ -61,9 +67,10 @@ func NewHeartbeatRunner(cfg config.HeartbeatConfig, client *ringcentral.Client, 
 
 	r := &HeartbeatRunner{
 		cfg:        cfg,
-		client:     client,
+		send:       send,
 		chatID:     chatID,
 		getAgent:   getAgent,
+		prompt:     prompt,
 		interval:   interval,
 		location:   loc,
 		recentHash: make(map[string]time.Time),
@@ -120,7 +127,8 @@ func (r *HeartbeatRunner) tick(ctx context.Context) {
 		return
 	}
 
-	prompt := fmt.Sprintf(HeartbeatPrompt(), heartbeatOKToken, content)
+	p := r.prompt()
+	prompt := fmt.Sprintf(p, heartbeatOKToken, content)
 	slog.Info("running heartbeat", "component", "heartbeat")
 
 	reply, err := ag.Chat(ctx, "heartbeat", prompt)
@@ -140,7 +148,7 @@ func (r *HeartbeatRunner) tick(ctx context.Context) {
 		return
 	}
 
-	if err := SendTextReply(ctx, r.client, r.chatID, "**[Heartbeat]** "+reply); err != nil {
+	if err := r.send(ctx, r.chatID, "**[Heartbeat]** "+reply); err != nil {
 		slog.Error("heartbeat: failed to send reply", "component", "heartbeat", "error", err)
 	}
 }

@@ -12,7 +12,36 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ringclaw/ringclaw/config"
 )
+
+func init() {
+	Register("http", func(_ context.Context, name string, cfg config.AgentConfig, cwd string) (Agent, error) {
+		if cfg.Endpoint == "" {
+			return nil, fmt.Errorf("HTTP agent %q has no endpoint", name)
+		}
+		var timeout time.Duration
+		if cfg.Timeout > 0 {
+			timeout = time.Duration(cfg.Timeout) * time.Second
+		}
+		return NewHTTPAgent(HTTPAgentConfig{
+			Name:         name,
+			Endpoint:     cfg.Endpoint,
+			APIKey:       cfg.APIKey,
+			Headers:      cfg.Headers,
+			Model:        cfg.Model,
+			SystemPrompt: cfg.SystemPrompt,
+			MaxHistory:   cfg.MaxHistory,
+			Format:       cfg.Format,
+			Cwd:          cwd,
+			Sender:       cfg.Sender,
+			ContextMode:  cfg.ContextMode,
+			GroupJID:     cfg.GroupJID,
+			Timeout:      timeout,
+		}), nil
+	})
+}
 
 // ChatMessage represents a single message in a conversation.
 type ChatMessage struct {

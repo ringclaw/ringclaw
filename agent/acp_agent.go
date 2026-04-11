@@ -15,7 +15,30 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ringclaw/ringclaw/config"
 )
+
+func init() {
+	Register("acp", func(ctx context.Context, name string, cfg config.AgentConfig, cwd string) (Agent, error) {
+		if cwd == "" {
+			cwd = defaultWorkspace()
+		}
+		ag := NewACPAgent(ACPAgentConfig{
+			Command:      cfg.Command,
+			Args:         cfg.Args,
+			Cwd:          cwd,
+			Env:          cfg.Env,
+			Model:        cfg.Model,
+			SystemPrompt: cfg.SystemPrompt,
+			AllowWrite:   cfg.AllowWrite,
+		})
+		if err := ag.Start(ctx); err != nil {
+			return nil, fmt.Errorf("start ACP agent: %w", err)
+		}
+		return ag, nil
+	})
+}
 
 // ACPAgent communicates with ACP-compatible agents via stdio JSON-RPC 2.0.
 type ACPAgent struct {

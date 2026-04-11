@@ -10,7 +10,26 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/ringclaw/ringclaw/config"
 )
+
+func init() {
+	Register("cli", func(_ context.Context, name string, cfg config.AgentConfig, cwd string) (Agent, error) {
+		if cwd == "" {
+			cwd = defaultWorkspace()
+		}
+		return NewCLIAgent(CLIAgentConfig{
+			Name:         name,
+			Command:      cfg.Command,
+			Args:         cfg.Args,
+			Cwd:          cwd,
+			Env:          cfg.Env,
+			Model:        cfg.Model,
+			SystemPrompt: cfg.SystemPrompt,
+		}), nil
+	})
+}
 
 // CLIAgent invokes a local CLI agent (claude, codex, etc.) via streaming JSON.
 type CLIAgent struct {
