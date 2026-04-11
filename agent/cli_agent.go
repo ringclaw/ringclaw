@@ -204,7 +204,7 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 		switch event.Type {
 		case "result":
 			if event.IsError {
-				return "", fmt.Errorf("%s returned error: %s", a.name, event.Result)
+				return "", Crash(fmt.Errorf("%s returned error: %s", a.name, event.Result))
 			}
 			result = event.Result
 		case "assistant":
@@ -226,9 +226,9 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 		if result == "" {
 			errMsg := strings.TrimSpace(stderr.String())
 			if errMsg != "" {
-				return "", fmt.Errorf("%s exited with error: %w, stderr: %s", a.name, err, errMsg)
+				return "", Crash(fmt.Errorf("%s exited with error: %w, stderr: %s", a.name, err, errMsg))
 			}
-			return "", fmt.Errorf("%s exited with error: %w", a.name, err)
+			return "", Crash(fmt.Errorf("%s exited with error: %w", a.name, err))
 		}
 	}
 
@@ -243,7 +243,7 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 
 	result = strings.TrimSpace(result)
 	if result == "" {
-		return "", fmt.Errorf("%s returned empty response", a.name)
+		return "", Empty()
 	}
 
 	return result, nil
@@ -277,14 +277,14 @@ func (a *CLIAgent) chatCodex(ctx context.Context, message string) (string, error
 	if err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
-			return "", fmt.Errorf("codex error: %w, stderr: %s", err, errMsg)
+			return "", Crash(fmt.Errorf("codex error: %w, stderr: %s", err, errMsg))
 		}
-		return "", fmt.Errorf("codex error: %w", err)
+		return "", Crash(fmt.Errorf("codex error: %w", err))
 	}
 
 	result := strings.TrimSpace(string(out))
 	if result == "" {
-		return "", fmt.Errorf("codex returned empty response")
+		return "", Empty()
 	}
 	return result, nil
 }

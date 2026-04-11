@@ -127,7 +127,11 @@ func (s *CronScheduler) executeJob(ctx context.Context, job CronJob) {
 
 	reply, err := ag.Chat(ctx, conversationID, prompt)
 	if err != nil {
-		slog.Error("cron: agent error", "component", "cron", "job", job.Name, "error", err)
+		if agent.IsRetryable(err) {
+			slog.Warn("cron: agent error (retryable)", "component", "cron", "job", job.Name, "error", err)
+		} else {
+			slog.Error("cron: agent error", "component", "cron", "job", job.Name, "error", err)
+		}
 		s.recordResult(job, "error", err.Error())
 		return
 	}
