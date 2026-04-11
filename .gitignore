@@ -24,3 +24,4 @@ Thumbs.db
 .spec-workflow/
 
 .openapi
+coverage.out
