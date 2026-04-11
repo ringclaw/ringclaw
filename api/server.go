@@ -111,7 +111,11 @@ func (s *Server) middleware(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.limiter.allow(r.RemoteAddr) {
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip == "" {
+			ip = r.RemoteAddr
+		}
+		if !s.limiter.allow(ip) {
 			s.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -283,7 +287,11 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &req) {
 			return
 		}
-		chatID, _ := s.resolveChatID(req.ChatID)
+		chatID, ok := s.resolveChatID(req.ChatID)
+		if !ok {
+			s.jsonError(w, "chat_id is required", http.StatusBadRequest)
+			return
+		}
 		task, err := s.client.CreateTask(ctx, chatID, &req.CreateTaskRequest)
 		if err != nil {
 			s.jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -373,7 +381,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &req) {
 			return
 		}
-		chatID, _ := s.resolveChatID(req.ChatID)
+		chatID, ok := s.resolveChatID(req.ChatID)
+		if !ok {
+			s.jsonError(w, "chat_id is required", http.StatusBadRequest)
+			return
+		}
 		note, err := s.client.CreateNote(ctx, chatID, &req.CreateNoteRequest)
 		if err != nil {
 			s.jsonError(w, err.Error(), http.StatusInternalServerError)

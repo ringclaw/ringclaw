@@ -94,6 +94,8 @@ func (m *MockSender) UploadFile(_ context.Context, chatID, fileName string, data
 
 // DownloadAttachment returns an error by default (override via Errors map).
 func (m *MockSender) DownloadAttachment(_ context.Context, _ string) ([]byte, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err, ok := m.Errors["DownloadAttachment"]; ok {
 		return nil, "", err
 	}

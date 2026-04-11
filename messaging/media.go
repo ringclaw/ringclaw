@@ -23,40 +23,46 @@ var mediaHTTPClient = &http.Client{
 	},
 }
 
-// safeDialContext validates that the target address is not a private/reserved IP
-// before establishing a connection.
+// safeDialContext resolves DNS once, validates that all resulting IPs are
+// non-private, then dials the validated IP directly to prevent DNS rebinding.
 func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid address %q: %w", addr, err)
 	}
-	if err := checkHost(ctx, host); err != nil {
+	validatedIP, err := resolveAndValidate(ctx, host)
+	if err != nil {
 		return nil, err
 	}
-	return (&net.Dialer{}).DialContext(ctx, network, addr)
+	// Dial the validated IP directly — no second DNS lookup.
+	return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(validatedIP, port))
 }
 
-// checkHost resolves the host (if it's a hostname) and verifies none of the
-// resulting IPs are private/reserved.
-func checkHost(ctx context.Context, host string) error {
+// resolveAndValidate resolves a host to an IP (if it's a hostname) and
+// verifies none of the resulting IPs are private/reserved. Returns the
+// first valid IP as a string.
+func resolveAndValidate(ctx context.Context, host string) (string, error) {
 	ip := net.ParseIP(host)
 	if ip != nil {
 		if isPrivateIP(ip) {
-			return fmt.Errorf("private IP %s is blocked for security", ip)
+			return "", fmt.Errorf("private IP %s is blocked for security", ip)
 		}
-		return nil
+		return ip.String(), nil
 	}
 	// Hostname — resolve and check all IPs.
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return fmt.Errorf("resolve %q: %w", host, err)
+		return "", fmt.Errorf("resolve %q: %w", host, err)
 	}
 	for _, resolved := range ips {
 		if isPrivateIP(resolved.IP) {
-			return fmt.Errorf("host %q resolves to private IP %s — blocked for security", host, resolved.IP)
+			return "", fmt.Errorf("host %q resolves to private IP %s — blocked for security", host, resolved.IP)
 		}
 	}
-	return nil
+	if len(ips) == 0 {
+		return "", fmt.Errorf("host %q resolved to no addresses", host)
+	}
+	return ips[0].IP.String(), nil
 }
 
 // privateCIDRs lists network ranges that should not be accessed by the media downloader.
