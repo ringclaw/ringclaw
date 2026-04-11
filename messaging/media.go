@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -100,6 +101,22 @@ func parseCIDR(s string) *net.IPNet {
 	return network
 }
 
+// validateMediaURL parses and validates a URL for safe downloading.
+// Returns the sanitized URL string after SSRF validation.
+func validateMediaURL(ctx context.Context, rawURL string) (string, error) {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return "", fmt.Errorf("only https URLs are allowed, got %q", parsed.Scheme)
+	}
+	if _, err := resolveAndValidate(ctx, parsed.Hostname()); err != nil {
+		return "", err
+	}
+	return parsed.String(), nil
+}
+
 // reMarkdownImage matches markdown image syntax: ![alt](url)
 var reMarkdownImage = regexp.MustCompile(`!\[[^\]]*\]\(([^)]+)\)`)
 
@@ -135,11 +152,16 @@ func SendMediaFromURL(ctx context.Context, client *ringcentral.Client, chatID, m
 	return nil
 }
 
-func downloadFile(ctx context.Context, url string) ([]byte, string, error) {
+func downloadFile(ctx context.Context, rawURL string) ([]byte, string, error) {
+	safeURL, err := validateMediaURL(ctx, rawURL)
+	if err != nil {
+		return nil, "", err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, safeURL, nil)
 	if err != nil {
 		return nil, "", err
 	}
