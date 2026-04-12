@@ -18,6 +18,7 @@ export default withMermaid(defineConfig({
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
           { text: '功能', link: '/zh/features/summarize' },
+          { text: '架构', link: '/zh/architecture/prompt-evolution' },
           { text: '安全', link: '/zh/security/' },
           { text: 'API', link: '/zh/api/rest' },
           { text: '部署', link: '/zh/deployment/background' },
@@ -45,6 +46,14 @@ export default withMermaid(defineConfig({
                 { text: '心跳检测', link: '/zh/features/heartbeat' },
                 { text: '图片解析', link: '/zh/features/image-analysis' },
                 { text: '媒体与推送', link: '/zh/features/media' },
+              ],
+            },
+          ],
+          '/zh/architecture/': [
+            {
+              text: '架构',
+              items: [
+                { text: 'Prompt 自进化', link: '/zh/architecture/prompt-evolution' },
               ],
             },
           ],
@@ -82,6 +91,7 @@ export default withMermaid(defineConfig({
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Features', link: '/features/summarize' },
+      { text: 'Architecture', link: '/architecture/prompt-evolution' },
       { text: 'Security', link: '/security/' },
       { text: 'API', link: '/api/rest' },
       { text: 'Deployment', link: '/deployment/background' },
@@ -110,6 +120,14 @@ export default withMermaid(defineConfig({
             { text: 'Heartbeat', link: '/features/heartbeat' },
             { text: 'Image Analysis', link: '/features/image-analysis' },
             { text: 'Media & Messaging', link: '/features/media' },
+          ],
+        },
+      ],
+      '/architecture/': [
+        {
+          text: 'Architecture',
+          items: [
+            { text: 'Prompt Self-Evolution', link: '/architecture/prompt-evolution' },
           ],
         },
       ],
