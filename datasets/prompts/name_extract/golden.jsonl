@@ -1,0 +1,20 @@
+{"task_input": "总结 john 的消息", "expected_behavior": "john", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "summarize messages with alice", "expected_behavior": "alice", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "总结 bob", "expected_behavior": "bob", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "总结一下 john lin 的消息", "expected_behavior": "john lin", "difficulty": "easy", "category": "full_name"}
+{"task_input": "summarize my chat with Alice Wang", "expected_behavior": "alice wang", "difficulty": "easy", "category": "full_name"}
+{"task_input": "总结 maxwell 并用 note 发给他", "expected_behavior": "maxwell", "difficulty": "hard", "category": "compound", "source_pr": "#40", "note": "must not include '并用 note 发给他'"}
+{"task_input": "总结 maxwell 上周的消息", "expected_behavior": "maxwell", "difficulty": "hard", "category": "time_word", "source_pr": "#62", "note": "must not include '上周'"}
+{"task_input": "总结我和 Maxwell 上周的聊天", "expected_behavior": "maxwell", "difficulty": "hard", "category": "time_word", "source_pr": "#62", "note": "must strip '上周' and '我和'"}
+{"task_input": "summarize john's messages from last week", "expected_behavior": "john", "difficulty": "medium", "category": "time_word", "note": "must not include 'last week'"}
+{"task_input": "总结 Alice 最近三天的消息", "expected_behavior": "alice", "difficulty": "medium", "category": "time_word", "note": "must not include '最近三天'"}
+{"task_input": "总结一下消息", "expected_behavior": "NONE", "difficulty": "easy", "category": "no_name", "note": "no person mentioned"}
+{"task_input": "summarize the chat", "expected_behavior": "NONE", "difficulty": "easy", "category": "no_name"}
+{"task_input": "总结一下最近的讨论", "expected_behavior": "NONE", "difficulty": "easy", "category": "no_name"}
+{"task_input": "总结 张三 本周的进展", "expected_behavior": "张三", "difficulty": "medium", "category": "cjk_name"}
+{"task_input": "总结 田中太郎 的消息", "expected_behavior": "田中太郎", "difficulty": "medium", "category": "cjk_name"}
+{"task_input": "summarize messages from last month with Bob", "expected_behavior": "bob", "difficulty": "medium", "category": "time_word"}
+{"task_input": "总结 maxwell 并创建任务", "expected_behavior": "maxwell", "difficulty": "hard", "category": "compound", "note": "must not include '并创建任务'"}
+{"task_input": "总结昨天跟 maxwell 的聊天并用 note 发给他", "expected_behavior": "maxwell", "difficulty": "hard", "category": "compound", "source_pr": "#34"}
+{"task_input": "recap conversation with David Chen yesterday", "expected_behavior": "david chen", "difficulty": "medium", "category": "full_name"}
+{"task_input": "总结前天和 Alice 的对话", "expected_behavior": "alice", "difficulty": "medium", "category": "time_word", "note": "must not include '前天'"}
