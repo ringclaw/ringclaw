@@ -11,6 +11,7 @@
 | **P2** | [003 — 结构化错误码](003-error-codes.md) | Draft | Agent 错误分类，用于重试逻辑和用户消息 |
 | **P3** | [004 — 增量回复更新](004-incremental-reply-updates.md) | Draft | 流式显示部分回复，替代 "Thinking..." 占位符 |
 | **P4** | [005 — Flow 流程架构](005-flow-architecture.md) | Draft | 声明式多步骤消息处理（未来） |
+| **P3** | [006 — Prompt 自进化](006-prompt-self-evolution.md) | Draft | 评估工具 + LLM 驱动的 prompt 优化 |
 
 ## 参考
 
