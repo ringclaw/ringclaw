@@ -1,6 +1,12 @@
 package messaging
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/ringclaw/ringclaw/agent"
+)
 
 func TestMatchesIntentTrigger(t *testing.T) {
 	tests := []struct {
@@ -109,5 +115,81 @@ func TestParseIntentReply(t *testing.T) {
 				t.Errorf("parseIntentReply(%q) = %v, want %v", tt.reply, got, tt.want)
 			}
 		})
+	}
+}
+
+// classifyIntentAgent is a mock agent that returns a configurable reply for classifyIntent tests.
+type classifyIntentAgent struct {
+	reply string
+	err   error
+}
+
+func (a *classifyIntentAgent) Chat(_ context.Context, _, _ string) (string, error) {
+	if a.err != nil {
+		return "", a.err
+	}
+	return a.reply, nil
+}
+func (a *classifyIntentAgent) ResetSession(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (a *classifyIntentAgent) SetCwd(_ string)        {}
+func (a *classifyIntentAgent) Info() agent.AgentInfo {
+	return agent.AgentInfo{Name: "classify-test", Type: "test"}
+}
+
+func TestClassifyIntent_Summarize(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "summarize"}
+	intent := classifyIntent(context.Background(), ag, "总结一下聊天")
+	if intent != IntentSummarize {
+		t.Errorf("expected IntentSummarize, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_Task(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "task"}
+	intent := classifyIntent(context.Background(), ag, "create a task")
+	if intent != IntentTask {
+		t.Errorf("expected IntentTask, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_Note(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "note"}
+	intent := classifyIntent(context.Background(), ag, "create a note")
+	if intent != IntentNote {
+		t.Errorf("expected IntentNote, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_Event(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "event"}
+	intent := classifyIntent(context.Background(), ag, "schedule a meeting")
+	if intent != IntentEvent {
+		t.Errorf("expected IntentEvent, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_Chat(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "chat"}
+	intent := classifyIntent(context.Background(), ag, "hello world")
+	if intent != IntentChat {
+		t.Errorf("expected IntentChat, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_UnknownFallsBackToChat(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "something random"}
+	intent := classifyIntent(context.Background(), ag, "hello")
+	if intent != IntentChat {
+		t.Errorf("expected IntentChat for unknown reply, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_ErrorFallsBackToChat(t *testing.T) {
+	ag := &classifyIntentAgent{err: fmt.Errorf("agent unavailable")}
+	intent := classifyIntent(context.Background(), ag, "hello")
+	if intent != IntentChat {
+		t.Errorf("expected IntentChat on error, got %v", intent)
 	}
 }
