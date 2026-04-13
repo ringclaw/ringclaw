@@ -50,7 +50,10 @@ flowchart TD
     Start[解析目标] --> Time[解析时间范围]
     Time --> Mention{有 @mention?}
     Mention -->|Team| Done1[返回 Team chatID]
-    Mention -->|Person| FindDM[查找 Direct 聊天]
+    Mention -->|Person| BotCheck{是 bot 自身?}
+    BotCheck -->|是| Skip[跳过, 检查下一个]
+    Skip --> Mention
+    BotCheck -->|否| FindDM[查找 Direct 聊天]
     FindDM --> Done2[返回 DM chatID]
     Mention -->|无| ExtractName{提取人名}
     ExtractName --> AgentExtract[Agent 提取 10s超时]
@@ -107,6 +110,8 @@ sequenceDiagram
 
 RingClaw 支持 8 种语言的时间范围表达：
 
+### 相对表达式
+
 | 表达式 | 时间范围 | 支持语言 |
 |--------|---------|---------|
 | 今天 / today | 今天开始 | 中、英、日、韩 |
@@ -119,6 +124,17 @@ RingClaw 支持 8 种语言的时间范围表达：
 | 最近 / recently / 近期 | 3 天前 | 中、英、日、韩、法、西、德、俄 |
 | 最近N天 / last N days | N 天前 | 中、英 |
 | 最近N小时 / last N hours | N 小时前 | 中、英 |
+
+### 绝对日期
+
+| 格式 | 示例 |
+|------|------|
+| 中文 | 4月10日、4 月 10 号、12月25日 |
+| 英文 | April 10、Apr 10th、January 1st |
+| 斜杠 (月/日) | 4/10、04/10、12/25 |
+| ISO 8601 | 2026-04-10 |
+
+绝对日期使用当前年份。当 agent 可用时，RingClaw 还会使用 agent 提取日期（10 秒超时），可以处理更复杂的表达。失败时自动退回正则解析。
 
 未指定时间范围时，默认为**今天开始**。
 

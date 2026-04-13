@@ -12,7 +12,27 @@ import (
 var (
 	reLastNDays  = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:天|days?)`)
 	reLastNHours = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:小时|个小时|hours?)`)
+
+	reAbsDateZH    = regexp.MustCompile(`(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]`)
+	reAbsDateEN    = regexp.MustCompile(`(?i)(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?`)
+	reAbsDateSlash = regexp.MustCompile(`(\d{1,2})/(\d{1,2})`)
+	reAbsDateISO   = regexp.MustCompile(`(\d{4})-(\d{2})-(\d{2})`)
 )
+
+var monthNames = map[string]time.Month{
+	"jan": time.January, "january": time.January,
+	"feb": time.February, "february": time.February,
+	"mar": time.March, "march": time.March,
+	"apr": time.April, "april": time.April,
+	"may": time.May,
+	"jun": time.June, "june": time.June,
+	"jul": time.July, "july": time.July,
+	"aug": time.August, "august": time.August,
+	"sep": time.September, "september": time.September,
+	"oct": time.October, "october": time.October,
+	"nov": time.November, "november": time.November,
+	"dec": time.December, "december": time.December,
+}
 
 // timeRule maps multilingual keywords to a time resolver.
 type timeRule struct {
@@ -81,6 +101,11 @@ func parseTimeRange(text string) time.Time {
 	lower := strings.ToLower(text)
 	now := time.Now()
 
+	// Absolute dates (most specific, check first)
+	if t, ok := parseAbsoluteDate(lower, now); ok {
+		return t
+	}
+
 	if m := reLastNDays.FindStringSubmatch(lower); len(m) == 2 {
 		n, _ := strconv.Atoi(m[1])
 		if n > 0 {
@@ -101,6 +126,51 @@ func parseTimeRange(text string) time.Time {
 	}
 
 	return todayStart()
+}
+
+func parseAbsoluteDate(lower string, now time.Time) (time.Time, bool) {
+	loc := now.Location()
+
+	// ISO 8601: "2026-04-10"
+	if m := reAbsDateISO.FindStringSubmatch(lower); len(m) == 4 {
+		y, _ := strconv.Atoi(m[1])
+		mo, _ := strconv.Atoi(m[2])
+		d, _ := strconv.Atoi(m[3])
+		if mo >= 1 && mo <= 12 && d >= 1 && d <= 31 {
+			return time.Date(y, time.Month(mo), d, 0, 0, 0, 0, loc), true
+		}
+	}
+
+	// Chinese: "4月10日", "4 月 10 号"
+	if m := reAbsDateZH.FindStringSubmatch(lower); len(m) == 3 {
+		mo, _ := strconv.Atoi(m[1])
+		d, _ := strconv.Atoi(m[2])
+		if mo >= 1 && mo <= 12 && d >= 1 && d <= 31 {
+			return time.Date(now.Year(), time.Month(mo), d, 0, 0, 0, 0, loc), true
+		}
+	}
+
+	// English: "April 10", "Apr 10th"
+	if m := reAbsDateEN.FindStringSubmatch(lower); len(m) >= 3 {
+		mo, ok := monthNames[strings.ToLower(m[1])]
+		if ok {
+			d, _ := strconv.Atoi(m[2])
+			if d >= 1 && d <= 31 {
+				return time.Date(now.Year(), mo, d, 0, 0, 0, 0, loc), true
+			}
+		}
+	}
+
+	// Slash: "4/10", "04/10" (month/day)
+	if m := reAbsDateSlash.FindStringSubmatch(lower); len(m) == 3 {
+		mo, _ := strconv.Atoi(m[1])
+		d, _ := strconv.Atoi(m[2])
+		if mo >= 1 && mo <= 12 && d >= 1 && d <= 31 {
+			return time.Date(now.Year(), time.Month(mo), d, 0, 0, 0, 0, loc), true
+		}
+	}
+
+	return time.Time{}, false
 }
 
 func formatTimeDesc(from time.Time) string {

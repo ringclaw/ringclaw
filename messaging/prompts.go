@@ -85,6 +85,18 @@ Reply in the same language as the messages. Highlight key topics, decisions, and
 --- End of Messages ---
 %s`
 
+const defaultDateExtractPrompt = `Extract the date or time range from this message.
+Reply with ONLY one of:
+- An ISO 8601 date like "2026-04-10" for a specific date
+- A relative expression like "yesterday", "last week", "3 days ago"
+- "NONE" if no time/date is mentioned
+
+Current date: %s
+
+Message: %s
+
+Date:`
+
 const defaultHeartbeatPrompt = "This is a scheduled heartbeat check. Follow the instructions below and report anything that needs attention. If everything is fine, reply with exactly: %s\n\n%s"
 
 // ---------------------------------------------------------------------------
@@ -134,4 +146,5 @@ func ActionPrompt() string {
 func IntentPrompt() string      { return loadPrompt("intent", defaultIntentPrompt) }
 func NameExtractPrompt() string { return loadPrompt("name_extract", defaultNameExtractPrompt) }
 func SummaryPrompt() string     { return loadPrompt("summary", defaultSummaryPrompt) }
+func DateExtractPrompt() string { return loadPrompt("date_extract", defaultDateExtractPrompt) }
 func HeartbeatPrompt() string   { return loadPrompt("heartbeat", defaultHeartbeatPrompt) }

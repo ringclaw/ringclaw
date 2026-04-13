@@ -51,7 +51,10 @@ flowchart TD
     Start[Resolve target] --> Time[Parse time range]
     Time --> Mention{Has @mention?}
     Mention -->|Team| Done1[Return Team chatID]
-    Mention -->|Person| FindDM[Find Direct chat]
+    Mention -->|Person| BotCheck{Is bot itself?}
+    BotCheck -->|Yes| Skip[Skip, check next]
+    Skip --> Mention
+    BotCheck -->|No| FindDM[Find Direct chat]
     FindDM --> Done2[Return DM chatID]
     Mention -->|None| ExtractName{Extract person name}
     ExtractName --> AgentExtract[Agent extraction - 10s timeout]
@@ -108,6 +111,8 @@ sequenceDiagram
 
 RingClaw supports multilingual time range expressions in 8 languages:
 
+### Relative Expressions
+
 | Expression | Time range | Languages |
 |-----------|-----------|-----------|
 | today / 今天 | Start of today | ZH, EN, JA, KO |
@@ -120,6 +125,17 @@ RingClaw supports multilingual time range expressions in 8 languages:
 | recently / 最近 / 近期 | 3 days ago | ZH, EN, JA, KO, FR, ES, DE, RU |
 | last N days / 最近N天 | N days ago | ZH, EN |
 | last N hours / 最近N小时 | N hours ago | ZH, EN |
+
+### Absolute Dates
+
+| Format | Examples |
+|--------|---------|
+| Chinese | 4月10日, 4 月 10 号, 12月25日 |
+| English | April 10, Apr 10th, January 1st |
+| Slash (M/D) | 4/10, 04/10, 12/25 |
+| ISO 8601 | 2026-04-10 |
+
+Absolute dates use the current year. When an agent is available, RingClaw also uses agent-based date extraction (10s timeout) which can handle more complex expressions. On failure, it falls back to regex parsing.
 
 If no time range is specified, defaults to **start of today**.
 
