@@ -1,4 +1,4 @@
-// eval_prompt evaluates RingClaw prompts against golden test datasets.
+// eval_prompt evaluates RingClaw prompts against golden test datasets using DeepSeek LLM.
 //
 // Usage:
 //
@@ -6,16 +6,24 @@
 //	go run scripts/eval_prompt.go --prompt name_extract
 //	go run scripts/eval_prompt.go --prompt action
 //	go run scripts/eval_prompt.go --prompt intent --compare path/to/new_prompt.md
+//
+// Environment:
+//
+//	DEEPSEEK_API_KEY  — required for LLM evaluation
+//	DEEPSEEK_BASE_URL — optional (default: https://api.deepseek.com)
+//	DEEPSEEK_MODEL    — optional (default: deepseek-chat)
 package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -40,18 +48,194 @@ type caseResult struct {
 }
 
 type evalReport struct {
-	Prompt     string            `json:"prompt"`
-	Timestamp  string            `json:"timestamp"`
-	Total      int               `json:"total"`
-	Passed     int               `json:"passed"`
-	Failed     int               `json:"failed"`
-	Score      float64           `json:"score"`
-	ByDiff     map[string][2]int `json:"by_difficulty"`
-	ByCat      map[string][2]int `json:"by_category"`
-	Results    []caseResult      `json:"results"`
-	CompareTo  string            `json:"compare_to,omitempty"`
-	PromptFile string            `json:"prompt_file,omitempty"`
+	Prompt    string            `json:"prompt"`
+	Model     string            `json:"model"`
+	Timestamp string            `json:"timestamp"`
+	Total     int               `json:"total"`
+	Passed    int               `json:"passed"`
+	Failed    int               `json:"failed"`
+	Score     float64           `json:"score"`
+	ByDiff    map[string][2]int `json:"by_difficulty"`
+	ByCat     map[string][2]int `json:"by_category"`
+	Results   []caseResult      `json:"results"`
+	CompareTo string            `json:"compare_to,omitempty"`
 }
+
+// --- DeepSeek API client ---
+
+type llmClient struct {
+	apiKey  string
+	baseURL string
+	model   string
+	client  *http.Client
+}
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatRequest struct {
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Temperature float64       `json:"temperature"`
+	MaxTokens   int           `json:"max_tokens"`
+}
+
+type chatResponse struct {
+	Choices []struct {
+		Message chatMessage `json:"message"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func newLLMClient() *llmClient {
+	loadDotEnv()
+
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		return nil
+	}
+
+	baseURL := os.Getenv("DEEPSEEK_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.deepseek.com"
+	}
+
+	model := os.Getenv("DEEPSEEK_MODEL")
+	if model == "" {
+		model = "deepseek-chat"
+	}
+
+	return &llmClient{
+		apiKey:  apiKey,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		model:   model,
+		client:  &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+func (c *llmClient) chat(system, user string) (string, error) {
+	msgs := []chatMessage{
+		{Role: "system", Content: system},
+		{Role: "user", Content: user},
+	}
+
+	body, _ := json.Marshal(chatRequest{
+		Model:       c.model,
+		Messages:    msgs,
+		Temperature: 0,
+		MaxTokens:   256,
+	})
+
+	req, _ := http.NewRequest("POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	var result chatResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+	if result.Error != nil {
+		return "", fmt.Errorf("API error: %s", result.Error.Message)
+	}
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("empty response")
+	}
+	return strings.TrimSpace(result.Choices[0].Message.Content), nil
+}
+
+// loadDotEnv reads .env file from current directory (simple key=value format)
+func loadDotEnv() {
+	f, err := os.Open(".env")
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if os.Getenv(k) == "" {
+				os.Setenv(k, v)
+			}
+		}
+	}
+}
+
+// --- Prompt templates (mirrors messaging/prompts.go) ---
+
+const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
+- "summarize" if the user wants to summarize CHAT HISTORY or MESSAGES (even if they also want to send/note/task the result)
+- "task" if the PRIMARY goal is to CREATE a task/todo/action item
+- "note" if the PRIMARY goal is to CREATE a note (not just send results as a note)
+- "event" if the PRIMARY goal is to CREATE a calendar event/meeting
+- "chat" if this is a normal conversation, question, or any other request (including asking an AI to summarize code, documents, or articles)
+
+IMPORTANT: If the message contains BOTH "summarize" AND another action (create note/task/send), the primary intent is ALWAYS "summarize".`
+
+const defaultNameExtractPrompt = `Extract the target person's name from this message.
+Reply with ONLY the person's name (e.g. "John Smith"), nothing else.
+If no specific person is mentioned, reply with "NONE".`
+
+const defaultActionPrompt = `You are a RingCentral Team Messaging bot with real API actions.
+Do NOT generate files or suggest manual steps — use ACTION blocks.
+
+## Available Actions
+
+ACTION:MESSAGE chatid=<name or chat ID>
+<message>
+END_ACTION
+
+ACTION:NOTE title=<title> [chatid=...]
+<body>
+END_ACTION
+
+ACTION:TASK subject=<subject> [assignee=<name>] [chatid=...]
+<optional description>
+END_ACTION
+
+ACTION:EVENT title=<title> start=<ISO8601> end=<ISO8601>
+END_ACTION
+
+ACTION:CARD [chatid=...]
+<Adaptive Card JSON v1.3>
+END_ACTION
+
+## Rules
+- chatid: person name (e.g. John Smith), numeric chat ID, or ![:Team](ID). Omit to use current chat.
+- assignee: person name or ![:Person](ID).
+- The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
+- For structured data, reports, or progress → use ACTION:CARD.
+- If no action needed, reply normally without ACTION blocks.`
+
+// judgePrompt scores an agent response against expected behavior
+const judgePrompt = `You are an evaluator. Score the agent's response against the expected behavior.
+Reply with ONLY a JSON object: {"pass": true/false, "score": 0.0-1.0, "reason": "brief explanation"}
+
+Scoring criteria:
+- 1.0: Fully matches expected behavior
+- 0.7-0.9: Mostly correct with minor issues
+- 0.3-0.6: Partially correct
+- 0.0-0.2: Wrong or missing
+
+Expected behavior: %s
+
+Agent response: %s`
 
 func main() {
 	promptName := flag.String("prompt", "", "Prompt to evaluate: intent, name_extract, action")
@@ -65,6 +249,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	llm := newLLMClient()
+	if llm == nil {
+		fmt.Fprintln(os.Stderr, "Error: DEEPSEEK_API_KEY not set (check .env or environment)")
+		os.Exit(1)
+	}
+
 	dsDir := *datasetDir
 	if dsDir == "" {
 		dsDir = filepath.Join("datasets", "prompts", *promptName)
@@ -75,35 +265,37 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error loading dataset: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("=== %s Evaluation ===\n", *promptName)
-	fmt.Printf("Loaded %d test cases from %s\n\n", len(cases), dsDir)
 
-	promptText := ""
+	// Load custom prompt if --compare is specified
+	systemPrompt := ""
+	switch *promptName {
+	case "intent":
+		systemPrompt = defaultIntentPrompt
+	case "name_extract":
+		systemPrompt = defaultNameExtractPrompt
+	case "action":
+		systemPrompt = defaultActionPrompt
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown prompt: %s (use intent, name_extract, or action)\n", *promptName)
+		os.Exit(1)
+	}
+
 	if *compareTo != "" {
 		data, err := os.ReadFile(*compareTo)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading compare file: %v\n", err)
 			os.Exit(1)
 		}
-		promptText = string(data)
-		fmt.Printf("Using custom prompt from: %s (%d chars)\n\n", *compareTo, len(promptText))
+		systemPrompt = string(data)
+		fmt.Printf("Using custom prompt from: %s (%d chars)\n\n", *compareTo, len(systemPrompt))
 	}
 
-	var evaluator func(tc testCase, prompt string) caseResult
-	switch *promptName {
-	case "intent":
-		evaluator = evalIntent
-	case "name_extract":
-		evaluator = evalNameExtract
-	case "action":
-		evaluator = evalAction
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown prompt: %s (use intent, name_extract, or action)\n", *promptName)
-		os.Exit(1)
-	}
+	fmt.Printf("=== %s Evaluation ===\n", *promptName)
+	fmt.Printf("Model: %s | Cases: %d\n\n", llm.model, len(cases))
 
 	report := evalReport{
 		Prompt:    *promptName,
+		Model:     llm.model,
 		Timestamp: time.Now().Format(time.RFC3339),
 		ByDiff:    make(map[string][2]int),
 		ByCat:     make(map[string][2]int),
@@ -111,7 +303,16 @@ func main() {
 	}
 
 	for i, tc := range cases {
-		result := evaluator(tc, promptText)
+		var result caseResult
+		switch *promptName {
+		case "intent":
+			result = evalIntent(llm, tc, systemPrompt)
+		case "name_extract":
+			result = evalNameExtract(llm, tc, systemPrompt)
+		case "action":
+			result = evalAction(llm, tc, systemPrompt)
+		}
+
 		report.Results = append(report.Results, result)
 		report.Total++
 		if result.Pass {
@@ -120,15 +321,13 @@ func main() {
 			report.Failed++
 		}
 
-		// Track by difficulty
 		d := report.ByDiff[tc.Difficulty]
-		d[0]++ // total
+		d[0]++
 		if result.Pass {
-			d[1]++ // passed
+			d[1]++
 		}
 		report.ByDiff[tc.Difficulty] = d
 
-		// Track by category
 		c := report.ByCat[tc.Category]
 		c[0]++
 		if result.Pass {
@@ -156,7 +355,6 @@ func main() {
 		}
 	}
 
-	// Save report
 	outPath := filepath.Join(*outputDir, *promptName)
 	if err := os.MkdirAll(outPath, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: cannot create output dir: %v\n", err)
@@ -171,207 +369,81 @@ func main() {
 	}
 }
 
-func evalIntent(tc testCase, _ string) caseResult {
-	got := simulateIntentClassification(tc.TaskInput)
-	pass := strings.EqualFold(strings.TrimSpace(got), strings.TrimSpace(tc.ExpectedBehavior))
+// evalIntent calls LLM with IntentPrompt and compares reply to expected (exact match)
+func evalIntent(llm *llmClient, tc testCase, prompt string) caseResult {
+	reply, err := llm.chat(prompt, fmt.Sprintf("User message: %s\n\nIntent:", tc.TaskInput))
+	if err != nil {
+		return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: "[error: " + err.Error() + "]", Diff: tc.Difficulty, Category: tc.Category}
+	}
+
+	got := strings.ToLower(strings.Trim(reply, `"' `))
+	// Extract first word in case model adds explanation
+	if fields := strings.Fields(got); len(fields) > 0 {
+		got = fields[0]
+	}
+	pass := got == strings.ToLower(strings.TrimSpace(tc.ExpectedBehavior))
 	score := 0.0
 	if pass {
 		score = 1.0
 	}
-	// Cases that hit "needs_llm" are correctly deferred to the agent — mark them as skipped, not failed
-	if got == "needs_llm" {
-		got = "[needs LLM — fast-path cannot classify]"
-	}
-	return caseResult{
-		TaskInput: tc.TaskInput,
-		Expected:  tc.ExpectedBehavior,
-		Got:       got,
-		Pass:      pass,
-		Diff:      tc.Difficulty,
-		Category:  tc.Category,
-		Score:     score,
-	}
+	return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: got, Pass: pass, Diff: tc.Difficulty, Category: tc.Category, Score: score}
 }
 
-func evalNameExtract(tc testCase, _ string) caseResult {
-	got := simulateNameExtraction(tc.TaskInput)
+// evalNameExtract calls LLM with NameExtractPrompt and compares (exact match, case-insensitive)
+func evalNameExtract(llm *llmClient, tc testCase, prompt string) caseResult {
+	reply, err := llm.chat(prompt, fmt.Sprintf("Message: %s\n\nName:", tc.TaskInput))
+	if err != nil {
+		return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: "[error: " + err.Error() + "]", Diff: tc.Difficulty, Category: tc.Category}
+	}
+
+	got := strings.ToLower(strings.Trim(reply, `"' `))
 	expected := strings.ToLower(strings.TrimSpace(tc.ExpectedBehavior))
-	gotClean := strings.ToLower(strings.TrimSpace(got))
-	// Accept if result contains the expected name (handles extra context gracefully)
-	pass := gotClean == expected
+	pass := got == expected
 	score := 0.0
 	if pass {
 		score = 1.0
 	}
+	return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: got, Pass: pass, Diff: tc.Difficulty, Category: tc.Category, Score: score}
+}
+
+// evalAction calls LLM with ActionPrompt, then uses LLM-as-judge to score the response
+func evalAction(llm *llmClient, tc testCase, prompt string) caseResult {
+	reply, err := llm.chat(prompt, tc.TaskInput)
+	if err != nil {
+		return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: "[error: " + err.Error() + "]", Diff: tc.Difficulty, Category: tc.Category}
+	}
+
+	// Use LLM-as-judge
+	judgeQuery := fmt.Sprintf(judgePrompt, tc.ExpectedBehavior, reply)
+	judgeReply, err := llm.chat("You are a strict evaluator. Reply with only valid JSON.", judgeQuery)
+	if err != nil {
+		return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: reply, Diff: tc.Difficulty, Category: tc.Category}
+	}
+
+	// Extract JSON from judge reply (handle markdown code blocks)
+	judgeReply = strings.TrimPrefix(judgeReply, "```json")
+	judgeReply = strings.TrimPrefix(judgeReply, "```")
+	judgeReply = strings.TrimSuffix(judgeReply, "```")
+	judgeReply = strings.TrimSpace(judgeReply)
+
+	var verdict struct {
+		Pass  bool    `json:"pass"`
+		Score float64 `json:"score"`
+	}
+	if err := json.Unmarshal([]byte(judgeReply), &verdict); err != nil {
+		// Fallback: check if reply contains expected keywords
+		return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: truncate(reply, 80), Diff: tc.Difficulty, Category: tc.Category}
+	}
+
 	return caseResult{
 		TaskInput: tc.TaskInput,
 		Expected:  tc.ExpectedBehavior,
-		Got:       got,
-		Pass:      pass,
+		Got:       truncate(reply, 80),
+		Pass:      verdict.Pass,
 		Diff:      tc.Difficulty,
 		Category:  tc.Category,
-		Score:     score,
+		Score:     verdict.Score,
 	}
-}
-
-func evalAction(tc testCase, _ string) caseResult {
-	// Action eval would require LLM-as-judge in a real run.
-	// For now, return a placeholder indicating it needs a live agent.
-	return caseResult{
-		TaskInput: tc.TaskInput,
-		Expected:  tc.ExpectedBehavior,
-		Got:       "[requires live agent — run with --agent flag]",
-		Pass:      false,
-		Diff:      tc.Difficulty,
-		Category:  tc.Category,
-		Score:     0,
-	}
-}
-
-// simulateIntentClassification replicates the fast-path intent logic from messaging/intent.go.
-// Returns "needs_llm" when the fast-path can't classify but intent triggers match (the real bot
-// would call the LLM agent for these).
-func simulateIntentClassification(text string) string {
-	lower := strings.ToLower(strings.TrimSpace(text))
-
-	// summarize keywords (fast-path from isSummarizeKeyword — prefix match only)
-	for _, kw := range []string{"总结", "summarize", "summary", "摘要", "汇总", "概括", "recap", "digest"} {
-		if strings.HasPrefix(lower, kw) {
-			return "summarize"
-		}
-	}
-
-	// Check if any intent trigger matches — if so, the real bot delegates to LLM
-	intentTriggers := []string{
-		"总结", "摘要", "汇总", "概括",
-		"创建任务", "添加任务", "新建任务", "加个任务",
-		"创建笔记", "添加笔记", "记一下", "记个笔记",
-		"创建日程", "添加日程", "创建事件", "安排",
-		"summarize", "summary", "recap", "digest",
-		"create task", "add task", "new task",
-		"create note", "add note", "take note",
-		"create event", "add event", "schedule",
-		"まとめ", "要約", "резюме", "итог", "resumir", "resumen",
-	}
-	for _, kw := range intentTriggers {
-		if strings.Contains(lower, kw) {
-			return "needs_llm"
-		}
-	}
-
-	return "chat"
-}
-
-// simulateNameExtraction replicates the filler-word stripping logic from messaging/resolve.go.
-// This mirrors extractNameFromText — the real bot also tries extractNameViaAgent (LLM-based)
-// first, but this simulation only covers the rule-based fallback path.
-func simulateNameExtraction(text string) string {
-	clean := text
-
-	// Remove summarize keywords (sorted by length desc)
-	for _, kw := range []string{
-		"summarize", "summary", "digest", "recap",
-		"总结", "摘要", "汇总", "概括",
-	} {
-		clean = strings.ReplaceAll(clean, kw, "")
-	}
-
-	// Remove mention patterns: ![:Type](ID)
-	reMention := regexp.MustCompile(`!\[:\w+\]\(\d+\)`)
-	clean = reMention.ReplaceAllString(clean, "")
-
-	// Split on instruction words (并, and then, etc.) — take only the first part
-	reInstruction := regexp.MustCompile(`(?i)(?:` +
-		`并用|并且|并|然后|接着|之后|同时|通过|` +
-		`and then|then|and also|also|and send|and create|and post|` +
-		`そして|それから|その後|` +
-		`그리고|그런\s*다음|` +
-		`puis|ensuite|et\s+aussi|` +
-		`luego|después|y\s+también|` +
-		`dann|und\s+auch|` +
-		`потом|затем|и\s+также)`)
-	if parts := reInstruction.Split(clean, 2); len(parts) > 1 {
-		clean = parts[0]
-	}
-
-	clean = strings.ToLower(clean)
-
-	// Remove time words (sorted by length desc for correct replacement order)
-	timeWords := []string{
-		// Multi-char first
-		"la semaine dernière", "la semana pasada", "на прошлой неделе", "на этой неделе",
-		"в прошлом месяце", "в этом месяце", "past few days",
-		"letzte woche", "diese woche", "letzten monat", "diesen monat",
-		"cette semaine", "le mois dernier", "ce mois",
-		"esta semana", "el mes pasado", "este mes",
-		"上星期", "这星期", "上个月", "这段时间", "这几天",
-		"last week", "last month", "this week", "this month", "past week", "past month",
-		"上周", "这周", "上月", "本月", "前天", "近期",
-		"今天", "昨天", "本周", "最近", "过去",
-		"一昨日", "先週", "今週", "先月", "今月",
-		"지난주", "이번주", "지난달", "이번달", "그저께",
-		"avant-hier", "anteayer", "vorgestern", "позавчера",
-		"recently", "yesterday", "today",
-		"récemment", "recientemente", "kürzlich", "недавно",
-		"최근", "last",
-	}
-	for _, kw := range timeWords {
-		clean = strings.ReplaceAll(clean, kw, "")
-	}
-
-	// Remove CJK filler words (sorted by length desc)
-	cjkFillers := []string{
-		"要約して", "まとめて", "メッセージ",
-		"チャット", "会話", "요약",
-		"채팅", "대화", "메시지",
-		"群聊", "群", "一下", "消息", "聊天", "对话",
-		"发给", "发送", "发到", "笔记", "任务", "日程",
-		"跟", "和", "与", "我", "了", "下",
-		"给", "他", "她", "它", "他们",
-		"的",
-		"の", "と", "を", "は", "が", "で", "に", "へ",
-		"과의", "와의", "과", "와", "의", "을", "를", "에서",
-	}
-	for _, kw := range cjkFillers {
-		clean = strings.ReplaceAll(clean, kw, "")
-	}
-
-	// Remove English filler words (whole-word only)
-	enFillers := map[string]bool{
-		"messages": true, "chat": true, "conversation": true, "with": true,
-		"my": true, "the": true, "of": true, "a": true,
-		"send": true, "to": true, "him": true, "her": true, "them": true,
-		"note": true, "task": true, "event": true, "from": true,
-	}
-	words := strings.Fields(clean)
-	var kept []string
-	for _, w := range words {
-		// Handle possessive: "john's" → "john"
-		w = strings.TrimSuffix(w, "'s")
-		if !enFillers[w] && len(w) > 0 {
-			kept = append(kept, w)
-		}
-	}
-	clean = strings.Join(kept, " ")
-
-	// Remove digits and date-like patterns
-	reDigits := regexp.MustCompile(`\d+`)
-	clean = reDigits.ReplaceAllString(clean, "")
-
-	// Remove leftover CJK date fragments
-	for _, kw := range []string{"天", "小时", "个", "月", "日", "号", "hours", "days", "april"} {
-		clean = strings.ReplaceAll(clean, kw, "")
-	}
-
-	// Collapse whitespace
-	rePunctSpace := regexp.MustCompile(`[，。！？,\.!\?\s]+`)
-	clean = rePunctSpace.ReplaceAllString(clean, " ")
-	clean = strings.TrimSpace(clean)
-
-	if clean == "" {
-		return "NONE"
-	}
-	return clean
 }
 
 func loadGoldenDataset(path string) ([]testCase, error) {

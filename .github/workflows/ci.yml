@@ -29,9 +29,13 @@ jobs:
         run: go test ./... -count=1 -race -v -coverprofile=coverage.out
 
       - name: Eval prompts
+        if: env.DEEPSEEK_API_KEY != ''
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           go run scripts/eval_prompt.go --prompt intent
           go run scripts/eval_prompt.go --prompt name_extract
+          go run scripts/eval_prompt.go --prompt action
 
       - name: SonarCloud Scan
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
