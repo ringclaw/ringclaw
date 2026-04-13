@@ -28,6 +28,11 @@ jobs:
       - name: Test
         run: go test ./... -count=1 -race -v -coverprofile=coverage.out
 
+      - name: Eval prompts
+        run: |
+          go run scripts/eval_prompt.go --prompt intent
+          go run scripts/eval_prompt.go --prompt name_extract
+
       - name: SonarCloud Scan
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         uses: SonarSource/sonarqube-scan-action@v6
