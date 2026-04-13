@@ -55,10 +55,23 @@ type evalReport struct {
 	Passed    int               `json:"passed"`
 	Failed    int               `json:"failed"`
 	Score     float64           `json:"score"`
+	Baseline  float64           `json:"baseline,omitempty"`
 	ByDiff    map[string][2]int `json:"by_difficulty"`
 	ByCat     map[string][2]int `json:"by_category"`
 	Results   []caseResult      `json:"results"`
 	CompareTo string            `json:"compare_to,omitempty"`
+}
+
+type evolveSummary struct {
+	Improved bool            `json:"improved"`
+	Prompts  []evolveResult  `json:"prompts"`
+}
+
+type evolveResult struct {
+	Name     string  `json:"name"`
+	Baseline float64 `json:"baseline"`
+	Best     float64 `json:"best"`
+	Delta    float64 `json:"delta"`
 }
 
 // --- DeepSeek API client ---
@@ -271,6 +284,7 @@ func main() {
 	outputDir := flag.String("output", "output/prompt-eval", "Output directory for report JSON")
 	markdownFile := flag.String("markdown", "", "Write markdown summary to file (for CI integration)")
 	evolveRounds := flag.Int("evolve", 0, "Number of mutation rounds (0 = eval only)")
+	minImprovement := flag.Float64("min-improvement", 3.0, "Minimum score improvement (%) to consider successful")
 	flag.Parse()
 
 	if *promptName == "" {
@@ -290,10 +304,15 @@ func main() {
 	}
 
 	var allReports []evalReport
+	var summary evolveSummary
 	for _, name := range prompts {
 		if *evolveRounds > 0 {
-			report := evolveLoop(llm, name, *evolveRounds, *datasetDir, *outputDir)
+			report, result := evolveLoop(llm, name, *evolveRounds, *datasetDir, *outputDir)
 			allReports = append(allReports, report)
+			summary.Prompts = append(summary.Prompts, result)
+			if result.Delta >= *minImprovement {
+				summary.Improved = true
+			}
 		} else {
 			report := runEval(llm, name, *compareTo, *datasetDir, *outputDir)
 			allReports = append(allReports, report)
@@ -306,6 +325,21 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Warning: cannot write markdown: %v\n", err)
 		} else {
 			fmt.Printf("\nMarkdown summary saved to %s\n", *markdownFile)
+		}
+	}
+
+	// Write evolve summary JSON for CI consumption
+	if *evolveRounds > 0 {
+		summaryPath := filepath.Join(*outputDir, "evolve-summary.json")
+		os.MkdirAll(*outputDir, 0o755)
+		data, _ := json.MarshalIndent(summary, "", "  ")
+		os.WriteFile(summaryPath, data, 0o644)
+		fmt.Printf("Evolve summary: %s\n", summaryPath)
+		if summary.Improved {
+			fmt.Println("Improvement found — exit 0")
+		} else {
+			fmt.Println("No significant improvement — exit 1")
+			os.Exit(1)
 		}
 	}
 }
@@ -488,7 +522,7 @@ func formatDiff(d [2]int) string {
 
 // --- Phase 2: Automated Mutation ---
 
-func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outputDir string) evalReport {
+func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outputDir string) (evalReport, evolveResult) {
 	systemPrompt := getDefaultPrompt(promptName)
 	baselineSize := len(systemPrompt)
 
@@ -497,11 +531,14 @@ func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outpu
 	bestPrompt := systemPrompt
 	bestReport := runEvalWithPrompt(llm, promptName, bestPrompt, datasetDir, outputDir)
 	bestScore := bestReport.Score
+	baselineScore := bestScore
 	fmt.Printf("Baseline: %d/%d (%.1f%%)\n\n", bestReport.Passed, bestReport.Total, bestScore)
+
+	result := evolveResult{Name: promptName, Baseline: baselineScore, Best: bestScore}
 
 	if bestReport.Failed == 0 {
 		fmt.Println("No failures — nothing to evolve.")
-		return bestReport
+		return bestReport, result
 	}
 
 	for round := 1; round <= rounds; round++ {
@@ -553,16 +590,20 @@ func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outpu
 	}
 
 	// Save best evolved prompt
+	result.Best = bestScore
+	result.Delta = bestScore - baselineScore
+	bestReport.Baseline = baselineScore
+
 	outPath := filepath.Join(outputDir, promptName)
 	os.MkdirAll(outPath, 0o755)
 	evolvedPath := filepath.Join(outPath, "evolved.md")
 	if err := os.WriteFile(evolvedPath, []byte(bestPrompt), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: cannot write evolved prompt: %v\n", err)
 	} else {
-		fmt.Printf("=== Best: %d/%d (%.1f%%) — saved to %s ===\n\n", bestReport.Passed, bestReport.Total, bestScore, evolvedPath)
+		fmt.Printf("=== Best: %d/%d (%.1f%%, +%.1f%%) — saved to %s ===\n\n", bestReport.Passed, bestReport.Total, bestScore, result.Delta, evolvedPath)
 	}
 
-	return bestReport
+	return bestReport, result
 }
 
 func mutatePrompt(llm *llmClient, currentPrompt string, failures []caseResult) (string, error) {
