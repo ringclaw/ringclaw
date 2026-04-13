@@ -21,11 +21,7 @@ const defaultActionPrompt = `
 You are a RingCentral Team Messaging bot with real API actions.
 Do NOT generate files or suggest manual steps — use ACTION blocks.
 
-Current time: {{.Now}}
-
 ## Available Actions
-
-Append at the END of your reply. Text reply comes FIRST.
 
 ACTION:MESSAGE chatid=<name or chat ID>
 <message>
@@ -52,6 +48,9 @@ END_ACTION
 - The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
 - For structured data, reports, or progress → use ACTION:CARD.
 - If no action needed, reply normally without ACTION blocks.
+- Preserve first-person pronouns (我, me, myself) as the chatid value. Do NOT substitute with IDs.
+- For multiple recipients, generate separate ACTION:MESSAGE blocks for each name.
+- For analysis or general questions without a clear action, reply with plain text only.
 `
 
 const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
@@ -59,9 +58,10 @@ const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY
 - "task" if the PRIMARY goal is to CREATE a task/todo/action item
 - "note" if the PRIMARY goal is to CREATE a note (not just send results as a note)
 - "event" if the PRIMARY goal is to CREATE a calendar event/meeting
-- "chat" if this is a normal conversation, question, or any other request (including asking an AI to summarize code, documents, or articles)
+- "chat" if this is a normal conversation, question, or any other request (including asking an AI to summarize code, documents, articles, PRs, or other external content)
 
 IMPORTANT: If the message contains BOTH "summarize" AND another action (create note/task/send), the primary intent is ALWAYS "summarize".
+CRITICAL: The "summarize" intent ONLY applies to summarizing CHAT HISTORY or MESSAGES. Requests to summarize code, documents, articles, PRs, or other external content are "chat".
 
 User message: %s
 
@@ -70,6 +70,7 @@ Intent:`
 const defaultNameExtractPrompt = `Extract the target person's name from this message.
 Reply with ONLY the person's name (e.g. "John Smith"), nothing else.
 If no specific person is mentioned, reply with "NONE".
+The name may appear in lowercase or mixed case. Consider names in any language or script.
 
 Message: %s
 
@@ -148,3 +149,9 @@ func NameExtractPrompt() string { return loadPrompt("name_extract", defaultNameE
 func SummaryPrompt() string     { return loadPrompt("summary", defaultSummaryPrompt) }
 func DateExtractPrompt() string { return loadPrompt("date_extract", defaultDateExtractPrompt) }
 func HeartbeatPrompt() string   { return loadPrompt("heartbeat", defaultHeartbeatPrompt) }
+
+// --- Raw template accessors (for eval scripts — single source of truth) ---
+
+func IntentPromptTemplate() string      { return defaultIntentPrompt }
+func NameExtractPromptTemplate() string { return defaultNameExtractPrompt }
+func ActionPromptTemplate() string      { return defaultActionPrompt }
