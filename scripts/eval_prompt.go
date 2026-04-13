@@ -9,9 +9,9 @@
 //
 // Environment:
 //
-//	DEEPSEEK_API_KEY  — required for LLM evaluation
-//	DEEPSEEK_BASE_URL — optional (default: https://api.deepseek.com)
-//	DEEPSEEK_MODEL    — optional (default: deepseek-chat)
+//	LLM_API_KEY  — required for LLM evaluation
+//	LLM_BASE_URL — optional (default: https://api.deepseek.com)
+//	LLM_MODEL    — optional (default: deepseek-chat)
 package main
 
 import (
@@ -94,17 +94,17 @@ type chatResponse struct {
 func newLLMClient() *llmClient {
 	loadDotEnv()
 
-	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	apiKey := os.Getenv("LLM_API_KEY")
 	if apiKey == "" {
 		return nil
 	}
 
-	baseURL := os.Getenv("DEEPSEEK_BASE_URL")
+	baseURL := os.Getenv("LLM_BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://api.deepseek.com"
 	}
 
-	model := os.Getenv("DEEPSEEK_MODEL")
+	model := os.Getenv("LLM_MODEL")
 	if model == "" {
 		model = "deepseek-chat"
 	}
@@ -130,7 +130,12 @@ func (c *llmClient) chat(system, user string) (string, error) {
 		MaxTokens:   256,
 	})
 
-	req, _ := http.NewRequest("POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	endpoint := c.baseURL + "/v1/chat/completions"
+	// If base URL already contains /chat/completions, use it directly
+	if strings.Contains(c.baseURL, "/chat/completions") {
+		endpoint = c.baseURL
+	}
+	req, _ := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
@@ -251,7 +256,7 @@ func main() {
 
 	llm := newLLMClient()
 	if llm == nil {
-		fmt.Fprintln(os.Stderr, "Error: DEEPSEEK_API_KEY not set (check .env or environment)")
+		fmt.Fprintln(os.Stderr, "Error: LLM_API_KEY not set (check .env or environment)")
 		os.Exit(1)
 	}
 

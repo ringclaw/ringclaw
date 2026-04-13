@@ -29,9 +29,9 @@ jobs:
         run: go test ./... -count=1 -race -v -coverprofile=coverage.out
 
       - name: Eval prompts
-        if: env.DEEPSEEK_API_KEY != ''
+        if: env.LLM_API_KEY != ''
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
           go run scripts/eval_prompt.go --prompt intent
           go run scripts/eval_prompt.go --prompt name_extract
