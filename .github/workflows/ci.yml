@@ -64,10 +64,8 @@ jobs:
             PR_NUMBER=$(gh pr list --head "${{ github.ref_name }}" --json number -q '.[0].number')
           fi
           if [ -z "$PR_NUMBER" ]; then exit 0; fi
-          BODY=$(cat eval-report.md)
-          COMMENT_TAG="<!-- prompt-eval -->"
-          gh pr comment "$PR_NUMBER" --body "${COMMENT_TAG}
-          ${BODY}" 2>/dev/null || true
+          echo '<!-- prompt-eval -->' | cat - eval-report.md > eval-comment.md
+          gh pr comment "$PR_NUMBER" --body-file eval-comment.md || true
 
       - name: SonarCloud Scan
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
