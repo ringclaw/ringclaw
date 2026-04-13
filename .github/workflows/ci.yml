@@ -53,18 +53,16 @@ jobs:
         run: cat eval-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment eval on PR
-        if: github.event_name == 'pull_request' && steps.prompt-changes.outputs.changed == 'true' && hashFiles('eval-report.md') != ''
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if [ ! -f eval-report.md ]; then exit 0; fi
+          PR_NUMBER="${{ github.event.pull_request.number }}"
           BODY=$(cat eval-report.md)
           COMMENT_TAG="<!-- prompt-eval -->"
-          EXISTING=$(gh pr view ${{ github.event.pull_request.number }} --json comments -q ".comments[].body" | grep -c "$COMMENT_TAG" || true)
-          if [ "$EXISTING" -gt 0 ]; then
-            gh pr comment ${{ github.event.pull_request.number }} --edit-last --body "${COMMENT_TAG}${BODY}"
-          else
-            gh pr comment ${{ github.event.pull_request.number }} --body "${COMMENT_TAG}${BODY}"
-          fi
+          gh pr comment "$PR_NUMBER" --body "${COMMENT_TAG}
+          ${BODY}" 2>/dev/null || true
 
       - name: SonarCloud Scan
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
