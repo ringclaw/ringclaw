@@ -28,3 +28,7 @@
 {"task_input": "what is the difference between mutex and rwmutex", "expected_behavior": "chat", "difficulty": "easy", "category": "basic_en"}
 {"task_input": "总结我和 Maxwell 上周的聊天", "expected_behavior": "summarize", "difficulty": "medium", "category": "with_time", "source_pr": "#62"}
 {"task_input": "summarize my chat with Alice from last month", "expected_behavior": "summarize", "difficulty": "medium", "category": "with_time"}
+{"task_input": "总结 4 月 10 日的消息", "expected_behavior": "summarize", "difficulty": "medium", "category": "absolute_date", "source_pr": "#91", "note": "absolute date in Chinese format"}
+{"task_input": "summarize messages from April 10", "expected_behavior": "summarize", "difficulty": "medium", "category": "absolute_date", "source_pr": "#91"}
+{"task_input": "总结4月10号的消息", "expected_behavior": "summarize", "difficulty": "medium", "category": "absolute_date", "source_pr": "#91", "note": "号 variant, no spaces"}
+{"task_input": "总结这个群的4月10日的消息", "expected_behavior": "summarize", "difficulty": "hard", "category": "absolute_date_group", "source_pr": "#91", "note": "absolute date + group context"}

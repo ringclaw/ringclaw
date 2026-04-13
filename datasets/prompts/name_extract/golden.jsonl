@@ -18,3 +18,6 @@
 {"task_input": "总结昨天跟 maxwell 的聊天并用 note 发给他", "expected_behavior": "maxwell", "difficulty": "hard", "category": "compound", "source_pr": "#34"}
 {"task_input": "recap conversation with David Chen yesterday", "expected_behavior": "david chen", "difficulty": "medium", "category": "full_name"}
 {"task_input": "总结前天和 Alice 的对话", "expected_behavior": "alice", "difficulty": "medium", "category": "time_word", "note": "must not include '前天'"}
+{"task_input": "总结 4 月 10 日 maxwell 的消息", "expected_behavior": "maxwell", "difficulty": "hard", "category": "absolute_date", "source_pr": "#91", "note": "must not include '4 月 10 日'"}
+{"task_input": "summarize Bob's messages from April 10", "expected_behavior": "bob", "difficulty": "medium", "category": "absolute_date", "source_pr": "#91", "note": "must not include 'April 10'"}
+{"task_input": "总结4月10日的消息", "expected_behavior": "NONE", "difficulty": "medium", "category": "absolute_date_no_name", "source_pr": "#91", "note": "has absolute date but no person name"}

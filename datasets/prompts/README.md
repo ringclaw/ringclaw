@@ -19,13 +19,13 @@ Each line is a JSON object with:
 
 | Dataset | Prompt | Cases | Description |
 |---------|--------|-------|-------------|
-| `intent/golden.jsonl` | IntentPrompt | 30 | Classify user intent (summarize/task/note/event/chat) |
+| `intent/golden.jsonl` | IntentPrompt | 34 | Classify user intent (summarize/task/note/event/chat) |
 | `action/golden.jsonl` | ActionPrompt | 20 | Generate correct ACTION blocks |
-| `name_extract/golden.jsonl` | NameExtractPrompt | 20 | Extract person name from summarize request |
+| `name_extract/golden.jsonl` | NameExtractPrompt | 23 | Extract person name from summarize request |
 
 ## Sources
 
 Test cases are derived from:
-1. Historical bug-fix PRs (#34, #40, #62, #68) — real failures
+1. Historical bug-fix PRs (#34, #40, #62, #68, #91) — real failures
 2. Boundary cases from existing unit tests
 3. Hand-crafted edge cases for known weak spots
