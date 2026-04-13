@@ -118,6 +118,10 @@ func newLLMClient() *llmClient {
 }
 
 func (c *llmClient) chat(system, user string) (string, error) {
+	return c.chatWithMaxTokens(system, user, 256)
+}
+
+func (c *llmClient) chatWithMaxTokens(system, user string, maxTokens int) (string, error) {
 	msgs := []chatMessage{
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
@@ -127,7 +131,7 @@ func (c *llmClient) chat(system, user string) (string, error) {
 		Model:       c.model,
 		Messages:    msgs,
 		Temperature: 0,
-		MaxTokens:   256,
+		MaxTokens:   maxTokens,
 	})
 
 	endpoint := c.baseURL + "/v1/chat/completions"
@@ -242,12 +246,31 @@ Expected behavior: %s
 
 Agent response: %s`
 
+const mutationPrompt = `You are a prompt engineer. Improve the following system prompt to fix the failing test cases listed below.
+
+Current prompt:
+---
+%s
+---
+
+It failed on these test cases:
+%s
+
+Rules:
+- Keep the same output format and structure
+- Focus on fixing the failures without breaking passing cases
+- Do not exceed 120%% of the original prompt length
+- Reply with ONLY the improved prompt text, no explanation or commentary`
+
+const maxPromptSize = 15000
+
 func main() {
 	promptName := flag.String("prompt", "", "Prompt to evaluate: intent, name_extract, action (or 'all')")
 	compareTo := flag.String("compare", "", "Path to alternative prompt file to compare against")
 	datasetDir := flag.String("dataset", "", "Override dataset directory (default: datasets/prompts/<prompt>/)")
 	outputDir := flag.String("output", "output/prompt-eval", "Output directory for report JSON")
 	markdownFile := flag.String("markdown", "", "Write markdown summary to file (for CI integration)")
+	evolveRounds := flag.Int("evolve", 0, "Number of mutation rounds (0 = eval only)")
 	flag.Parse()
 
 	if *promptName == "" {
@@ -268,8 +291,13 @@ func main() {
 
 	var allReports []evalReport
 	for _, name := range prompts {
-		report := runEval(llm, name, *compareTo, *datasetDir, *outputDir)
-		allReports = append(allReports, report)
+		if *evolveRounds > 0 {
+			report := evolveLoop(llm, name, *evolveRounds, *datasetDir, *outputDir)
+			allReports = append(allReports, report)
+		} else {
+			report := runEval(llm, name, *compareTo, *datasetDir, *outputDir)
+			allReports = append(allReports, report)
+		}
 	}
 
 	if *markdownFile != "" {
@@ -456,6 +484,184 @@ func formatDiff(d [2]int) string {
 		return "-"
 	}
 	return fmt.Sprintf("%d/%d", d[1], d[0])
+}
+
+// --- Phase 2: Automated Mutation ---
+
+func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outputDir string) evalReport {
+	systemPrompt := getDefaultPrompt(promptName)
+	baselineSize := len(systemPrompt)
+
+	// Run baseline eval
+	fmt.Printf("=== %s Evolution (%d rounds) ===\n\n", promptName, rounds)
+	bestPrompt := systemPrompt
+	bestReport := runEvalWithPrompt(llm, promptName, bestPrompt, datasetDir, outputDir)
+	bestScore := bestReport.Score
+	fmt.Printf("Baseline: %d/%d (%.1f%%)\n\n", bestReport.Passed, bestReport.Total, bestScore)
+
+	if bestReport.Failed == 0 {
+		fmt.Println("No failures — nothing to evolve.")
+		return bestReport
+	}
+
+	for round := 1; round <= rounds; round++ {
+		fmt.Printf("--- Round %d/%d ---\n", round, rounds)
+
+		// Collect failures
+		var failures []caseResult
+		for _, r := range bestReport.Results {
+			if !r.Pass {
+				failures = append(failures, r)
+			}
+		}
+		if len(failures) == 0 {
+			fmt.Println("All cases pass — evolution complete.")
+			break
+		}
+		fmt.Printf("Mutating to fix %d failures...\n", len(failures))
+
+		// Generate candidate
+		candidate, err := mutatePrompt(llm, bestPrompt, failures)
+		if err != nil {
+			fmt.Printf("Mutation failed: %v — skipping round\n\n", err)
+			continue
+		}
+
+		// Constraint gates
+		if len(candidate) > maxPromptSize {
+			fmt.Printf("Candidate too large (%d > %d) — skipping\n\n", len(candidate), maxPromptSize)
+			continue
+		}
+		maxGrowth := int(float64(baselineSize) * 1.2)
+		if len(candidate) > maxGrowth {
+			fmt.Printf("Candidate growth exceeds 20%% (%d > %d) — skipping\n\n", len(candidate), maxGrowth)
+			continue
+		}
+
+		// Eval candidate
+		candidateReport := runEvalWithPrompt(llm, promptName, candidate, datasetDir, outputDir)
+		fmt.Printf("Candidate: %d/%d (%.1f%%)", candidateReport.Passed, candidateReport.Total, candidateReport.Score)
+
+		if candidateReport.Score > bestScore {
+			fmt.Printf(" ✓ improved (+%.1f%%)\n\n", candidateReport.Score-bestScore)
+			bestPrompt = candidate
+			bestScore = candidateReport.Score
+			bestReport = candidateReport
+		} else {
+			fmt.Printf(" ✗ no improvement\n\n")
+		}
+	}
+
+	// Save best evolved prompt
+	outPath := filepath.Join(outputDir, promptName)
+	os.MkdirAll(outPath, 0o755)
+	evolvedPath := filepath.Join(outPath, "evolved.md")
+	if err := os.WriteFile(evolvedPath, []byte(bestPrompt), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cannot write evolved prompt: %v\n", err)
+	} else {
+		fmt.Printf("=== Best: %d/%d (%.1f%%) — saved to %s ===\n\n", bestReport.Passed, bestReport.Total, bestScore, evolvedPath)
+	}
+
+	return bestReport
+}
+
+func mutatePrompt(llm *llmClient, currentPrompt string, failures []caseResult) (string, error) {
+	var failureDesc strings.Builder
+	for i, f := range failures {
+		failureDesc.WriteString(fmt.Sprintf("%d. Input: %q\n   Expected: %s\n   Got: %s\n", i+1, f.TaskInput, f.Expected, f.Got))
+	}
+
+	query := fmt.Sprintf(mutationPrompt, currentPrompt, failureDesc.String())
+	// Use higher max_tokens for mutation (prompt can be long)
+	reply, err := llm.chatWithMaxTokens("You are a prompt engineer.", query, 2048)
+	if err != nil {
+		return "", err
+	}
+
+	// Strip markdown code fences if present
+	reply = strings.TrimPrefix(reply, "```markdown")
+	reply = strings.TrimPrefix(reply, "```")
+	reply = strings.TrimSuffix(reply, "```")
+	reply = strings.TrimSpace(reply)
+
+	if len(reply) < 20 {
+		return "", fmt.Errorf("mutation returned too short result (%d chars)", len(reply))
+	}
+	return reply, nil
+}
+
+func getDefaultPrompt(name string) string {
+	switch name {
+	case "intent":
+		return defaultIntentPrompt
+	case "name_extract":
+		return defaultNameExtractPrompt
+	case "action":
+		return defaultActionPrompt
+	default:
+		return ""
+	}
+}
+
+// runEvalWithPrompt runs eval with a specific prompt text (no console output per case)
+func runEvalWithPrompt(llm *llmClient, promptName, systemPrompt, datasetDir, outputDir string) evalReport {
+	dsDir := datasetDir
+	if dsDir == "" {
+		dsDir = filepath.Join("datasets", "prompts", promptName)
+	}
+
+	cases, err := loadGoldenDataset(filepath.Join(dsDir, "golden.jsonl"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading dataset: %v\n", err)
+		os.Exit(1)
+	}
+
+	report := evalReport{
+		Prompt:    promptName,
+		Model:     llm.model,
+		Timestamp: time.Now().Format(time.RFC3339),
+		ByDiff:    make(map[string][2]int),
+		ByCat:     make(map[string][2]int),
+	}
+
+	for _, tc := range cases {
+		var result caseResult
+		switch promptName {
+		case "intent":
+			result = evalIntent(llm, tc, systemPrompt)
+		case "name_extract":
+			result = evalNameExtract(llm, tc, systemPrompt)
+		case "action":
+			result = evalAction(llm, tc, systemPrompt)
+		}
+
+		report.Results = append(report.Results, result)
+		report.Total++
+		if result.Pass {
+			report.Passed++
+		} else {
+			report.Failed++
+		}
+
+		d := report.ByDiff[tc.Difficulty]
+		d[0]++
+		if result.Pass {
+			d[1]++
+		}
+		report.ByDiff[tc.Difficulty] = d
+
+		c := report.ByCat[tc.Category]
+		c[0]++
+		if result.Pass {
+			c[1]++
+		}
+		report.ByCat[tc.Category] = c
+	}
+
+	if report.Total > 0 {
+		report.Score = float64(report.Passed) / float64(report.Total) * 100
+	}
+	return report
 }
 
 // evalIntent calls LLM with IntentPrompt and compares reply to expected (exact match)
