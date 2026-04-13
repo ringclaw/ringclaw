@@ -53,12 +53,17 @@ jobs:
         run: cat eval-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment eval on PR
-        if: github.event_name == 'pull_request'
+        if: steps.prompt-changes.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ ! -f eval-report.md ]; then exit 0; fi
-          PR_NUMBER="${{ github.event.pull_request.number }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          else
+            PR_NUMBER=$(gh pr list --head "${{ github.ref_name }}" --json number -q '.[0].number')
+          fi
+          if [ -z "$PR_NUMBER" ]; then exit 0; fi
           BODY=$(cat eval-report.md)
           COMMENT_TAG="<!-- prompt-eval -->"
           gh pr comment "$PR_NUMBER" --body "${COMMENT_TAG}
