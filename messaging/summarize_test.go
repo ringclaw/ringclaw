@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -319,5 +320,86 @@ func TestBuildSummaryPrompt_DefaultMessageLimit(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "250 messages") {
 		t.Fatalf("expected prompt to mention default message limit, got %q", prompt)
+	}
+}
+
+type dateAgent struct {
+	reply string
+	err   error
+}
+
+func (a *dateAgent) Chat(_ context.Context, _, _ string) (string, error) {
+	if a.err != nil {
+		return "", a.err
+	}
+	return a.reply, nil
+}
+func (a *dateAgent) ResetSession(_ context.Context, _ string) (string, error) { return "", nil }
+func (a *dateAgent) SetCwd(_ string)                                          {}
+func (a *dateAgent) Info() agent.AgentInfo                                    { return agent.AgentInfo{Name: "date-mock"} }
+
+func TestExtractDateViaAgent_ISO(t *testing.T) {
+	ag := &dateAgent{reply: "2026-04-10"}
+	got := extractDateViaAgent(context.Background(), ag, "总结4月10日的消息")
+	if got.Year() != 2026 || got.Month() != time.April || got.Day() != 10 {
+		t.Errorf("expected 2026-04-10, got %v", got.Format("2006-01-02"))
+	}
+}
+
+func TestExtractDateViaAgent_Relative(t *testing.T) {
+	ag := &dateAgent{reply: "yesterday"}
+	got := extractDateViaAgent(context.Background(), ag, "总结昨天的消息")
+	yesterday := time.Now().AddDate(0, 0, -1)
+	if got.Month() != yesterday.Month() || got.Day() != yesterday.Day() {
+		t.Errorf("expected yesterday, got %v", got.Format("2006-01-02"))
+	}
+}
+
+func TestExtractDateViaAgent_None(t *testing.T) {
+	ag := &dateAgent{reply: "NONE"}
+	got := extractDateViaAgent(context.Background(), ag, "总结一下")
+	today := todayStart()
+	if !got.Equal(today) {
+		t.Errorf("expected today for NONE, got %v", got.Format("2006-01-02"))
+	}
+}
+
+func TestExtractDateViaAgent_Error(t *testing.T) {
+	ag := &dateAgent{err: fmt.Errorf("timeout")}
+	got := extractDateViaAgent(context.Background(), ag, "总结4月10日的消息")
+	// Should fall back to parseTimeRange which handles "4月10日"
+	if got.Month() != time.April || got.Day() != 10 {
+		t.Errorf("expected regex fallback to April 10, got %v", got.Format("2006-01-02"))
+	}
+}
+
+func TestResolveChatTarget_SkipsBotMention(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/chats") && r.URL.Query().Get("type") == "" {
+			json.NewEncoder(w).Encode(ringcentral.Chat{ID: "group-chat", Name: "实验虾", Type: "Team"})
+		} else {
+			json.NewEncoder(w).Encode(ringcentral.ChatList{Records: []ringcentral.Chat{}})
+		}
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewBotClient(srv.URL, "token")
+	client.SetOwnerID("bot-123")
+
+	mentions := []ringcentral.Mention{
+		{ID: "bot-123", Type: "Person", Name: "catclaw"},
+		{ID: "team-456", Type: "Team", Name: "实验虾"},
+	}
+
+	req, err := ResolveChatTarget(context.Background(), client, nil, "总结4月10日的消息", mentions)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.ChatID != "team-456" {
+		t.Errorf("expected chatID=team-456 (Team mention), got %q", req.ChatID)
+	}
+	if req.ChatName != "实验虾" {
+		t.Errorf("expected chatName=实验虾, got %q", req.ChatName)
 	}
 }

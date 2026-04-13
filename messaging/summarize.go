@@ -7,8 +7,51 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
+
+const dateExtractConversationID = "date:extractor"
+
+func extractDateViaAgent(ctx context.Context, ag agent.Agent, text string) time.Time {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	prompt := fmt.Sprintf(DateExtractPrompt(), now.Format("2006-01-02"), text)
+
+	start := time.Now()
+	reply, err := ag.Chat(ctx, dateExtractConversationID, prompt)
+	elapsed := time.Since(start)
+	if err != nil {
+		slog.Warn("agent date extraction failed, falling back to regex", "component", "summarize", "error", err, "elapsed", elapsed)
+		return parseTimeRange(text)
+	}
+
+	cleaned := strings.TrimSpace(reply)
+	cleaned = strings.Trim(cleaned, `"'`)
+
+	if strings.EqualFold(cleaned, "none") || cleaned == "" {
+		slog.Info("agent found no date, falling back to regex", "component", "summarize", "elapsed", elapsed)
+		return parseTimeRange(text)
+	}
+
+	// Try ISO 8601 parse
+	if t, err := time.Parse("2006-01-02", cleaned); err == nil {
+		slog.Info("agent extracted date", "component", "summarize", "date", cleaned, "elapsed", elapsed)
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, now.Location())
+	}
+
+	// Agent may return relative expression like "last week" — pass through parseTimeRange
+	parsed := parseTimeRange(cleaned)
+	if !parsed.Equal(todayStart()) {
+		slog.Info("agent extracted relative date", "component", "summarize", "reply", cleaned, "resolved", parsed.Format("2006-01-02"), "elapsed", elapsed)
+		return parsed
+	}
+
+	slog.Info("agent date reply not parseable, falling back to regex on original text", "component", "summarize", "reply", cleaned, "elapsed", elapsed)
+	return parseTimeRange(text)
+}
 
 var summarizeKeywords = []string{"总结", "summarize", "summary"}
 

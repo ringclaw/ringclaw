@@ -231,8 +231,13 @@ func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, ag agent
 		UserRequest: text,
 	}
 
-	req.TimeFrom = parseTimeRange(text)
+	if ag != nil {
+		req.TimeFrom = extractDateViaAgent(ctx, ag, text)
+	} else {
+		req.TimeFrom = parseTimeRange(text)
+	}
 
+	botID := client.OwnerID()
 	for _, m := range mentions {
 		switch m.Type {
 		case "Team":
@@ -240,6 +245,9 @@ func ResolveChatTarget(ctx context.Context, client *ringcentral.Client, ag agent
 			req.ChatName = m.Name
 			return req, nil
 		case "Person":
+			if m.ID == botID {
+				continue
+			}
 			chatID, err := findDirectChat(ctx, client, m.ID)
 			if err != nil {
 				return nil, fmt.Errorf("find chat with %s: %w", m.Name, err)
