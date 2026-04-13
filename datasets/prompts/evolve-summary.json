@@ -1,0 +1,23 @@
+{
+  "improved": true,
+  "prompts": [
+    {
+      "name": "intent",
+      "baseline": 88.23529411764706,
+      "best": 100,
+      "delta": 11.764705882352942
+    },
+    {
+      "name": "name_extract",
+      "baseline": 91.30434782608695,
+      "best": 100,
+      "delta": 8.695652173913047
+    },
+    {
+      "name": "action",
+      "baseline": 60,
+      "best": 70,
+      "delta": 10
+    }
+  ]
+}
