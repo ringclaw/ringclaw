@@ -149,3 +149,9 @@ func NameExtractPrompt() string { return loadPrompt("name_extract", defaultNameE
 func SummaryPrompt() string     { return loadPrompt("summary", defaultSummaryPrompt) }
 func DateExtractPrompt() string { return loadPrompt("date_extract", defaultDateExtractPrompt) }
 func HeartbeatPrompt() string   { return loadPrompt("heartbeat", defaultHeartbeatPrompt) }
+
+// --- Raw template accessors (for eval scripts — single source of truth) ---
+
+func IntentPromptTemplate() string      { return defaultIntentPrompt }
+func NameExtractPromptTemplate() string { return defaultNameExtractPrompt }
+func ActionPromptTemplate() string      { return defaultActionPrompt }

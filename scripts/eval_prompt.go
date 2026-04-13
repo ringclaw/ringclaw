@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ringclaw/ringclaw/messaging"
 )
 
 type testCase struct {
@@ -199,52 +201,6 @@ func loadDotEnv() {
 	}
 }
 
-// --- Prompt templates (mirrors messaging/prompts.go) ---
-
-const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
-- "summarize" if the user wants to summarize CHAT HISTORY or MESSAGES (even if they also want to send/note/task the result)
-- "task" if the PRIMARY goal is to CREATE a task/todo/action item
-- "note" if the PRIMARY goal is to CREATE a note (not just send results as a note)
-- "event" if the PRIMARY goal is to CREATE a calendar event/meeting
-- "chat" if this is a normal conversation, question, or any other request (including asking an AI to summarize code, documents, or articles)
-
-IMPORTANT: If the message contains BOTH "summarize" AND another action (create note/task/send), the primary intent is ALWAYS "summarize".`
-
-const defaultNameExtractPrompt = `Extract the target person's name from this message.
-Reply with ONLY the person's name (e.g. "John Smith"), nothing else.
-If no specific person is mentioned, reply with "NONE".`
-
-const defaultActionPrompt = `You are a RingCentral Team Messaging bot with real API actions.
-Do NOT generate files or suggest manual steps — use ACTION blocks.
-
-## Available Actions
-
-ACTION:MESSAGE chatid=<name or chat ID>
-<message>
-END_ACTION
-
-ACTION:NOTE title=<title> [chatid=...]
-<body>
-END_ACTION
-
-ACTION:TASK subject=<subject> [assignee=<name>] [chatid=...]
-<optional description>
-END_ACTION
-
-ACTION:EVENT title=<title> start=<ISO8601> end=<ISO8601>
-END_ACTION
-
-ACTION:CARD [chatid=...]
-<Adaptive Card JSON v1.3>
-END_ACTION
-
-## Rules
-- chatid: person name (e.g. John Smith), numeric chat ID, or ![:Team](ID). Omit to use current chat.
-- assignee: person name or ![:Person](ID).
-- The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
-- For structured data, reports, or progress → use ACTION:CARD.
-- If no action needed, reply normally without ACTION blocks.`
-
 // judgePrompt scores an agent response against expected behavior
 const judgePrompt = `You are an evaluator. Score the agent's response against the expected behavior.
 Reply with ONLY a JSON object: {"pass": true/false, "score": 0.0-1.0, "reason": "brief explanation"}
@@ -358,15 +314,8 @@ func runEval(llm *llmClient, promptName, compareTo, datasetDir, outputDir string
 		os.Exit(1)
 	}
 
-	systemPrompt := ""
-	switch promptName {
-	case "intent":
-		systemPrompt = defaultIntentPrompt
-	case "name_extract":
-		systemPrompt = defaultNameExtractPrompt
-	case "action":
-		systemPrompt = defaultActionPrompt
-	default:
+	systemPrompt := getDefaultPrompt(promptName)
+	if systemPrompt == "" {
 		fmt.Fprintf(os.Stderr, "Unknown prompt: %s\n", promptName)
 		os.Exit(1)
 	}
@@ -669,11 +618,11 @@ func mutatePrompt(llm *llmClient, currentPrompt string, failures []caseResult, m
 func getDefaultPrompt(name string) string {
 	switch name {
 	case "intent":
-		return defaultIntentPrompt
+		return messaging.IntentPromptTemplate()
 	case "name_extract":
-		return defaultNameExtractPrompt
+		return messaging.NameExtractPromptTemplate()
 	case "action":
-		return defaultActionPrompt
+		return messaging.ActionPromptTemplate()
 	default:
 		return ""
 	}
