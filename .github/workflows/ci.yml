@@ -32,10 +32,27 @@ jobs:
         if: env.LLM_API_KEY != ''
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: go run scripts/eval_prompt.go --prompt all --markdown eval-report.md
+
+      - name: Eval summary
+        if: env.LLM_API_KEY != '' && hashFiles('eval-report.md') != ''
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: cat eval-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment eval on PR
+        if: github.event_name == 'pull_request' && hashFiles('eval-report.md') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          go run scripts/eval_prompt.go --prompt intent
-          go run scripts/eval_prompt.go --prompt name_extract
-          go run scripts/eval_prompt.go --prompt action
+          BODY=$(cat eval-report.md)
+          COMMENT_TAG="<!-- prompt-eval -->"
+          EXISTING=$(gh pr view ${{ github.event.pull_request.number }} --json comments -q ".comments[].body" | grep -c "$COMMENT_TAG" || true)
+          if [ "$EXISTING" -gt 0 ]; then
+            gh pr comment ${{ github.event.pull_request.number }} --edit-last --body "${COMMENT_TAG}${BODY}"
+          else
+            gh pr comment ${{ github.event.pull_request.number }} --body "${COMMENT_TAG}${BODY}"
+          fi
 
       - name: SonarCloud Scan
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'

@@ -243,14 +243,15 @@ Expected behavior: %s
 Agent response: %s`
 
 func main() {
-	promptName := flag.String("prompt", "", "Prompt to evaluate: intent, name_extract, action")
+	promptName := flag.String("prompt", "", "Prompt to evaluate: intent, name_extract, action (or 'all')")
 	compareTo := flag.String("compare", "", "Path to alternative prompt file to compare against")
 	datasetDir := flag.String("dataset", "", "Override dataset directory (default: datasets/prompts/<prompt>/)")
 	outputDir := flag.String("output", "output/prompt-eval", "Output directory for report JSON")
+	markdownFile := flag.String("markdown", "", "Write markdown summary to file (for CI integration)")
 	flag.Parse()
 
 	if *promptName == "" {
-		fmt.Fprintln(os.Stderr, "Usage: go run scripts/eval_prompt.go --prompt <intent|name_extract|action>")
+		fmt.Fprintln(os.Stderr, "Usage: go run scripts/eval_prompt.go --prompt <intent|name_extract|action|all>")
 		os.Exit(1)
 	}
 
@@ -260,20 +261,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	dsDir := *datasetDir
+	prompts := []string{*promptName}
+	if *promptName == "all" {
+		prompts = []string{"intent", "name_extract", "action"}
+	}
+
+	var allReports []evalReport
+	for _, name := range prompts {
+		report := runEval(llm, name, *compareTo, *datasetDir, *outputDir)
+		allReports = append(allReports, report)
+	}
+
+	if *markdownFile != "" {
+		md := renderMarkdown(allReports)
+		if err := os.WriteFile(*markdownFile, []byte(md), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: cannot write markdown: %v\n", err)
+		} else {
+			fmt.Printf("\nMarkdown summary saved to %s\n", *markdownFile)
+		}
+	}
+}
+
+func runEval(llm *llmClient, promptName, compareTo, datasetDir, outputDir string) evalReport {
+	dsDir := datasetDir
 	if dsDir == "" {
-		dsDir = filepath.Join("datasets", "prompts", *promptName)
+		dsDir = filepath.Join("datasets", "prompts", promptName)
 	}
 
 	cases, err := loadGoldenDataset(filepath.Join(dsDir, "golden.jsonl"))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading dataset: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error loading dataset for %s: %v\n", promptName, err)
 		os.Exit(1)
 	}
 
-	// Load custom prompt if --compare is specified
 	systemPrompt := ""
-	switch *promptName {
+	switch promptName {
 	case "intent":
 		systemPrompt = defaultIntentPrompt
 	case "name_extract":
@@ -281,35 +303,35 @@ func main() {
 	case "action":
 		systemPrompt = defaultActionPrompt
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown prompt: %s (use intent, name_extract, or action)\n", *promptName)
+		fmt.Fprintf(os.Stderr, "Unknown prompt: %s\n", promptName)
 		os.Exit(1)
 	}
 
-	if *compareTo != "" {
-		data, err := os.ReadFile(*compareTo)
+	if compareTo != "" {
+		data, err := os.ReadFile(compareTo)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading compare file: %v\n", err)
 			os.Exit(1)
 		}
 		systemPrompt = string(data)
-		fmt.Printf("Using custom prompt from: %s (%d chars)\n\n", *compareTo, len(systemPrompt))
+		fmt.Printf("Using custom prompt from: %s (%d chars)\n\n", compareTo, len(systemPrompt))
 	}
 
-	fmt.Printf("=== %s Evaluation ===\n", *promptName)
+	fmt.Printf("=== %s Evaluation ===\n", promptName)
 	fmt.Printf("Model: %s | Cases: %d\n\n", llm.model, len(cases))
 
 	report := evalReport{
-		Prompt:    *promptName,
+		Prompt:    promptName,
 		Model:     llm.model,
 		Timestamp: time.Now().Format(time.RFC3339),
 		ByDiff:    make(map[string][2]int),
 		ByCat:     make(map[string][2]int),
-		CompareTo: *compareTo,
+		CompareTo: compareTo,
 	}
 
 	for i, tc := range cases {
 		var result caseResult
-		switch *promptName {
+		switch promptName {
 		case "intent":
 			result = evalIntent(llm, tc, systemPrompt)
 		case "name_extract":
@@ -359,8 +381,9 @@ func main() {
 			fmt.Printf("  %s: %d/%d\n", diff, d[1], d[0])
 		}
 	}
+	fmt.Println()
 
-	outPath := filepath.Join(*outputDir, *promptName)
+	outPath := filepath.Join(outputDir, promptName)
 	if err := os.MkdirAll(outPath, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: cannot create output dir: %v\n", err)
 	} else {
@@ -369,9 +392,70 @@ func main() {
 		if err := os.WriteFile(reportFile, data, 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: cannot write report: %v\n", err)
 		} else {
-			fmt.Printf("\nReport saved to %s\n", reportFile)
+			fmt.Printf("Report saved to %s\n", reportFile)
 		}
 	}
+
+	return report
+}
+
+func renderMarkdown(reports []evalReport) string {
+	var sb strings.Builder
+	sb.WriteString("## Prompt Eval Report\n\n")
+
+	if len(reports) > 0 {
+		sb.WriteString(fmt.Sprintf("**Model:** `%s` | **Date:** %s\n\n", reports[0].Model, time.Now().Format("2006-01-02 15:04")))
+	}
+
+	// Summary table
+	sb.WriteString("| Prompt | Score | Easy | Medium | Hard |\n")
+	sb.WriteString("|--------|-------|------|--------|------|\n")
+	for _, r := range reports {
+		emoji := "✅"
+		if r.Score < 80 {
+			emoji = "⚠️"
+		}
+		if r.Score < 60 {
+			emoji = "❌"
+		}
+		easy := formatDiff(r.ByDiff["easy"])
+		medium := formatDiff(r.ByDiff["medium"])
+		hard := formatDiff(r.ByDiff["hard"])
+		sb.WriteString(fmt.Sprintf("| %s %s | **%d/%d (%.1f%%)** | %s | %s | %s |\n",
+			emoji, r.Prompt, r.Passed, r.Total, r.Score, easy, medium, hard))
+	}
+
+	// Failed cases detail
+	var failures []caseResult
+	for _, r := range reports {
+		for _, res := range r.Results {
+			if !res.Pass {
+				failures = append(failures, res)
+			}
+		}
+	}
+
+	if len(failures) > 0 {
+		sb.WriteString("\n<details>\n<summary>")
+		sb.WriteString(fmt.Sprintf("❌ %d failed cases", len(failures)))
+		sb.WriteString("</summary>\n\n")
+		sb.WriteString("| Input | Expected | Got |\n")
+		sb.WriteString("|-------|----------|-----|\n")
+		for _, f := range failures {
+			sb.WriteString(fmt.Sprintf("| %s | %s | %s |\n",
+				truncate(f.TaskInput, 40), truncate(f.Expected, 30), truncate(f.Got, 30)))
+		}
+		sb.WriteString("\n</details>\n")
+	}
+
+	return sb.String()
+}
+
+func formatDiff(d [2]int) string {
+	if d[0] == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d/%d", d[1], d[0])
 }
 
 // evalIntent calls LLM with IntentPrompt and compares reply to expected (exact match)
