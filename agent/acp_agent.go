@@ -108,7 +108,8 @@ type newSessionParams struct {
 }
 
 type newSessionResult struct {
-	SessionID string `json:"sessionId"`
+	SessionID string           `json:"sessionId"`
+	Modes     *json.RawMessage `json:"modes,omitempty"`
 }
 
 type promptParams struct {
@@ -462,14 +463,19 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
 
-	if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
-		"sessionId": sessionResult.SessionID,
-		"modeId":    "full-access",
-	}); err != nil {
-		slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
-			"component", "acp", "session", sessionResult.SessionID, "error", err)
-	} else {
-		slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
+	// Only call set_mode if the agent advertised modes in session response.
+	// Some agents (e.g. Droid) default to full-access and calling set_mode
+	// explicitly can trigger unwanted permission requests.
+	if sessionResult.Modes != nil {
+		if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
+			"sessionId": sessionResult.SessionID,
+			"modeId":    "full-access",
+		}); err != nil {
+			slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
+				"component", "acp", "session", sessionResult.SessionID, "error", err)
+		} else {
+			slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
+		}
 	}
 
 	return sessionResult.SessionID, true, nil
