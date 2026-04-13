@@ -45,7 +45,7 @@ var agentCandidates = []agentCandidate{
 	{Name: "codex", NpxPkg: "@zed-industries/codex-acp", Type: "acp", Model: ""},
 	{Name: "codex", Binary: "codex", Type: "cli", Model: ""},
 	// ACP-only agents
-	{Name: "cursor", Binary: "cursor-agent", Args: []string{"acp"}, Type: "acp", Model: ""},
+	{Name: "cursor", Binary: "agent", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "kimi", Binary: "kimi", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "gemini", Binary: "gemini", Args: []string{"--acp"}, Type: "acp", Model: ""},
 	{Name: "opencode", Binary: "opencode", Args: []string{"acp"}, Type: "acp", Model: ""},

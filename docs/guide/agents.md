@@ -22,7 +22,7 @@ CLI mode spawns a new process per message with **no multi-turn context** — eac
 |-------|-------------|---------|
 | Claude | `claude-agent-acp` | `npm i -g @agentclientprotocol/claude-agent-acp` |
 | Codex | `codex-acp` | `npm i -g @zed-industries/codex-acp` |
-| Cursor | `cursor-agent acp` | Built into Cursor CLI |
+| Cursor | `agent acp` | Built into Cursor CLI |
 | Gemini | `gemini --acp` | Built into Gemini CLI |
 | Kimi | `kimi acp` | Built into Kimi CLI |
 | Copilot | `copilot --acp --stdio` | Built into Copilot CLI |

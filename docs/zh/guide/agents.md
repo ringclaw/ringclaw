@@ -22,7 +22,7 @@ CLI 模式每条消息启动新进程，**没有多轮上下文**——每条消
 |-------|---------|---------|
 | Claude | `claude-agent-acp` | `npm i -g @agentclientprotocol/claude-agent-acp` |
 | Codex | `codex-acp` | `npm i -g @zed-industries/codex-acp` |
-| Cursor | `cursor-agent acp` | Cursor CLI 内置 |
+| Cursor | `agent acp` | Cursor CLI 内置 |
 | Gemini | `gemini --acp` | Gemini CLI 内置 |
 | Kimi | `kimi acp` | Kimi CLI 内置 |
 | Copilot | `copilot --acp --stdio` | Copilot CLI 内置 |
