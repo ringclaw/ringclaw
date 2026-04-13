@@ -32,6 +32,7 @@ func init() {
 			Model:        cfg.Model,
 			SystemPrompt: cfg.SystemPrompt,
 			AllowWrite:   cfg.AllowWrite,
+			FullAccess:   cfg.FullAccess,
 		})
 		if err := ag.Start(ctx); err != nil {
 			return nil, fmt.Errorf("start ACP agent: %w", err)
@@ -49,6 +50,7 @@ type ACPAgent struct {
 	cwd          string
 	env          map[string]string
 	allowWrite   bool
+	fullAccess   bool
 
 	mu       sync.Mutex
 	cmd      *exec.Cmd
@@ -81,6 +83,7 @@ type ACPAgentConfig struct {
 	Cwd          string
 	Env          map[string]string
 	AllowWrite   bool
+	FullAccess   bool
 }
 
 // --- ACP protocol types ---
@@ -172,6 +175,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		cwd:          cfg.Cwd,
 		env:          cfg.Env,
 		allowWrite:   cfg.AllowWrite,
+		fullAccess:   cfg.FullAccess,
 		sessions:     make(map[string]string),
 		pending:      make(map[int64]chan *rpcResponse),
 		notifyCh:     make(map[string]chan *sessionUpdate),
@@ -462,14 +466,16 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
 
-	if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
-		"sessionId": sessionResult.SessionID,
-		"modeId":    "full-access",
-	}); err != nil {
-		slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
-			"component", "acp", "session", sessionResult.SessionID, "error", err)
-	} else {
-		slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
+	if a.fullAccess {
+		if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
+			"sessionId": sessionResult.SessionID,
+			"modeId":    "full-access",
+		}); err != nil {
+			slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
+				"component", "acp", "session", sessionResult.SessionID, "error", err)
+		} else {
+			slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
+		}
 	}
 
 	return sessionResult.SessionID, true, nil

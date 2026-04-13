@@ -109,6 +109,13 @@ func DetectAndConfigure(cfg *Config) bool {
 		modified = true
 	}
 
+	// Backfill full_access for codex ACP agent (claude-agent-acp doesn't support set_mode)
+	if agCfg, exists := cfg.Agents["codex"]; exists && agCfg.Type == "acp" && !agCfg.FullAccess {
+		agCfg.FullAccess = true
+		cfg.Agents["codex"] = agCfg
+		modified = true
+	}
+
 	// Special handling for openclaw: resolve gateway connection from
 	// env vars -> ~/.openclaw/openclaw.json -> skip.
 	if agCfg, exists := cfg.Agents["openclaw"]; exists && agCfg.Type == "acp" && len(agCfg.Args) == 0 {

@@ -137,6 +137,7 @@ type AgentConfig struct {
 	Cwd          string            `json:"cwd,omitempty"`           // working directory (workspace)
 	Env          map[string]string `json:"env,omitempty"`           // extra environment variables (cli/acp type)
 	AllowWrite   bool              `json:"allow_write,omitempty"`   // grant file write permission to ACP agent (default: false)
+	FullAccess   bool              `json:"full_access,omitempty"`   // call session/set_mode "full-access" on ACP session creation
 	Model        string            `json:"model,omitempty"`         // model name
 	SystemPrompt string            `json:"system_prompt,omitempty"` // system prompt
 	Endpoint     string            `json:"endpoint,omitempty"`      // API endpoint (http type)
