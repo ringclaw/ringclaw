@@ -131,10 +131,10 @@ func newLLMClient() *llmClient {
 }
 
 func (c *llmClient) chat(system, user string) (string, error) {
-	return c.chatWithMaxTokens(system, user, 256)
+	return c.chatWithOptions(system, user, 256, 0)
 }
 
-func (c *llmClient) chatWithMaxTokens(system, user string, maxTokens int) (string, error) {
+func (c *llmClient) chatWithOptions(system, user string, maxTokens int, temperature float64) (string, error) {
 	msgs := []chatMessage{
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
@@ -143,7 +143,7 @@ func (c *llmClient) chatWithMaxTokens(system, user string, maxTokens int) (strin
 	body, _ := json.Marshal(chatRequest{
 		Model:       c.model,
 		Messages:    msgs,
-		Temperature: 0,
+		Temperature: temperature,
 		MaxTokens:   maxTokens,
 	})
 
@@ -261,7 +261,7 @@ Agent response: %s`
 
 const mutationPrompt = `You are a prompt engineer. Improve the following system prompt to fix the failing test cases listed below.
 
-Current prompt:
+Current prompt (%d chars):
 ---
 %s
 ---
@@ -272,7 +272,8 @@ It failed on these test cases:
 Rules:
 - Keep the same output format and structure
 - Focus on fixing the failures without breaking passing cases
-- Do not exceed 120%% of the original prompt length
+- Your improved prompt MUST be at most %d characters (current: %d)
+- Be concise — add minimal targeted rules, do not rewrite everything
 - Reply with ONLY the improved prompt text, no explanation or commentary`
 
 const maxPromptSize = 15000
@@ -558,7 +559,8 @@ func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outpu
 		fmt.Printf("Mutating to fix %d failures...\n", len(failures))
 
 		// Generate candidate
-		candidate, err := mutatePrompt(llm, bestPrompt, failures)
+		maxGrowth := max(int(float64(baselineSize)*1.5), baselineSize+200)
+		candidate, err := mutatePrompt(llm, bestPrompt, failures, maxGrowth)
 		if err != nil {
 			fmt.Printf("Mutation failed: %v — skipping round\n\n", err)
 			continue
@@ -569,9 +571,8 @@ func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outpu
 			fmt.Printf("Candidate too large (%d > %d) — skipping\n\n", len(candidate), maxPromptSize)
 			continue
 		}
-		maxGrowth := int(float64(baselineSize) * 1.2)
 		if len(candidate) > maxGrowth {
-			fmt.Printf("Candidate growth exceeds 20%% (%d > %d) — skipping\n\n", len(candidate), maxGrowth)
+			fmt.Printf("Candidate too much growth (%d > %d) — skipping\n\n", len(candidate), maxGrowth)
 			continue
 		}
 
@@ -606,15 +607,15 @@ func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outpu
 	return bestReport, result
 }
 
-func mutatePrompt(llm *llmClient, currentPrompt string, failures []caseResult) (string, error) {
+func mutatePrompt(llm *llmClient, currentPrompt string, failures []caseResult, maxChars int) (string, error) {
 	var failureDesc strings.Builder
 	for i, f := range failures {
 		failureDesc.WriteString(fmt.Sprintf("%d. Input: %q\n   Expected: %s\n   Got: %s\n", i+1, f.TaskInput, f.Expected, f.Got))
 	}
 
-	query := fmt.Sprintf(mutationPrompt, currentPrompt, failureDesc.String())
-	// Use higher max_tokens for mutation (prompt can be long)
-	reply, err := llm.chatWithMaxTokens("You are a prompt engineer.", query, 2048)
+	currentLen := len(currentPrompt)
+	query := fmt.Sprintf(mutationPrompt, currentLen, currentPrompt, failureDesc.String(), maxChars, currentLen)
+	reply, err := llm.chatWithOptions("You are a prompt engineer.", query, 2048, 0.7)
 	if err != nil {
 		return "", err
 	}
