@@ -331,8 +331,9 @@ func main() {
 
 	// Write evolve summary JSON for CI consumption
 	if *evolveRounds > 0 {
-		summaryPath := filepath.Join(*outputDir, "evolve-summary.json")
-		os.MkdirAll(*outputDir, 0o755)
+		summaryDir := filepath.Join("datasets", "prompts")
+		summaryPath := filepath.Join(summaryDir, "evolve-summary.json")
+		os.MkdirAll(summaryDir, 0o755)
 		data, _ := json.MarshalIndent(summary, "", "  ")
 		os.WriteFile(summaryPath, data, 0o644)
 		fmt.Printf("Evolve summary: %s\n", summaryPath)
@@ -590,21 +591,54 @@ func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outpu
 		}
 	}
 
-	// Save best evolved prompt
+	// Save best evolved prompt with versioned name
 	result.Best = bestScore
 	result.Delta = bestScore - baselineScore
 	bestReport.Baseline = baselineScore
 
-	outPath := filepath.Join(outputDir, promptName)
-	os.MkdirAll(outPath, 0o755)
-	evolvedPath := filepath.Join(outPath, "evolved.md")
-	if err := os.WriteFile(evolvedPath, []byte(bestPrompt), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: cannot write evolved prompt: %v\n", err)
+	if result.Delta > 0 {
+		evolvedDir := filepath.Join("datasets", "prompts", promptName, "evolved")
+		os.MkdirAll(evolvedDir, 0o755)
+		versionedName := nextVersionedName(evolvedDir, bestScore)
+		evolvedPath := filepath.Join(evolvedDir, versionedName)
+		if err := os.WriteFile(evolvedPath, []byte(bestPrompt), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: cannot write evolved prompt: %v\n", err)
+		} else {
+			fmt.Printf("=== Best: %d/%d (%.1f%%, +%.1f%%) — saved to %s ===\n\n", bestReport.Passed, bestReport.Total, bestScore, result.Delta, evolvedPath)
+		}
 	} else {
-		fmt.Printf("=== Best: %d/%d (%.1f%%, +%.1f%%) — saved to %s ===\n\n", bestReport.Passed, bestReport.Total, bestScore, result.Delta, evolvedPath)
+		fmt.Printf("=== No improvement (%.1f%%) ===\n\n", bestScore)
 	}
 
 	return bestReport, result
+}
+
+// nextVersionedName generates a versioned filename like v20260413-1_91.2.md
+func nextVersionedName(dir string, score float64) string {
+	today := time.Now().Format("20060102")
+	prefix := fmt.Sprintf("v%s-", today)
+
+	// Find next sequence number for today
+	seq := 1
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, prefix) {
+			// Extract sequence: v20260413-2_91.2.md → "2"
+			rest := strings.TrimPrefix(name, prefix)
+			if idx := strings.Index(rest, "_"); idx > 0 {
+				if n, err := fmt.Sscanf(rest[:idx], "%d", new(int)); n == 1 && err == nil {
+					var s int
+					fmt.Sscanf(rest[:idx], "%d", &s)
+					if s >= seq {
+						seq = s + 1
+					}
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("v%s-%d_%.1f.md", today, seq, score)
 }
 
 func mutatePrompt(llm *llmClient, currentPrompt string, failures []caseResult, maxChars int) (string, error) {
