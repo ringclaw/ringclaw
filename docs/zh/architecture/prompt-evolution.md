@@ -228,29 +228,87 @@ RingClaw 在 `messaging/prompts.go` 中有 5 个集中管理的 prompt，每个�
 
 ```mermaid
 flowchart TD
-    G[Golden JSONL\n70 个测试用例] --> L[从 prompts.go\n加载 prompt]
-    L --> R[通过 ACP agent\n运行每个用例]
-    R --> J[LLM 裁判\n评分]
-    J --> Rep[评分报告\n基线指标]
-    Rep --> Edit[手动修改 prompt\n或 LLM 变异]
-    Edit --> R2[用相同数据集\n重新评估]
-    R2 --> J2[对比分数]
-    J2 --> D{改进了 +\n约束通过?}
-    D -->|是| PR[创建 PR\n人工审查]
-    D -->|否| Edit
+    G[Golden JSONL\n77 个测试用例] --> L[从 prompts.go\n加载 prompt]
+    L --> R[通过 LLM API\n运行每个用例]
+    R --> J{Prompt 类型?}
+    J -->|intent/name| X[精确匹配]
+    J -->|action| Y[LLM 裁判评分]
+    X --> Rep[评分报告]
+    Y --> Rep
+    Rep --> Ev{--evolve?}
+    Ev -->|否| Done[输出报告]
+    Ev -->|是| M[收集失败用例\n→ LLM 变异]
+    M --> Gate{约束检查?\n≤15K, ≤20% 增长}
+    Gate -->|不通过| M
+    Gate -->|通过| R2[重新评估]
+    R2 --> Cmp{分数 > 最优?}
+    Cmp -->|是| Keep[保留候选]
+    Cmp -->|否| M
+    Keep --> More{更多轮次?}
+    More -->|是| M
+    More -->|否| Save[保存 evolved.md]
 ```
 
 ### 当前 Golden 数据集
 
-RingClaw 有 70 个手动策划的测试用例，源自历史 bug 修复 PR：
+RingClaw 有 77 个手动策划的测试用例，源自历史 bug 修复 PR：
 
 | 数据集 | 用例数 | 主要来源 |
 |--------|--------|---------|
-| `datasets/prompts/intent/golden.jsonl` | 30 | PR #34（边界）、PR #62（时间词） |
+| `datasets/prompts/intent/golden.jsonl` | 34 | PR #34（边界）、PR #62（时间词）、PR #91（绝对日期） |
+| `datasets/prompts/name_extract/golden.jsonl` | 23 | PR #40（复合句）、PR #62（时间词污染）、PR #91（绝对日期） |
 | `datasets/prompts/action/golden.jsonl` | 20 | PR #40（代词）、PR #68（person ID 误用） |
-| `datasets/prompts/name_extract/golden.jsonl` | 20 | PR #40（复合句）、PR #62（时间词污染） |
 
 每个测试用例标注了 `source_pr`（可追溯性）和 `note`（解释为什么这个 case 难）。
+
+### 基线结果
+
+使用 `deepseek-chat`（通过 Cloudflare AI Gateway）评估：
+
+| Prompt | 分数 | 评分方式 | 主要失败 |
+|--------|------|---------|---------|
+| **IntentPrompt** | 30/34 (88.2%) | 精确匹配 | "总结代码/文档/PR" 被误判为 summarize |
+| **NameExtractPrompt** | 21/23 (91.3%) | 精确匹配 | 复合指令（"总结 maxwell 并创建任务"） |
+| **ActionPrompt** | 13/20 (65.0%) | LLM 裁判 | 代词处理、多动作、卡片生成 |
+
+### 自动变异结果
+
+使用 `--evolve`，IntentPrompt 在一轮变异后从 88.2% 提升至 91.2%。变异只添加了一句话：*"The summarize intent applies ONLY to summarizing chat history or messages"*——针对边界 case 的精准修复。
+
+### CI 集成
+
+评估流水线通过三种机制集成到 CI：
+
+1. **变更自动评估** — 当 `messaging/prompts.go`、`datasets/prompts/`、`scripts/eval_prompt.go` 变更时自动运行
+2. **Job Summary + PR 评论** — 评估结果发布到 GitHub Actions Summary 和 PR 评论
+3. **手动进化工作流** — `evolve.yml`（`workflow_dispatch`）对所有 prompt 运行 `--evolve`，提升 ≥ 3% 时自动创建 PR
+
+### 使用方法
+
+```bash
+# 评估所有 prompt
+go run scripts/eval_prompt.go --prompt all
+
+# 生成 markdown 报告
+go run scripts/eval_prompt.go --prompt intent --markdown report.md
+
+# 对比替代 prompt
+go run scripts/eval_prompt.go --prompt intent --compare path/to/new_prompt.md
+
+# 进化 prompt（5 轮变异）
+go run scripts/eval_prompt.go --prompt all --evolve 5
+
+# 设定最低提升阈值
+go run scripts/eval_prompt.go --prompt intent --evolve 10 --min-improvement 3
+```
+
+### 环境变量
+
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|-------|------|
+| `LLM_API_KEY` | 是 | — | 任何 OpenAI 兼容 provider 的 API key |
+| `LLM_MODEL` | 否 | `deepseek-chat` | 模型名称 |
+| `LLM_BASE_URL` | 否 | `https://api.deepseek.com` | API 端点（支持 Cloudflare AI Gateway） |
 
 ## 延伸阅读
 

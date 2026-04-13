@@ -229,29 +229,87 @@ RingClaw has 5 centralized prompts in `messaging/prompts.go`, each controlling a
 
 ```mermaid
 flowchart TD
-    G[Golden JSONL\n70 test cases] --> L[Load prompt\nfrom prompts.go]
-    L --> R[Run each case\nthrough ACP agent]
-    R --> J[LLM-as-Judge\nscoring]
-    J --> Rep[Score Report\nbaseline metrics]
-    Rep --> Edit[Manual prompt edit\nor LLM mutation]
-    Edit --> R2[Re-evaluate\nwith same dataset]
-    R2 --> J2[Compare scores]
-    J2 --> D{Improved +\nconstraints pass?}
-    D -->|Yes| PR[Create PR\nfor human review]
-    D -->|No| Edit
+    G[Golden JSONL\n77 test cases] --> L[Load prompt\nfrom prompts.go]
+    L --> R[Run each case\nvia LLM API]
+    R --> J{Prompt type?}
+    J -->|intent/name| X[Exact match]
+    J -->|action| Y[LLM-as-Judge]
+    X --> Rep[Score Report]
+    Y --> Rep
+    Rep --> Ev{--evolve?}
+    Ev -->|No| Done[Output report]
+    Ev -->|Yes| M[Collect failures\n→ LLM mutation]
+    M --> Gate{Constraints?\n≤15K, ≤20% growth}
+    Gate -->|Fail| M
+    Gate -->|Pass| R2[Re-evaluate]
+    R2 --> Cmp{Score > best?}
+    Cmp -->|Yes| Keep[Keep candidate]
+    Cmp -->|No| M
+    Keep --> More{More rounds?}
+    More -->|Yes| M
+    More -->|No| Save[Save evolved.md]
 ```
 
 ### Current Golden Datasets
 
-RingClaw has 70 hand-curated test cases derived from historical bug-fix PRs:
+RingClaw has 77 hand-curated test cases derived from historical bug-fix PRs:
 
 | Dataset | Cases | Key Sources |
 |---------|-------|------------|
-| `datasets/prompts/intent/golden.jsonl` | 30 | PR #34 (boundary), PR #62 (time words) |
+| `datasets/prompts/intent/golden.jsonl` | 34 | PR #34 (boundary), PR #62 (time words), PR #91 (absolute dates) |
+| `datasets/prompts/name_extract/golden.jsonl` | 23 | PR #40 (compound), PR #62 (time word pollution), PR #91 (absolute dates) |
 | `datasets/prompts/action/golden.jsonl` | 20 | PR #40 (pronouns), PR #68 (person ID misuse) |
-| `datasets/prompts/name_extract/golden.jsonl` | 20 | PR #40 (compound), PR #62 (time word pollution) |
 
 Each test case is tagged with `source_pr` for traceability and `note` explaining why the case is challenging.
+
+### Baseline Results
+
+Evaluated with `deepseek-chat` via Cloudflare AI Gateway:
+
+| Prompt | Score | Scoring Method | Key Failures |
+|--------|-------|---------------|-------------|
+| **IntentPrompt** | 30/34 (88.2%) | Exact match | "总结代码/文档/PR" misclassified as summarize |
+| **NameExtractPrompt** | 21/23 (91.3%) | Exact match | Compound instructions ("总结 maxwell 并创建任务") |
+| **ActionPrompt** | 13/20 (65.0%) | LLM-as-judge | Pronoun handling, multi-action, card generation |
+
+### Automated Mutation Results
+
+Using `--evolve`, the IntentPrompt improved from 88.2% → 91.2% in a single round. The mutation added one clarifying sentence: *"The summarize intent applies ONLY to summarizing chat history or messages"* — a targeted fix for the boundary cases.
+
+### CI Integration
+
+The eval pipeline is integrated into CI with three mechanisms:
+
+1. **Automatic eval on change** — CI runs eval when `messaging/prompts.go`, `datasets/prompts/`, or `scripts/eval_prompt.go` change
+2. **Job Summary + PR Comment** — eval results posted to GitHub Actions Summary and as a PR comment
+3. **Manual evolve workflow** — `evolve.yml` (`workflow_dispatch`) runs `--evolve` on all prompts and creates a PR if improvement ≥ 3%
+
+### Usage
+
+```bash
+# Evaluate all prompts
+go run scripts/eval_prompt.go --prompt all
+
+# Evaluate with markdown report
+go run scripts/eval_prompt.go --prompt intent --markdown report.md
+
+# Compare an alternative prompt
+go run scripts/eval_prompt.go --prompt intent --compare path/to/new_prompt.md
+
+# Evolve prompts (5 rounds of mutation)
+go run scripts/eval_prompt.go --prompt all --evolve 5
+
+# Evolve with minimum improvement threshold
+go run scripts/eval_prompt.go --prompt intent --evolve 10 --min-improvement 3
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LLM_API_KEY` | Yes | — | API key for any OpenAI-compatible provider |
+| `LLM_MODEL` | No | `deepseek-chat` | Model name |
+| `LLM_BASE_URL` | No | `https://api.deepseek.com` | API endpoint (supports Cloudflare AI Gateway) |
 
 ## Further Reading
 
