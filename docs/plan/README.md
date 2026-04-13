@@ -11,6 +11,7 @@ Requirement plans inspired by [acpx](https://github.com/openclaw/acpx) architect
 | **P2** | [003 — Structured Error Codes](003-error-codes.md) | Draft | Agent error classification for retry logic and user messages |
 | **P3** | [004 — Incremental Reply Updates](004-incremental-reply-updates.md) | Draft | Stream partial replies instead of "Thinking..." placeholder |
 | **P4** | [005 — Flow Architecture](005-flow-architecture.md) | Draft | Declarative multi-step message processing (future) |
+| **P3** | [006 — Prompt Self-Evolution](006-prompt-self-evolution.md) | Draft | Eval harness + LLM-based prompt optimization |
 
 ## References
 

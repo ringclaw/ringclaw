@@ -1,0 +1,34 @@
+{"task_input": "总结一下今天的聊天", "expected_behavior": "summarize", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "帮我总结下昨天讨论的内容", "expected_behavior": "summarize", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "summarize the chat from today", "expected_behavior": "summarize", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "总结 maxwell 并用 note 发给他", "expected_behavior": "summarize", "difficulty": "hard", "category": "compound", "source_pr": "#34"}
+{"task_input": "总结昨天跟 maxwell 的聊天并用 note 发给他", "expected_behavior": "summarize", "difficulty": "hard", "category": "compound", "source_pr": "#34"}
+{"task_input": "summarize john and then create a note", "expected_behavior": "summarize", "difficulty": "hard", "category": "compound", "source_pr": "#34"}
+{"task_input": "总结一下跟张三的聊天", "expected_behavior": "summarize", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "recap what we discussed this week", "expected_behavior": "summarize", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "总结 John 的代码", "expected_behavior": "chat", "difficulty": "hard", "category": "boundary", "source_pr": "#34", "note": "asks about code, not chat messages — should NOT be summarize"}
+{"task_input": "帮我总结这段代码的功能", "expected_behavior": "chat", "difficulty": "hard", "category": "boundary", "note": "summarize code functionality, not chat history"}
+{"task_input": "summarize this PR for me", "expected_behavior": "chat", "difficulty": "hard", "category": "boundary", "note": "summarize a PR, not chat messages"}
+{"task_input": "总结一下这个文档", "expected_behavior": "chat", "difficulty": "hard", "category": "boundary", "note": "summarize a document, not chat"}
+{"task_input": "create a task to review the PR", "expected_behavior": "task", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "创建一个任务检查代码", "expected_behavior": "task", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "add a task for fixing the bug", "expected_behavior": "task", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "加个任务提醒我明天开会", "expected_behavior": "task", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "create a note about today's meeting", "expected_behavior": "note", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "记一下今天的会议要点", "expected_behavior": "note", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "添加笔记记录设计方案", "expected_behavior": "note", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "schedule a meeting with the team tomorrow at 10am", "expected_behavior": "event", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "创建日程明天下午三点开会", "expected_behavior": "event", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "安排周五和产品团队的评审", "expected_behavior": "event", "difficulty": "medium", "category": "basic_zh"}
+{"task_input": "hello", "expected_behavior": "chat", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "你好，最近怎么样", "expected_behavior": "chat", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "explain how kubernetes pods work", "expected_behavior": "chat", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "write a python function to sort a list", "expected_behavior": "chat", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "帮我写一个 Go 的 HTTP 服务器", "expected_behavior": "chat", "difficulty": "easy", "category": "basic_zh"}
+{"task_input": "what is the difference between mutex and rwmutex", "expected_behavior": "chat", "difficulty": "easy", "category": "basic_en"}
+{"task_input": "总结我和 Maxwell 上周的聊天", "expected_behavior": "summarize", "difficulty": "medium", "category": "with_time", "source_pr": "#62"}
+{"task_input": "summarize my chat with Alice from last month", "expected_behavior": "summarize", "difficulty": "medium", "category": "with_time"}
+{"task_input": "总结 4 月 10 日的消息", "expected_behavior": "summarize", "difficulty": "medium", "category": "absolute_date", "source_pr": "#91", "note": "absolute date in Chinese format"}
+{"task_input": "summarize messages from April 10", "expected_behavior": "summarize", "difficulty": "medium", "category": "absolute_date", "source_pr": "#91"}
+{"task_input": "总结4月10号的消息", "expected_behavior": "summarize", "difficulty": "medium", "category": "absolute_date", "source_pr": "#91", "note": "号 variant, no spaces"}
+{"task_input": "总结这个群的4月10日的消息", "expected_behavior": "summarize", "difficulty": "hard", "category": "absolute_date_group", "source_pr": "#91", "note": "absolute date + group context"}

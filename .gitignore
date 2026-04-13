@@ -25,3 +25,5 @@ Thumbs.db
 
 .openapi
 coverage.out
+output
+eval_prompt
