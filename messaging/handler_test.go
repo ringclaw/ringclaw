@@ -779,6 +779,43 @@ func TestHandleMessage_BotMentionStripped(t *testing.T) {
 	}
 }
 
+func TestStripForwardedPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "forwarded message",
+			input:    "John Lin posted in ![:Team](156364201990)\n> 哦，那我针对 fyi 过来的消息不处理就是了",
+			expected: "哦，那我针对 fyi 过来的消息不处理就是了",
+		},
+		{
+			name:     "multi-line forwarded",
+			input:    "Alice posted in ![:Team](123)\n> line one\n> line two",
+			expected: "line one\nline two",
+		},
+		{
+			name:     "normal message",
+			input:    "hello world",
+			expected: "hello world",
+		},
+		{
+			name:     "empty after prefix",
+			input:    "Bob posted in ![:Team](456)\n> ",
+			expected: "Bob posted in ![:Team](456)\n> ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripForwardedPrefix(tt.input)
+			if got != tt.expected {
+				t.Errorf("stripForwardedPrefix(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestHandleMessage_HelpCommand(t *testing.T) {
 	srv, _ := newTestRC(t)
 	defer srv.Close()

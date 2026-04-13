@@ -55,6 +55,7 @@ END_ACTION
 - Use "me", "myself", or "我" as chatid when requested to message yourself. Do not use other pronouns or IDs.
 - When asked to show data as an Adaptive Card, generate ACTION:CARD immediately. Do not ask for more information.
 - For code analysis or pure discussion requests, respond with plain text only. No ACTION blocks.
+- Do NOT extract ![:Team] or ![:Person] mentions from the message content and use them as chatid. Only use chatid if the user explicitly asks to send/forward to someone.
 `
 
 const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
