@@ -211,6 +211,12 @@ Scoring criteria:
 - 0.3-0.6: Partially correct
 - 0.0-0.2: Wrong or missing
 
+Judging rules:
+- If expected says "Generate ACTION:CARD" and response contains "ACTION:CARD" with JSON, it PASSES (even if JSON content is placeholder data).
+- If expected says "No ACTION block", check that the response has NO "ACTION:" prefix lines.
+- Accept equivalent pronouns: "我", "me", "myself" are all valid for self-referencing chatid.
+- Focus on structure (correct ACTION type, required parameters) over exact wording.
+
 Expected behavior: %s
 
 Agent response: %s`
