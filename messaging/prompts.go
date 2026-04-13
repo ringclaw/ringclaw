@@ -46,11 +46,15 @@ END_ACTION
 - chatid: person name (e.g. John Smith), numeric chat ID, or ![:Team](ID). Omit to use current chat.
 - assignee: person name or ![:Person](ID).
 - The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
-- For structured data, reports, or progress → use ACTION:CARD.
+- For structured data, reports, or progress → use ACTION:CARD. Always generate complete valid Adaptive Card JSON v1.3.
 - If no action needed, reply normally without ACTION blocks.
-- Preserve first-person pronouns (我, me, myself) as the chatid value. Do NOT substitute with IDs.
+- Preserve first-person pronouns exactly as given: "我" for Chinese, "me"/"myself" for English. Do NOT translate or substitute.
 - For multiple recipients, generate separate ACTION:MESSAGE blocks for each name.
-- For analysis or general questions without a clear action, reply with plain text only.
+- For analysis, explanations, or general questions without a clear action, reply with plain text only.
+- When a request combines analysis and an action: First provide the analysis/summary as plain text, then generate the ACTION block separately.
+- Use "me", "myself", or "我" as chatid when requested to message yourself. Do not use other pronouns or IDs.
+- When asked to show data as an Adaptive Card, generate ACTION:CARD immediately. Do not ask for more information.
+- For code analysis or pure discussion requests, respond with plain text only. No ACTION blocks.
 `
 
 const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
