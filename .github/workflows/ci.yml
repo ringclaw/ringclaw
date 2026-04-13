@@ -28,20 +28,32 @@ jobs:
       - name: Test
         run: go test ./... -count=1 -race -v -coverprofile=coverage.out
 
+      - name: Check prompt/dataset changes
+        id: prompt-changes
+        run: |
+          BASE=${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
+          CHANGED=$(git diff --name-only "$BASE" HEAD -- 'messaging/prompts.go' 'datasets/prompts/' 'scripts/eval_prompt.go' || true)
+          if [ -n "$CHANGED" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Prompt/dataset files changed:"
+            echo "$CHANGED"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No prompt/dataset changes, skipping eval"
+          fi
+
       - name: Eval prompts
-        if: env.LLM_API_KEY != ''
+        if: steps.prompt-changes.outputs.changed == 'true' && env.LLM_API_KEY != ''
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: go run scripts/eval_prompt.go --prompt all --markdown eval-report.md
 
       - name: Eval summary
-        if: env.LLM_API_KEY != '' && hashFiles('eval-report.md') != ''
-        env:
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        if: steps.prompt-changes.outputs.changed == 'true' && hashFiles('eval-report.md') != ''
         run: cat eval-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment eval on PR
-        if: github.event_name == 'pull_request' && hashFiles('eval-report.md') != ''
+        if: github.event_name == 'pull_request' && steps.prompt-changes.outputs.changed == 'true' && hashFiles('eval-report.md') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
