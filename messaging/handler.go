@@ -283,6 +283,33 @@ func (h *Handler) parseCommand(text string) ([]string, string) {
 	return unique, rest
 }
 
+// stripForwardedPrefix removes the "XXX posted in ![:Team](ID)\n> " prefix
+// from forwarded messages, returning just the quoted content.
+func stripForwardedPrefix(text string) string {
+	idx := strings.Index(text, " posted in ![:Team](")
+	if idx < 0 {
+		return text
+	}
+	// Find the end of the prefix line
+	nl := strings.Index(text[idx:], "\n")
+	if nl < 0 {
+		return text
+	}
+	after := text[idx+nl+1:]
+	// Strip leading "> " from each line (blockquote)
+	var lines []string
+	for _, line := range strings.Split(after, "\n") {
+		line = strings.TrimPrefix(line, "> ")
+		lines = append(lines, line)
+	}
+	result := strings.TrimSpace(strings.Join(lines, "\n"))
+	if result == "" {
+		return text
+	}
+	slog.Debug("stripped forwarded prefix", "component", "handler")
+	return result
+}
+
 // HandleMessage processes a single incoming RingCentral post.
 func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
 	text := strings.TrimSpace(post.Text)
@@ -300,6 +327,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			text = strings.TrimSpace(strings.TrimLeft(text, ",:"))
 		}
 	}
+
+	// Strip forwarded message prefix: "XXX posted in ![:Team](ID)\n> content" → "content"
+	text = stripForwardedPrefix(text)
 
 	// Deduplicate by post ID to avoid processing the same message multiple times
 	if post.ID != "" {
