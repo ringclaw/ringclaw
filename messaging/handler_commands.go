@@ -107,7 +107,7 @@ func buildHelpText() string {
 /cron add|list|delete - Scheduled tasks
 /reload - Re-detect installed agents
 
-Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)`
+Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen) /ag(augment)`
 }
 
 func buildHelpCard() json.RawMessage {
@@ -170,7 +170,7 @@ func buildHelpCard() json.RawMessage {
 		},
 	}
 
-	aliases := "/cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)"
+	aliases := "/cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen) /ag(augment)"
 
 	body := []any{
 		map[string]any{"type": "TextBlock", "text": "RingClaw Commands", "weight": "bolder", "size": "medium"},

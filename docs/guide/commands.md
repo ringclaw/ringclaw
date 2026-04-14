@@ -44,6 +44,7 @@ Unknown `/commands` (e.g. `/status`, `/compact`) are forwarded to the default ag
 | `/if` | iflow |
 | `/kr` | kiro |
 | `/qw` | qwen |
+| `/ag` | augment |
 
 Switching default agent is persisted to config — survives restarts.
 

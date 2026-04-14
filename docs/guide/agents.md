@@ -30,6 +30,7 @@ CLI mode spawns a new process per message with **no multi-turn context** — eac
 | iFlow | `iflow --experimental-acp` | Built into iFlow CLI |
 | Kiro | `kiro-cli acp` | Built into Kiro CLI |
 | Qwen | `qwen --acp` | Built into Qwen CLI |
+| Augment | `auggie --acp` | Built into Auggie CLI |
 | OpenCode | `opencode acp` | Built into OpenCode |
 | Pi | `pi-acp` | `npm i -g pi-acp` |
 

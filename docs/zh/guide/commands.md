@@ -44,6 +44,7 @@ title: 聊天命令
 | `/if` | iFlow |
 | `/kr` | Kiro |
 | `/qw` | Qwen |
+| `/ag` | Augment |
 
 切换默认 Agent 会写入配置文件，重启后仍然生效。
 
