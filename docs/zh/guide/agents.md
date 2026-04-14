@@ -30,6 +30,7 @@ CLI 模式每条消息启动新进程，**没有多轮上下文**——每条消
 | iFlow | `iflow --experimental-acp` | iFlow CLI 内置 |
 | Kiro | `kiro-cli acp` | Kiro CLI 内置 |
 | Qwen | `qwen --acp` | Qwen CLI 内置 |
+| Augment | `auggie --acp` | Auggie CLI 内置 |
 | OpenCode | `opencode acp` | OpenCode 内置 |
 | Pi | `pi-acp` | `npm i -g pi-acp` |
 

@@ -130,6 +130,7 @@ func TestResolveAlias(t *testing.T) {
 		"if":  "iflow",
 		"kr":  "kiro",
 		"qw":  "qwen",
+		"ag":  "augment",
 	}
 	for alias, want := range tests {
 		got := h.resolveAlias(alias)

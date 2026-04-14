@@ -56,6 +56,7 @@ var agentCandidates = []agentCandidate{
 	{Name: "iflow", Binary: "iflow", Args: []string{"--experimental-acp"}, Type: "acp", Model: ""},
 	{Name: "kiro", Binary: "kiro-cli", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "qwen", Binary: "qwen", Args: []string{"--acp"}, Type: "acp", Model: ""},
+	{Name: "augment", Binary: "auggie", Args: []string{"--acp"}, Type: "acp", Model: ""},
 }
 
 // DefaultOrder returns the priority list for choosing the default agent.
@@ -65,7 +66,7 @@ func DefaultOrder() []string { return defaultOrder }
 // Lower index = higher priority.
 var defaultOrder = []string{
 	"claude", "codex", "cursor", "kimi", "gemini", "opencode", "openclaw",
-	"pi", "copilot", "droid", "iflow", "kiro", "qwen",
+	"pi", "copilot", "droid", "iflow", "kiro", "qwen", "augment",
 }
 
 // DetectAndConfigure auto-detects local agents and populates the config.

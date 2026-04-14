@@ -209,6 +209,7 @@ var agentAliases = map[string]string{
 	"if":  "iflow",
 	"kr":  "kiro",
 	"qw":  "qwen",
+	"ag":  "augment",
 }
 
 // resolveAlias returns the full agent name for an alias, or the original name if no alias matches.
