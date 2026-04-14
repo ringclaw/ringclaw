@@ -53,7 +53,8 @@ $Filename = "${Binary}_windows_${Arch}.exe"
 $Url = "https://github.com/$Repo/releases/download/$Version/$Filename"
 
 Write-Host "Downloading $Url..."
-$TmpFile = Join-Path $env:TEMP $Filename
+$TmpDir = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+$TmpFile = Join-Path $TmpDir $Filename
 
 Invoke-WebRequest -Uri $Url -OutFile $TmpFile -UseBasicParsing
 
