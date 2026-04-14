@@ -314,7 +314,16 @@ func (a *ACPAgent) Stop() {
 func (a *ACPAgent) SetCwd(cwd string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cwd == cwd {
+		return
+	}
 	a.cwd = cwd
+	// Clear all sessions so they get recreated with the new cwd.
+	// Existing ACP sessions retain the cwd from session/new and cannot be updated.
+	for k := range a.sessions {
+		delete(a.sessions, k)
+	}
+	slog.Info("cwd changed, cleared existing sessions", "component", "acp", "cwd", cwd)
 }
 
 // ResetSession clears the existing session and creates a new one.
