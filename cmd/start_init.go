@@ -42,7 +42,9 @@ func initClients(ctx context.Context, cfg *config.Config) (*clients, error) {
 		}
 		privateClient = ringcentral.NewClient(creds)
 		if err := privateClient.Authenticate(); err != nil {
-			slog.Error("private app authentication failed, continuing without it", "error", err)
+			slog.Error("private app authentication failed, continuing without it — summarize and cross-chat features will be unavailable. "+
+				"If you see OAU-251, ensure the Private App has 'JWT' grant type enabled in the RingCentral Developer Console "+
+				"(https://developers.ringcentral.com) and the JWT token belongs to a user in the same account as the app.", "error", err)
 			privateClient = nil
 		} else {
 			slog.Info("private app authentication successful")
