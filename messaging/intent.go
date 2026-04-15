@@ -31,7 +31,7 @@ var intentTriggers = []string{
 	"创建笔记", "添加笔记", "记一下", "记个笔记",
 	"创建日程", "添加日程", "创建事件", "安排",
 	// English
-	"summarize", "summary", "recap", "digest",
+	"summarize", "summarise", "summary", "recap", "digest",
 	"create task", "add task", "new task",
 	"create note", "add note", "take note",
 	"create event", "add event", "schedule",

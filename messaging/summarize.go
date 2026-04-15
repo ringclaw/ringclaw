@@ -53,7 +53,7 @@ func extractDateViaAgent(ctx context.Context, ag agent.Agent, text string) time.
 	return parseTimeRange(text)
 }
 
-var summarizeKeywords = []string{"总结", "summarize", "summary"}
+var summarizeKeywords = []string{"总结", "summarize", "summarise", "summary"}
 
 const defaultSummaryMessageLimit = 250
 
