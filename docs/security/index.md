@@ -21,6 +21,36 @@ The server also validates the `Host` header to prevent DNS rebinding attacks —
 Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
 :::
 
+## Mandatory Sender Allowlist
+
+When the `start` command boots, the WebSocket monitor and message handler
+both switch into **strict sender mode**: only the user IDs on the trusted
+allowlist may drive the AI agent. The allowlist is built from two sources:
+
+- The Private App owner's user ID (auto-injected when a Private App is
+  configured).
+- All entries in `ringcentral.source_user_ids` (resolved to numeric user IDs
+  on startup).
+
+If both sources are empty, the bot logs a startup error and **drops every
+incoming message** until the operator adds at least one trusted sender. This
+prevents the "any user in an allowed chat can run my AI agent" foot-gun
+called out as Finding #1 in the Remote Control security review.
+
+```yaml
+ringcentral:
+  source_user_ids:
+    - "+15551234567"       # phone number, resolved at boot
+    - alice@example.com    # email address, resolved via Private App directory
+    - "987654321"          # bare numeric extensionId / user ID
+```
+
+::: tip
+Email and phone-number entries require a Private App with the `ReadAccounts`
+permission so they can be resolved to numeric IDs. Without the Private App,
+list the numeric extensionIds directly.
+:::
+
 ## ACP Agent File Permissions
 
 By default, ACP agents are granted **read-only** file access. To allow file writes, set `allow_write: true` in the agent config:

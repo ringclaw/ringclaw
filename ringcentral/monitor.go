@@ -32,16 +32,17 @@ type MessageHandler func(ctx context.Context, replyClient *Client, readClient *C
 // The bot client is required and used for WS connection and replies.
 // The private client is optional and used for reading other chats.
 type Monitor struct {
-	client         *Client // bot client (required)
-	privateClient  *Client // private app client (optional)
-	botMentionOnly bool
-	allowedChatIDs map[string]bool
-	allowedUserIDs map[string]bool
-	handler        MessageHandler
-	failures       int
-	sentPosts      map[string]time.Time // post ID -> timestamp
-	lastEvict      time.Time
-	mu             sync.Mutex
+	client          *Client // bot client (required)
+	privateClient   *Client // private app client (optional)
+	botMentionOnly  bool
+	allowedChatIDs  map[string]bool
+	allowedUserIDs  map[string]bool
+	allowAllSenders bool // when true, empty allowedUserIDs means "allow all"; default false = mandatory allowlist
+	handler         MessageHandler
+	failures        int
+	sentPosts       map[string]time.Time // post ID -> timestamp
+	lastEvict       time.Time
+	mu              sync.Mutex
 }
 
 const (
@@ -88,7 +89,10 @@ func (m *Monitor) IsSentPost(id string) bool {
 // NewMonitor creates a new WebSocket monitor.
 // botClient is used for WS connection and replies.
 // chatIDs limits which chats are monitored; empty means no chats.
-// sourceUserIDs limits which users' messages are processed; empty means all users.
+// sourceUserIDs is the sender allowlist. By default the allowlist is advisory
+// (empty means allow all) for backward compatibility; production callers
+// should call EnforceSenderAllowlist after populating the list to switch the
+// monitor into strict mode where only trusted senders can drive the agent.
 // mentionOnly controls whether group chats require @mention.
 func NewMonitor(botClient *Client, handler MessageHandler, chatIDs []string, sourceUserIDs []string, mentionOnly bool) *Monitor {
 	allowed := make(map[string]bool, len(chatIDs))
@@ -104,12 +108,13 @@ func NewMonitor(botClient *Client, handler MessageHandler, chatIDs []string, sou
 		allowedUsers[id] = true
 	}
 	return &Monitor{
-		client:         botClient,
-		botMentionOnly: mentionOnly,
-		handler:        handler,
-		allowedChatIDs: allowed,
-		allowedUserIDs: allowedUsers,
-		sentPosts:      make(map[string]time.Time),
+		client:          botClient,
+		botMentionOnly:  mentionOnly,
+		handler:         handler,
+		allowedChatIDs:  allowed,
+		allowedUserIDs:  allowedUsers,
+		allowAllSenders: true, // legacy-compatible default; cmd/start.go flips this off
+		sentPosts:       make(map[string]time.Time),
 	}
 }
 
@@ -117,6 +122,43 @@ func NewMonitor(botClient *Client, handler MessageHandler, chatIDs []string, sou
 // other chats and cross-chat actions (e.g. summarize).
 func (m *Monitor) SetPrivateClient(c *Client) {
 	m.privateClient = c
+}
+
+// SetAllowAllSenders toggles whether an empty sender allowlist permits every
+// user (true, legacy default) or denies every user (false, strict mode).
+// Production callers should set this to false after populating the trusted
+// sender list via AddTrustedSender.
+func (m *Monitor) SetAllowAllSenders(allow bool) {
+	m.allowAllSenders = allow
+}
+
+// EnforceSenderAllowlist switches the monitor into strict mode: an empty
+// allowlist denies all senders, and only IDs added via the constructor or
+// AddTrustedSender may drive the agent.
+func (m *Monitor) EnforceSenderAllowlist() {
+	m.allowAllSenders = false
+}
+
+// AddTrustedSender adds a single user ID to the sender allowlist.
+// Used by start.go to inject the Private App owner so the local machine
+// owner's DMs are always accepted.
+func (m *Monitor) AddTrustedSender(userID string) {
+	if userID == "" {
+		return
+	}
+	m.mu.Lock()
+	if m.allowedUserIDs == nil {
+		m.allowedUserIDs = make(map[string]bool)
+	}
+	m.allowedUserIDs[userID] = true
+	m.mu.Unlock()
+}
+
+// HasTrustedSenders reports whether any sender is on the allowlist.
+func (m *Monitor) HasTrustedSenders() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.allowedUserIDs) > 0
 }
 
 // readClient returns the private client if available, otherwise the bot client.
@@ -346,7 +388,15 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 		return
 	}
 
-	// Filter by source user IDs (empty = allow all users)
+	// Filter by source user IDs. The allowlist is mandatory by default: empty
+	// list means deny all (effectively disabling remote control). Tests and
+	// explicit opt-in deployments can call SetAllowAllSenders(true) to restore
+	// the legacy "empty = allow all" behavior.
+	if !m.allowAllSenders && len(m.allowedUserIDs) == 0 {
+		slog.Warn("dropping message: sender allowlist is empty (set ringcentral.source_user_ids or configure a Private App owner)",
+			"component", "monitor", "userID", event.Body.CreatorID, "chatID", event.Body.GroupID)
+		return
+	}
 	if len(m.allowedUserIDs) > 0 && !m.allowedUserIDs[event.Body.CreatorID] {
 		slog.Debug("ignoring message from non-allowed user", "component", "monitor", "userID", event.Body.CreatorID)
 		return

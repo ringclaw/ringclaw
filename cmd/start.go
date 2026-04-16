@@ -116,6 +116,21 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if c.private != nil {
 		monitor.SetPrivateClient(c.private)
 		c.private.SetMonitor(monitor)
+		if ownerID := c.private.OwnerID(); ownerID != "" {
+			monitor.AddTrustedSender(ownerID)
+			handler.AddTrustedSender(ownerID)
+		}
+	}
+	for _, id := range resolvedUserIDs {
+		handler.AddTrustedSender(id)
+	}
+	// Mandatory sender allowlist: monitor and handler both deny anyone not on
+	// the trusted set. Findings #1 and #7 from the security review.
+	monitor.EnforceSenderAllowlist()
+	handler.EnforceSenderAllowlist()
+	if !monitor.HasTrustedSenders() {
+		slog.Error("sender allowlist is empty: no source_user_ids configured and no Private App owner detected; the bot will drop ALL incoming messages until you add ringcentral.source_user_ids or configure a Private App",
+			"component", "start")
 	}
 	c.bot.SetMonitor(monitor)
 	if err := monitor.Run(ctx); err != nil && ctx.Err() == nil {

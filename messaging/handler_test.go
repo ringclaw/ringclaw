@@ -33,7 +33,7 @@ func (a *testAgent) Info() agent.AgentInfo {
 }
 
 func newTestHandler() *Handler {
-	return &Handler{agents: make(map[string]agent.Agent)}
+	return &Handler{agents: make(map[string]agent.Agent), allowAllSenders: true}
 }
 
 func TestParseCommand_NoPrefix(t *testing.T) {
