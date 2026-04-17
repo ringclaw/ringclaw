@@ -21,6 +21,21 @@ The server also validates the `Host` header to prevent DNS rebinding attacks —
 Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
 :::
 
+## Phase 2 Hardening: Out-of-Band Approval
+
+Phase 2 hardens the remaining high-risk paths that Phase 1 left to a
+warn-log: cross-chat MESSAGE/CARD dispatches and ACP full-access. It
+introduces no new `config.json` fields — the on-disk PIN file
+(`~/.ringclaw/oob_pin`) and the runtime `/full-access` slash command
+are the only operator-visible surfaces. See
+[Phase 2: Out-of-Band PIN Approval](#phase-2-out-of-band-pin-approval)
+below for the round-trip details and the new `/full-access` command.
+
+| Surface | Where | Phase 2 behavior |
+|---|---|---|
+| `~/.ringclaw/oob_pin` | local filesystem (mode `0600`) | Bcrypt hash of a 6-digit PIN. Auto-generated on first start; plaintext shown once on stderr. Delete + restart to rotate. |
+| `/full-access` slash command | bot DM with the owner | `status` / `grant [duration]` / `revoke`. Each `grant` requires a fresh PIN approval; default 5 m, max 4 h. Replaces the static `full_access: true` config for ad-hoc unlocks. |
+
 ## Phase 1 Hardening: Configuration Changes
 
 Phase 1 of the Remote Control hardening review introduces **two new
@@ -101,9 +116,19 @@ targets a different chat than the one the message arrived in. To prevent
 "summarize chat A in chat B" style data exfiltration, this is now allowed
 only when the originating sender is on the trusted allowlist (the machine
 owner). For any other sender, `chatid=` is ignored with a warning log and
-the action runs in the origin chat. Owner cross-chat dispatches are still
-honored, but each one emits a `WARN action: owner cross-chat dispatch`
-log line for audit.
+the action runs in the origin chat.
+
+For owner-initiated cross-chat dispatches, behavior depends on whether
+the Phase 2 OOB approval flow is configured (see below):
+
+- **OOB configured** (`~/.ringclaw/oob_pin` exists, owner DM resolved):
+  the dispatch is **gated** — RingClaw posts an Adaptive Card challenge
+  to the owner's bot DM and refuses to send the cross-chat MESSAGE/CARD
+  until the owner replies with the 6-digit PIN. Approvals are cached
+  for 5 minutes per `(requester, intent)` pair so repeat actions in a
+  burst do not prompt repeatedly.
+- **OOB not configured** (Phase 1 fallback): the dispatch is honored
+  but emits a `WARN action: owner cross-chat dispatch` audit log line.
 
 ## ACP Agent File Permissions
 
@@ -150,10 +175,112 @@ Resolution order:
 
 When the request is downgraded, the session keeps the default guarded
 mode. When honored, every freshly created ACP session emits an additional
-`WARN ACP session granted full-access` log line for audit.
+`WARN ACP session granted full-access` log line for audit (the `source`
+field distinguishes the static `config:full_access` path from the
+dynamic `oob:/full-access` Phase 2 grant described below).
 
-Phase 2 will replace this static acknowledgement with a PIN-gated
-`/full-access` slash command that issues a TTL-bounded session token.
+### Phase 2 — `/full-access` PIN-gated TTL grant
+
+Phase 2 layers a dynamic, time-boxed unlock on top of the static
+`full_access` toggle. The static config is still honored when set; the
+new flow is **additive** and lets operators leave `full_access: false`
+in `config.json` and unlock full-access on demand from the bot DM:
+
+```text
+/full-access status         # show current grant state
+/full-access grant 30m      # request a 30-minute unlock
+/full-access revoke         # immediately lock again
+```
+
+Constraints:
+
+- Only the bot's DM with the trusted owner accepts `/full-access`.
+  Group-chat invocations are refused with an explanatory message so
+  the PIN approval round-trip stays on the secured channel.
+- `grant` always issues an OOB challenge (PIN required); the cache
+  fast-path is **skipped** so every unlock is explicit.
+- Default duration is 5 minutes; the maximum is capped at 4 hours.
+  Larger durations are silently clamped.
+- Once granted, every newly-created ACP session is flipped into
+  `session/set_mode "full-access"` until the grant expires or
+  `/full-access revoke` is called.
+
+## Phase 2: Out-of-Band PIN Approval
+
+Phase 2 adds a second factor for high-risk actions that even a trusted
+owner should not be able to trigger purely from a chat message: cross-
+chat MESSAGE/CARD dispatches and ACP full-access unlocks. The trust
+assumption is that an attacker with a foothold inside RingCentral
+(account compromise, prompt injection in a bot DM, malicious teammate
+impersonating the owner) does **not** simultaneously have shell access
+to the host running RingClaw — so a 6-digit PIN that is generated
+locally and never leaves the host's disk acts as the second factor.
+
+### PIN file (`~/.ringclaw/oob_pin`)
+
+On first start, RingClaw generates a fresh 6-digit decimal PIN, hashes
+it with bcrypt, and writes the hash to `~/.ringclaw/oob_pin` (mode
+`0600`, JSON document with version + bcrypt hash + creation time).
+**The plaintext PIN is printed to the local terminal exactly once on
+stderr.** Record it now — it is never logged again. To rotate, delete
+the file and restart the bot.
+
+```text
+================ RingClaw OOB approval PIN ================
+  PIN: 482931
+  Hash file: /home/alice/.ringclaw/oob_pin (mode 0600, bcrypt)
+  This PIN is shown ONCE. Record it now.
+  ...
+================ RingClaw OOB approval PIN ================
+```
+
+If `~/.ringclaw/oob_pin` already exists at startup, the bot loads the
+existing hash silently — no PIN is reprinted.
+
+PIN verification is rate-limited to 5 attempts per minute (sliding
+window) to defeat brute force attempts even by a caller with a
+foothold inside the bot.
+
+### Approval round-trip
+
+When a high-risk action is requested, the bot:
+
+1. Issues a single-use challenge with an 8-character hex ID, valid for
+   5 minutes by default.
+2. Posts an Adaptive Card to the owner's bot DM describing the action
+   (intent, requester, origin chat, expiry). If the card POST fails,
+   it falls back to a plain text message containing the same info.
+3. Blocks the requested action until the owner replies in the bot DM
+   with one of the recognized syntaxes:
+
+   ```text
+   /approve <id> <pin>     # explicit
+   <id> <pin>              # explicit, terse
+   <pin>                   # bare PIN, only when exactly 1 challenge is pending
+   /deny <id>              # explicit denial
+   ```
+
+4. Caches successful approvals for 5 minutes per `(requester, intent)`
+   pair so a burst of identical actions does not re-prompt.
+
+`/deny` is only honored from the original requester to prevent a
+teammate sharing the bot DM from cancelling another user's challenge.
+PIN replies are intercepted **before** they reach the AI agent — the
+PIN itself is never forwarded to any model or external process.
+
+### Where OOB applies
+
+| Surface | Phase 1 behavior | Phase 2 behavior (when OOB configured) |
+|---|---|---|
+| Owner cross-chat MESSAGE / CARD | Honored, with audit log | **PIN required** before each new `(requester, intent)` |
+| Non-owner cross-chat | Refused unconditionally | Refused unconditionally (unchanged) |
+| ACP full-access unlock | Static `full_access: true` + ack at startup | Static path still works; new `/full-access grant` issues a TTL token via PIN |
+
+If `~/.ringclaw/oob_pin` cannot be created, or the bot DM with the
+owner cannot be resolved, the OOB layer logs a warning and falls back
+to Phase 1 behavior. This keeps the bot operational on hosts where the
+home directory is not writable, but operators should treat it as a
+configuration error.
 
 ## Workspace Path Restrictions
 
@@ -198,6 +325,7 @@ directories `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
 | `/cwd` | Allowed | Allowed | **Blocked** (owner only) |
 | Agent switch (`/cc`) | Allowed | Allowed | **Blocked** (owner only) |
 | `/info`, `/help` | Allowed | Allowed | Allowed |
+| `/full-access` | Allowed (PIN required for `grant`) | **Blocked** (DM-only) | **Blocked** (DM-only) |
 | `/task`, `/note`, `/event` | Private App (or Bot) | Private App (or Bot) | Private App (or Bot) |
 | ACTION blocks | Private App (or Bot) | Private App (or Bot) | Private App (or Bot) |
 
