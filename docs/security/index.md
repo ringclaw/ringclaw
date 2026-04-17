@@ -23,18 +23,57 @@ Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated
 
 ## Phase 2 Hardening: Out-of-Band Approval
 
-Phase 2 hardens the remaining high-risk paths that Phase 1 left to a
-warn-log: cross-chat MESSAGE/CARD dispatches and ACP full-access. It
-introduces no new `config.json` fields — the on-disk PIN file
-(`~/.ringclaw/oob_pin`) and the runtime `/full-access` slash command
-are the only operator-visible surfaces. See
-[Phase 2: Out-of-Band PIN Approval](#phase-2-out-of-band-pin-approval)
-below for the round-trip details and the new `/full-access` command.
+Phase 2 hardens the two remaining high-risk paths that Phase 1 left
+to a warn-log: **owner-initiated cross-chat MESSAGE/CARD dispatches**
+and **ACP full-access unlocks**. The model is that an attacker with
+a foothold inside RingCentral (account compromise, prompt injection
+in a bot DM, malicious teammate impersonating the owner) does **not**
+simultaneously have shell access to the host running RingClaw — so a
+6-digit PIN that is generated locally and never leaves the host's
+disk acts as a second factor.
 
-| Surface | Where | Phase 2 behavior |
+### Phase 2 surfaces — added / changed
+
+Phase 2 introduces **no new `config.json` fields**. The new surfaces
+live on the local filesystem and at runtime in the bot DM. Operators
+upgrading from Phase 1 should review the table below.
+
+| Surface | Type | Where | Old behavior (Phase 1) | New behavior (Phase 2) | Operator override |
+|---|---|---|---|---|---|
+| `~/.ringclaw/oob_pin` | bcrypt-hashed 6-digit PIN file | local filesystem (mode `0600`) | _did not exist_ | **new** — auto-generated on first start; plaintext printed once on `stderr`; never re-logged. Required for every cross-chat ACTION and every `/full-access grant`. | Delete the file and restart to rotate. Operators who cannot run the host write `~/` (e.g. read-only home) get a `WARN` and silently fall back to Phase 1 warn-log behavior. |
+| Owner cross-chat `MESSAGE` / `CARD` ACTION | runtime behavior | `messaging/actions.go` | Honored unconditionally; emitted only `WARN action: owner cross-chat dispatch` for audit | **PIN required**: Adaptive Card challenge posted to the owner's bot DM; action blocks until owner replies with the PIN (or times out at 5 min, default). Approvals are cached for 5 min per `(requester, intent)` to avoid prompt fatigue. Falls back to the Phase 1 warn-log when OOB cannot be initialized. | None — gating is unconditional when OOB is configured. The 5-min challenge TTL and 5-min approval cache are constants in `messaging/oob/challenge.go` (`DefaultChallengeTTL`, `DefaultApprovalCacheTTL`). |
+| `/full-access` slash command | runtime command | bot DM with the owner | _did not exist_ | **new** — `status` / `grant [duration]` / `revoke`. Each `grant` issues a fresh PIN challenge (cache fast-path bypassed), and on approval flips every newly-created ACP session into `set_mode "full-access"` until the grant expires. | Default grant **5 minutes**, hard cap **4 hours** (oversize input is silently clamped). Restricted to the owner DM — group chat invocations are refused. |
+| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` honored at startup when `full_access_ack` (config) or `RINGCLAW_FULL_ACCESS_ACK=1` (env) acknowledges it; otherwise downgraded with a `WARN` | **Unchanged** — the static path still works for "always on" deployments. **In addition**, the dynamic `/full-access` grant overlays it without requiring the static toggle. The session log line now carries a `source` field (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`) for audit. | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
+
+### Before / after impact for operators
+
+::: warning
+**Cross-chat behavior change.** Phase 1 always honored owner cross-chat ACTIONs and only warned. Phase 2 **blocks** them (when OOB is configured) until the owner replies with the PIN in the bot DM. Operators who automate cross-chat workflows from the owner account must keep the bot DM available to acknowledge each new `(requester, intent)` pair. Repeat actions within 5 minutes do not re-prompt thanks to the approval cache.
+:::
+
+| Scenario | Phase 1 behavior | Phase 2 behavior |
 |---|---|---|
-| `~/.ringclaw/oob_pin` | local filesystem (mode `0600`) | Bcrypt hash of a 6-digit PIN. Auto-generated on first start; plaintext shown once on stderr. Delete + restart to rotate. |
-| `/full-access` slash command | bot DM with the owner | `status` / `grant [duration]` / `revoke`. Each `grant` requires a fresh PIN approval; default 5 m, max 4 h. Replaces the static `full_access: true` config for ad-hoc unlocks. |
+| Fresh install (no `~/.ringclaw/oob_pin`) | n/a | Bot generates a 6-digit PIN, hashes it with bcrypt to `~/.ringclaw/oob_pin` (mode `0600`), prints the plaintext to `stderr` **once**. Operator must record it now. |
+| Upgrading an existing install | PIN file did not exist | Same as fresh install on the next restart. Watch `stderr` for the one-time print. |
+| Owner asks AI for a cross-chat MESSAGE / CARD | Action runs immediately, audit `WARN` only | Adaptive Card prompt appears in the bot DM. Owner replies `<id> <pin>` (or just `<pin>` when only one challenge is pending). Action proceeds on approval; second identical action within 5 min is auto-approved from the cache. |
+| Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | Refused (unchanged). |
+| Operator wants ACP full-access for one task | Must ship `full_access: true` + `full_access_ack: true` in `config.json` and restart, then remember to revert | Leave `full_access: false`. Type `/full-access grant 30m` in the bot DM, reply with the PIN, work for 30 min. Use `/full-access revoke` to lock immediately. New ACP sessions started during the window are full-access; sessions started after expiry are guarded again automatically. |
+| OOB cannot be initialized (read-only `~/`, missing owner DM, etc.) | n/a | Bot logs a `WARN`, leaves OOB disabled, and **falls back to the Phase 1 warn-log** for cross-chat ACTIONs. `/full-access` returns "OOB approval is not configured". |
+| Suspected compromise / lost PIN | n/a | `rm ~/.ringclaw/oob_pin` and restart the bot. A fresh PIN is generated and printed once. |
+
+### Phase 2 audit-log additions
+
+| Event | Log line | Purpose |
+|---|---|---|
+| Fresh PIN generated | `INFO oob: generated new approval PIN` (with `path`) | Operator can correlate the stderr print with the file write. |
+| Challenge issued | `INFO oob: challenge issued` (with `challengeID`, `requesterID`, `intent`, `ttl`) | Track every prompt, including ones that timed out unanswered. |
+| Approval succeeded | `INFO oob: challenge approved` | Audit who approved what and when. |
+| PIN incorrect | `WARN oob: PIN verification failed` | Brute-force signal. |
+| Rate limit hit | `WARN oob: PIN verify rate limit exceeded` | 5 attempts / minute sliding window has tripped. |
+| `/deny` from non-requester | `WARN oob: deny refused for non-requester` | Defense-in-depth — only the original requester can `/deny`. |
+| Full-access granted | `WARN oob: ACP full-access granted` (with `ttl`, `expiresAt`) | Visible separately from the per-session `WARN ACP session granted full-access` line. |
+| Full-access revoked | `WARN oob: ACP full-access revoked` | Triggered by `/full-access revoke` or by re-grant. |
+| Cross-chat fallback | `WARN action: owner cross-chat dispatch` | Phase 1 path; only emitted when OOB is **not** configured. |
 
 ## Phase 1 Hardening: Configuration Changes
 
