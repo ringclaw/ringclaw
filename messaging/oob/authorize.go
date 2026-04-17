@@ -2,124 +2,127 @@ package oob
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 )
 
-// Client is the narrow interface that the OOB manager needs from the
-// RingCentral client. Defined locally so messaging/oob does not import
-// the full ringcentral package (avoids a cycle when ringcentral grows
-// helpers that want to surface OOB state).
+// Client is the narrow interface the OOB manager needs from the
+// RingCentral client: sending a plain text message to the owner's
+// bot DM. Defined locally so messaging/oob does not import
+// ringcentral (which would create a cycle when ringcentral grows
+// helpers that surface OOB state).
 type Client interface {
-	CreateAdaptiveCard(ctx context.Context, chatID string, card json.RawMessage) (Card, error)
 	SendText(ctx context.Context, chatID, text string) error
 }
 
-// Card is the minimum response we need back from CreateAdaptiveCard
-// (mostly the ID so we can correlate with future updates if needed).
-type Card interface {
-	GetID() string
-}
-
-// Authorizer is the top-level entry point used by callers (handler,
-// actions). It composes Issue/Wait with the Adaptive Card UX so each
-// caller is a single function call. A nil *Manager value is acceptable
-// for Authorize-via-helper (see AuthorizeOptional below).
-type Authorizer interface {
-	Authorize(ctx context.Context, opts AuthorizeOptions) (bool, error)
-}
-
-// AuthorizeOptions parameterizes a single approval round-trip.
-type AuthorizeOptions struct {
-	// RequesterID is the RingCentral user ID that triggered the action.
-	// Used as the cache key and as the "Requester" field on the card.
-	RequesterID string
-	// Intent is a human-readable description of what is being requested
-	// (e.g. "MESSAGE cross-chat to chat:12345"). Should be stable for
-	// the same logical action so the approval cache can hit.
-	Intent string
-	// OriginChatID is the chat that triggered the action (for audit).
-	OriginChatID string
-	// OwnerDMChat is the chat ID of the bot DM with the trusted owner.
-	// The approval card is posted here. Required.
-	OwnerDMChat string
-	// Client posts the cards / text. Required.
-	Client Client
-	// TTL overrides DefaultChallengeTTL when non-zero.
-	TTL time.Duration
-	// SkipCache forces a fresh challenge even if the (requester, intent)
-	// pair is currently cached as approved. Use sparingly (e.g. for
-	// /full-access where each unlock should be explicit).
-	SkipCache bool
-}
-
-// Authorize issues a challenge, posts the Adaptive Card to OwnerDMChat,
-// and blocks until it resolves. Returns (true, nil) on approval and
-// (false, err) for any failure path.
+// PostChallengePrompt posts a plain-text prompt to the owner DM
+// describing the pending challenge. Phase 2b intentionally avoids
+// Adaptive Cards here: RingCentral's WebSocket subscription does not
+// deliver Action.Submit events, so an interactive card would be a
+// one-way display only. The text contains the challenge ID and the
+// two recognised reply shapes.
 //
-// On success the (requester, intent) pair is cached for
-// DefaultApprovalCacheTTL so repeated identical actions in a short
-// window do not re-prompt.
-func (m *Manager) Authorize(ctx context.Context, opts AuthorizeOptions) (bool, error) {
-	if opts.Client == nil {
-		return false, fmt.Errorf("oob: Authorize requires Client")
+// requestedTTL is a human-readable label (e.g. "24h") shown so the
+// operator knows what they are approving; it is not interpreted here.
+func PostChallengePrompt(ctx context.Context, client Client, c *Challenge, requestedTTL string) error {
+	if client == nil {
+		return fmt.Errorf("oob: PostChallengePrompt requires Client")
 	}
-	if strings.TrimSpace(opts.OwnerDMChat) == "" {
-		return false, fmt.Errorf("oob: Authorize requires OwnerDMChat")
+	if c == nil {
+		return fmt.Errorf("oob: PostChallengePrompt requires Challenge")
 	}
-	if !opts.SkipCache && m.CachedApproval(opts.RequesterID, opts.Intent) {
-		slog.Info("oob: cached approval hit",
-			"component", "oob",
-			"requesterID", opts.RequesterID,
-			"intent", opts.Intent,
-		)
-		return true, nil
+	ttlLabel := strings.TrimSpace(requestedTTL)
+	if ttlLabel == "" {
+		ttlLabel = "n/a"
 	}
-	c, err := m.Issue(opts.RequesterID, opts.Intent, opts.OriginChatID, opts.OwnerDMChat, IssueOptions{TTL: opts.TTL})
-	if err != nil {
-		return false, err
+	expiresIn := time.Until(c.ExpiresAt).Round(time.Second)
+	if expiresIn < 0 {
+		expiresIn = 0
 	}
-	cardJSON := BuildChallengeCard(c)
-	if _, postErr := opts.Client.CreateAdaptiveCard(ctx, opts.OwnerDMChat, cardJSON); postErr != nil {
-		// Fall back to a plain text message so the operator is not left
-		// in the dark when the Adaptive Card POST fails (e.g. RC rate
-		// limit). The text contains the same information.
-		slog.Warn("oob: failed to post challenge card; falling back to text",
-			"component", "oob",
-			"challengeID", c.ID,
-			"error", postErr,
-		)
-		fallback := fmt.Sprintf("RingClaw approval required for %q.\nReply `%s <PIN>` to approve, `/deny %s` to refuse. Expires %s.",
-			truncate(c.Intent, 200), c.ID, c.ID, c.ExpiresAt.Format(time.RFC3339))
-		if textErr := opts.Client.SendText(ctx, opts.OwnerDMChat, fallback); textErr != nil {
-			m.removeChallenge(c.ID)
-			return false, fmt.Errorf("oob: deliver challenge: %w", textErr)
+	msg := fmt.Sprintf(
+		"Pending approval: reply `/approval %s` to confirm or `/approval deny %s` to reject. Expires in %s. Requested TTL: %s.",
+		c.ID, c.ID, expiresIn, ttlLabel,
+	)
+	if err := client.SendText(ctx, c.OwnerDMChat, msg); err != nil {
+		return fmt.Errorf("oob: deliver challenge prompt: %w", err)
+	}
+	return nil
+}
+
+// ApprovalReplyKind enumerates the recognised DM reply patterns.
+type ApprovalReplyKind int
+
+const (
+	// ReplyNone means the text did not match any recognised approval
+	// syntax. The caller should fall through to normal message
+	// dispatch.
+	ReplyNone ApprovalReplyKind = iota
+	// ReplyApprove means `/approval <id>`.
+	ReplyApprove
+	// ReplyDeny means `/approval deny <id>`.
+	ReplyDeny
+)
+
+// ApprovalReply is the parsed shape of a `/approval ...` reply. Kind
+// == ReplyNone when the text did not match.
+type ApprovalReply struct {
+	Kind        ApprovalReplyKind
+	ChallengeID string
+}
+
+// ParseApprovalReply interprets a DM text body as an approval reply.
+// Returns ReplyNone when the text does not look like one.
+//
+// Recognised syntaxes (case-insensitive command token; challenge ID
+// must be 8 hex characters):
+//
+//	/approval <id>          -> ReplyApprove
+//	/approval deny <id>     -> ReplyDeny
+//
+// Anything else (including the former PIN / bare-PIN shapes) returns
+// ReplyNone so the message falls through to the agent.
+func ParseApprovalReply(text string) ApprovalReply {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ApprovalReply{}
+	}
+	head, rest := splitFirstField(trimmed)
+	if !strings.EqualFold(head, "/approval") {
+		return ApprovalReply{}
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return ApprovalReply{}
+	}
+	sub, remainder := splitFirstField(rest)
+	if strings.EqualFold(sub, "deny") {
+		remainder = strings.TrimSpace(remainder)
+		if !isChallengeID(remainder) {
+			return ApprovalReply{}
 		}
+		return ApprovalReply{Kind: ReplyDeny, ChallengeID: strings.ToLower(remainder)}
 	}
-	approved, waitErr := c.Wait(ctx, m)
-	switch {
-	case waitErr == ErrChallengeExpired:
-		_, _ = opts.Client.CreateAdaptiveCard(ctx, opts.OwnerDMChat, BuildResolutionCard(c, CardKindExpired, "Challenge expired without a reply."))
-	case approved:
-		_, _ = opts.Client.CreateAdaptiveCard(ctx, opts.OwnerDMChat, BuildResolutionCard(c, CardKindApproved, "Action will proceed."))
-	case waitErr == nil:
-		_, _ = opts.Client.CreateAdaptiveCard(ctx, opts.OwnerDMChat, BuildResolutionCard(c, CardKindDenied, "Operator denied the request."))
+	// Otherwise `sub` is the challenge ID. Anything trailing is
+	// rejected to keep the parser strict.
+	if remainder != "" {
+		return ApprovalReply{}
 	}
-	return approved, waitErr
+	if !isChallengeID(sub) {
+		return ApprovalReply{}
+	}
+	return ApprovalReply{Kind: ReplyApprove, ChallengeID: strings.ToLower(sub)}
 }
 
 // HandleApprovalReply tries to interpret a DM message as an approval
-// reply and, if recognized, applies the result to the matching pending
-// challenge. Returns true when the message was consumed (callers must
-// then short-circuit normal agent dispatch). Replies that do not match
-// the documented syntax are ignored — the message falls through.
+// reply and, if recognised, resolves the matching pending challenge.
+// Returns true when the message was consumed (callers must then
+// short-circuit normal agent dispatch so the slash command does not
+// reach the AI).
 //
-// senderID is used both for the bare-PIN disambiguation (only acts when
-// the sender has exactly one outstanding challenge) and to scope `/deny`
-// so a teammate cannot cancel another user's challenge.
+// senderID scopes `/approval deny` so a teammate sharing the bot DM
+// cannot cancel another user's pending challenge.
 func (m *Manager) HandleApprovalReply(ctx context.Context, client Client, dmChatID, senderID, text string) bool {
 	reply := ParseApprovalReply(text)
 	if reply.Kind == ReplyNone {
@@ -135,38 +138,32 @@ func (m *Manager) HandleApprovalReply(ctx context.Context, client Client, dmChat
 }
 
 func (m *Manager) handleApproveReply(ctx context.Context, client Client, dmChatID, senderID string, reply ApprovalReply) bool {
-	challengeID := reply.ChallengeID
-	if challengeID == "" {
-		pending := m.PendingFor(senderID)
-		if len(pending) != 1 {
-			// Bare PIN with zero or multiple pending challenges: do not
-			// guess; let the message fall through and the operator can
-			// re-issue with an explicit ID.
-			if len(pending) > 1 {
-				_ = client.SendText(ctx, dmChatID, "Multiple pending challenges. Reply with `<id> <PIN>` instead.")
-				return true
-			}
-			return false
-		}
-		challengeID = pending[0].ID
+	c, ok := m.lookupChallenge(reply.ChallengeID)
+	if !ok {
+		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", reply.ChallengeID))
+		return true
 	}
-	approved, err := m.Approve(challengeID, reply.PIN)
-	if err != nil {
+	if c.RequesterID != senderID {
+		slog.Warn("oob: approval refused for non-requester",
+			"component", "oob",
+			"challengeID", reply.ChallengeID,
+			"senderID", senderID,
+			"requesterID", c.RequesterID,
+		)
+		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` was issued for a different user.", reply.ChallengeID))
+		return true
+	}
+	if _, err := m.Approve(reply.ChallengeID); err != nil {
 		switch err {
 		case ErrChallengeNotFound:
-			_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", challengeID))
+			_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", reply.ChallengeID))
 		case ErrChallengeExpired:
-			_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` expired.", challengeID))
-		case ErrInvalidPIN:
-			_ = client.SendText(ctx, dmChatID, "Incorrect PIN.")
+			_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` expired.", reply.ChallengeID))
 		default:
 			slog.Error("oob: approve failed", "component", "oob", "error", err)
 			_ = client.SendText(ctx, dmChatID, "Approval failed: "+err.Error())
 		}
 		return true
-	}
-	if !approved {
-		_ = client.SendText(ctx, dmChatID, "Approval rejected.")
 	}
 	return true
 }
@@ -178,9 +175,6 @@ func (m *Manager) handleDenyReply(ctx context.Context, client Client, dmChatID, 
 		return true
 	}
 	if c.RequesterID != senderID {
-		// Defense-in-depth: only the original requester can /deny.
-		// Without this check, a teammate sharing the bot DM could
-		// cancel a pending challenge issued for the owner.
 		slog.Warn("oob: deny refused for non-requester",
 			"component", "oob",
 			"challengeID", reply.ChallengeID,
@@ -196,4 +190,37 @@ func (m *Manager) handleDenyReply(ctx context.Context, client Client, dmChatID, 
 	}
 	_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` denied.", reply.ChallengeID))
 	return true
+}
+
+func isChallengeID(s string) bool {
+	if len(s) != challengeIDBytes*2 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// splitFirstField returns (first whitespace-delimited field, rest).
+// Both halves are already trimmed of the whitespace that separated
+// them; an input that has no whitespace returns ("", s) only when s
+// is empty, otherwise (s, "").
+func splitFirstField(s string) (string, string) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", ""
+	}
+	for i, r := range s {
+		if r == ' ' || r == '\t' {
+			return s[:i], strings.TrimSpace(s[i:])
+		}
+	}
+	return s, ""
 }

@@ -3,7 +3,6 @@ package oob
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,20 +18,14 @@ import (
 // challenge ID stays exploitable only briefly).
 const DefaultChallengeTTL = 5 * time.Minute
 
-// DefaultApprovalCacheTTL is how long a successful approval is cached
-// for the same (requester, intent) pair so the operator is not prompted
-// repeatedly when the AI emits a burst of similar actions.
-const DefaultApprovalCacheTTL = 5 * time.Minute
-
-// challengeIDBytes controls challenge ID entropy; 4 bytes -> 8 hex chars,
-// which is plenty given each ID is single-use and short-lived.
+// challengeIDBytes controls challenge ID entropy; 4 bytes -> 8 hex
+// chars, which is plenty given each ID is single-use and short-lived.
 const challengeIDBytes = 4
 
 // Errors returned by the challenge primitives.
 var (
 	ErrChallengeNotFound = errors.New("oob: challenge not found or already resolved")
 	ErrChallengeExpired  = errors.New("oob: challenge expired")
-	ErrInvalidPIN        = errors.New("oob: invalid PIN")
 	ErrCanceled          = errors.New("oob: challenge canceled")
 )
 
@@ -57,19 +50,16 @@ type challengeResult struct {
 	err      error
 }
 
-// IssueOptions tunes the lifetime of a single challenge. The zero value
-// uses DefaultChallengeTTL.
+// IssueOptions tunes the lifetime of a single challenge. The zero
+// value uses DefaultChallengeTTL.
 type IssueOptions struct {
 	TTL time.Duration
 }
 
-// Issue creates a new pending challenge in the manager and returns it.
-// The caller is responsible for delivering the challenge to the operator
-// (e.g. via an Adaptive Card posted to OwnerDMChat) and for invoking
-// Wait to block on the resolution.
-//
-// Issue does not consult the approval cache — call CachedApproval first
-// if the caller wants the cache fast-path.
+// Issue creates a new pending challenge in the manager and returns
+// it. The caller is responsible for delivering the challenge prompt
+// to the operator (via PostChallengePrompt or an equivalent text post
+// in the owner DM) and for invoking Wait to block on the resolution.
 func (m *Manager) Issue(requesterID, intent, originChatID, ownerDMChat string, opts IssueOptions) (*Challenge, error) {
 	if strings.TrimSpace(requesterID) == "" {
 		return nil, errors.New("oob: requesterID required")
@@ -113,8 +103,9 @@ func (m *Manager) Issue(requesterID, intent, originChatID, ownerDMChat string, o
 // whether the challenge was approved; err is non-nil for any failure
 // mode (timeout, cancel, internal error).
 //
-// On any return path (success or failure) the challenge is removed from
-// the manager so its ID becomes invalid for further Approve/Deny calls.
+// On any return path (success or failure) the challenge is removed
+// from the manager so its ID becomes invalid for further Approve or
+// Deny calls.
 func (c *Challenge) Wait(ctx context.Context, m *Manager) (bool, error) {
 	defer m.removeChallenge(c.ID)
 	select {
@@ -129,22 +120,21 @@ func (c *Challenge) Wait(ctx context.Context, m *Manager) (bool, error) {
 	}
 }
 
-// resolve sends a final result on the challenge's channel exactly once.
-// Subsequent calls are silently dropped so racing Approve/Deny/expire
-// paths do not panic.
+// resolve sends a final result on the challenge's channel exactly
+// once. Subsequent calls are silently dropped so racing
+// Approve/Deny/expire paths do not panic.
 func (c *Challenge) resolve(approved bool, err error) {
 	c.once.Do(func() {
 		c.resultCh <- challengeResult{approved: approved, err: err}
 	})
 }
 
-// Approve marks the named challenge as approved iff the supplied PIN
-// matches the on-disk hash. The boolean return tells the caller whether
-// the challenge was found and the PIN was correct; an err is returned
-// only for unexpected internal failures.
-//
-// The PIN is verified via Manager.VerifyPIN, which is rate limited.
-func (m *Manager) Approve(challengeID, pin string) (bool, error) {
+// Approve marks the named challenge as approved. Returns ErrChallengeNotFound
+// when the ID is unknown and ErrChallengeExpired when the challenge
+// has already timed out. Phase 2b no longer consults a PIN — the caller
+// has already validated the operator identity (owner DM + slash-command
+// prefix).
+func (m *Manager) Approve(challengeID string) (bool, error) {
 	c, ok := m.lookupChallenge(challengeID)
 	if !ok {
 		return false, ErrChallengeNotFound
@@ -153,15 +143,6 @@ func (m *Manager) Approve(challengeID, pin string) (bool, error) {
 		c.resolve(false, ErrChallengeExpired)
 		return false, ErrChallengeExpired
 	}
-	if !m.VerifyPIN(pin) {
-		slog.Warn("oob: PIN verification failed",
-			"component", "oob",
-			"challengeID", challengeID,
-			"requesterID", c.RequesterID,
-		)
-		return false, ErrInvalidPIN
-	}
-	m.cacheApproval(c.RequesterID, c.Intent, DefaultApprovalCacheTTL)
 	c.resolve(true, nil)
 	slog.Info("oob: challenge approved",
 		"component", "oob",
@@ -172,8 +153,8 @@ func (m *Manager) Approve(challengeID, pin string) (bool, error) {
 	return true, nil
 }
 
-// Deny resolves the challenge as not approved without consuming a PIN.
-// Useful for an explicit "/deny <id>" reply in the bot DM.
+// Deny resolves the challenge as not approved. Useful for an explicit
+// `/approval deny <id>` reply in the bot DM.
 func (m *Manager) Deny(challengeID string) bool {
 	c, ok := m.lookupChallenge(challengeID)
 	if !ok {
@@ -189,9 +170,8 @@ func (m *Manager) Deny(challengeID string) bool {
 	return true
 }
 
-// PendingFor returns the IDs of currently outstanding challenges issued
-// to the given requester. Used by the bare-PIN reply heuristic so the
-// operator can omit the challenge ID when only one is pending.
+// PendingFor returns the currently outstanding (non-expired)
+// challenges issued to the given requester.
 func (m *Manager) PendingFor(requesterID string) []*Challenge {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -207,54 +187,6 @@ func (m *Manager) PendingFor(requesterID string) []*Challenge {
 		out = append(out, c)
 	}
 	return out
-}
-
-// CachedApproval reports whether (requesterID, intent) has been
-// approved within the cache TTL. Callers should consult it before
-// issuing a fresh challenge to avoid prompt fatigue when the AI emits
-// a burst of similar actions.
-func (m *Manager) CachedApproval(requesterID, intent string) bool {
-	key := approvalCacheKey(requesterID, intent)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	exp, ok := m.approvals[key]
-	if !ok {
-		return false
-	}
-	if time.Now().After(exp) {
-		delete(m.approvals, key)
-		return false
-	}
-	return true
-}
-
-// MarkApprovedForTest seeds the approval cache directly. Exported only
-// for use in cross-package tests that need to exercise the cached-
-// approval branch without driving a full PIN round-trip; production
-// code MUST use Authorize / Approve instead.
-func (m *Manager) MarkApprovedForTest(requesterID, intent string, ttl time.Duration) {
-	m.cacheApproval(requesterID, intent, ttl)
-}
-
-// cacheApproval records (requesterID, intent) as approved until now+ttl.
-func (m *Manager) cacheApproval(requesterID, intent string, ttl time.Duration) {
-	if ttl <= 0 {
-		return
-	}
-	key := approvalCacheKey(requesterID, intent)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.approvals[key] = time.Now().Add(ttl)
-}
-
-// approvalCacheKey hashes (requesterID, intent) so callers cannot
-// accidentally collide cache slots via cleverly-formatted intents.
-func approvalCacheKey(requesterID, intent string) string {
-	h := sha256.New()
-	h.Write([]byte(requesterID))
-	h.Write([]byte{0})
-	h.Write([]byte(intent))
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (m *Manager) lookupChallenge(id string) (*Challenge, bool) {
@@ -276,57 +208,4 @@ func newChallengeID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
-}
-
-// GrantFullAccess unlocks ACP full-access mode for the given duration.
-// The Manager exposes FullAccessActive so the agent layer can poll the
-// state without owning a separate token store.
-func (m *Manager) GrantFullAccess(ttl time.Duration) {
-	if ttl <= 0 {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.fullAccessUntil = time.Now().Add(ttl)
-	slog.Warn("oob: ACP full-access granted",
-		"component", "oob",
-		"ttl", ttl.String(),
-		"expiresAt", m.fullAccessUntil.Format(time.RFC3339),
-	)
-}
-
-// RevokeFullAccess clears any active full-access grant immediately.
-func (m *Manager) RevokeFullAccess() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.fullAccessUntil.IsZero() {
-		slog.Warn("oob: ACP full-access revoked", "component", "oob")
-	}
-	m.fullAccessUntil = time.Time{}
-}
-
-// FullAccessActive reports whether a full-access grant is currently in
-// effect. Lazily clears expired grants on read.
-func (m *Manager) FullAccessActive() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fullAccessUntil.IsZero() {
-		return false
-	}
-	if time.Now().After(m.fullAccessUntil) {
-		m.fullAccessUntil = time.Time{}
-		return false
-	}
-	return true
-}
-
-// FullAccessExpiresAt returns the expiration time of the active grant
-// (zero if none). Used by /info and /full-access status replies.
-func (m *Manager) FullAccessExpiresAt() time.Time {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.fullAccessUntil.IsZero() && time.Now().After(m.fullAccessUntil) {
-		m.fullAccessUntil = time.Time{}
-	}
-	return m.fullAccessUntil
 }
