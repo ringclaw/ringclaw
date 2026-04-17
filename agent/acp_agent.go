@@ -159,6 +159,11 @@ type permissionOption struct {
 	Kind     string `json:"kind"`
 }
 
+// fullAccessAckEnv must be set to "1" for the full_access config flag to be
+// honored. Without this acknowledgement, ACP sessions stay in the default
+// guarded mode where every MCP tool call requires explicit approval.
+const fullAccessAckEnv = "RINGCLAW_FULL_ACCESS_ACK"
+
 // NewACPAgent creates a new ACP agent.
 func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	if cfg.Command == "" {
@@ -166,6 +171,15 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	}
 	if cfg.Cwd == "" {
 		cfg.Cwd = defaultWorkspace()
+	}
+	fullAccess := cfg.FullAccess
+	if fullAccess && os.Getenv(fullAccessAckEnv) != "1" {
+		slog.Warn("full_access requested but RINGCLAW_FULL_ACCESS_ACK!=1: refusing to disable MCP guardrails. Set the env var to acknowledge that the agent will execute tool calls without per-call approval.",
+			"component", "acp", "command", cfg.Command, "ack_env", fullAccessAckEnv)
+		fullAccess = false
+	} else if fullAccess {
+		slog.Warn("full_access ENABLED: agent will execute MCP tool calls without per-call approval",
+			"component", "acp", "command", cfg.Command)
 	}
 	return &ACPAgent{
 		command:      cfg.Command,
@@ -175,7 +189,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		cwd:          cfg.Cwd,
 		env:          cfg.Env,
 		allowWrite:   cfg.AllowWrite,
-		fullAccess:   cfg.FullAccess,
+		fullAccess:   fullAccess,
 		sessions:     make(map[string]string),
 		pending:      make(map[int64]chan *rpcResponse),
 		notifyCh:     make(map[string]chan *sessionUpdate),
@@ -489,7 +503,8 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 			slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
 				"component", "acp", "session", sessionResult.SessionID, "error", err)
 		} else {
-			slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
+			slog.Warn("ACP session granted full-access (MCP guardrails disabled for this session)",
+				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "conversation", conversationID)
 		}
 	}
 

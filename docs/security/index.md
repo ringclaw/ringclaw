@@ -74,6 +74,28 @@ By default, ACP agents are granted **read-only** file access. To allow file writ
 }
 ```
 
+## ACP Full-Access Mode
+
+Setting `full_access: true` on an ACP agent calls `session/set_mode
+"full-access"` and disables RingClaw's per-call MCP tool-call approval. This
+is dangerous: a prompt-injected agent could read or destroy any file the
+process can reach.
+
+To prevent silent activation through a stolen or copy-pasted config,
+RingClaw now requires an explicit acknowledgement at startup:
+
+```bash
+RINGCLAW_FULL_ACCESS_ACK=1 ringclaw start --foreground
+```
+
+If the env var is unset (or any value other than `1`), the request is
+downgraded with a loud warning and the session keeps the default guarded
+mode. When honored, every freshly created ACP session emits an additional
+`WARN ACP session granted full-access` log line for audit.
+
+Phase 2 will replace the env-var acknowledgement with a PIN-gated
+`/full-access` slash command that issues a TTL-bounded session token.
+
 ## Workspace Path Restrictions
 
 `/cwd` and the underlying `Agent.SetCwd` are pinned to a **subtree of
