@@ -792,7 +792,12 @@ func TestExecuteAgentActions_Message(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, _ := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {})
+	// Reply client points at the same server so the pre-notice (sent
+	// via the reply client) can succeed — otherwise the fail-closed
+	// gate would refuse the action before the target write.
+	client := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
+	})
 	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
 
 	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
@@ -806,7 +811,13 @@ func TestExecuteAgentActions_Message(t *testing.T) {
 		Body:   "面试晚点到",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, actionClient, "current-chat", actions, ActionContext{OriginIsOwner: true})
+	// Cross-chat MESSAGE now requires a live audit channel
+	// (OwnerDMChat) per the Finding-2 fail-closed gate.
+	results := ExecuteAgentActions(context.Background(), client, actionClient, "current-chat", actions, ActionContext{
+		OriginIsOwner: true,
+		OwnerDMChat:   "owner-dm-1",
+		RequesterID:   "owner-user",
+	})
 	if len(results) != 0 {
 		t.Fatalf("expected no errors, got %v", results)
 	}
@@ -887,7 +898,12 @@ func TestExecuteAgentActions_OwnerHonorsCrossChat(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, _ := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {})
+	// Reply client and action client both target the same server: the
+	// fail-closed cross-chat gate sends the pre-notice through the
+	// reply client, so it must be reachable.
+	client := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
+	})
 	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
 
 	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
@@ -901,18 +917,29 @@ func TestExecuteAgentActions_OwnerHonorsCrossChat(t *testing.T) {
 		Body:   "owner cross-chat",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, actionClient, "origin-chat", actions, ActionContext{OriginIsOwner: true})
+	// Fail-closed cross-chat: the pre-dispatch audit notice must be
+	// delivered to OwnerDMChat first, then the action lands on the
+	// owner-chosen target chat. Expect exactly 2 POSTs — notice then
+	// action — and the order matters.
+	results := ExecuteAgentActions(context.Background(), client, actionClient, "origin-chat", actions, ActionContext{
+		OriginIsOwner: true,
+		OwnerDMChat:   "dm-owner",
+		RequesterID:   "owner-user",
+	})
 	if len(results) != 0 {
 		t.Fatalf("expected no errors, got %v", results)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(postPaths) != 1 {
-		t.Fatalf("expected exactly 1 POST, got %v", postPaths)
+	if len(postPaths) != 2 {
+		t.Fatalf("expected exactly 2 POSTs (audit notice + action), got %v", postPaths)
 	}
-	if !strings.Contains(postPaths[0], "/chats/77777/") {
-		t.Errorf("owner chatid was not honored: %q", postPaths[0])
+	if !strings.Contains(postPaths[0], "/chats/dm-owner/") {
+		t.Errorf("expected first POST to owner DM, got %q", postPaths[0])
+	}
+	if !strings.Contains(postPaths[1], "/chats/77777/") {
+		t.Errorf("owner chatid was not honored on second POST: %q", postPaths[1])
 	}
 }
 
