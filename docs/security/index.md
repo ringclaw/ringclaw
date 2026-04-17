@@ -21,65 +21,57 @@ The server also validates the `Host` header to prevent DNS rebinding attacks —
 Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
 :::
 
-## Phase 2b Hardening: `/approval` + Cross-Chat Notifications
+## Phase 2 Hardening: `/approval` + Cross-Chat Notices
 
-Phase 2b replaces the short-lived Phase 2 design (bcrypt-hashed
-6-digit PIN, Adaptive-Card-driven approvals, blocking cross-chat
-gate) with a lighter model better matched to RingCentral's delivery
-semantics. RingCentral's WebSocket API only delivers `TextMessage`
-events — `Action.Submit` from Adaptive Cards is never pushed, so the
-old PIN UI was always going to be typed into the DM as text anyway.
-Phase 2b keeps the human-in-the-loop confirmation for the only path
-that truly needs it (ACP full-access) and downgrades the cross-chat
-gate to a non-blocking notification, improving usability without
-weakening the practical security model.
+Phase 2 layers two owner-DM-scoped surfaces on top of the Phase 1
+trusted-sender allowlist: a two-step `/approval` confirmation for
+ACP full-access grants, and a non-blocking metadata-only heads-up
+notice whenever an owner-initiated ACTION dispatches into a chat
+other than the origin or the owner's own DM.
 
-Trust assumption (unchanged): an attacker with a foothold inside
-RingCentral (account compromise, prompt injection in a bot DM,
-malicious teammate impersonating the owner) does **not**
-simultaneously have shell access to the host running RingClaw. The
-owner's DM with the bot — reachable only by the trusted sender
-allowlist wired up in Phase 1 — is treated as the secured channel.
+Trust assumption: an attacker with a foothold inside RingCentral
+(account compromise, prompt injection in a bot DM, malicious
+teammate impersonating the owner) does **not** simultaneously have
+shell access to the host running RingClaw. The owner's DM with the
+bot — reachable only by the Phase 1 trusted-sender allowlist — is
+treated as the secured channel for confirmations and audit.
 
-### Phase 2b surfaces — added / changed
+### Phase 2 surfaces — added
 
-Phase 2b introduces **no new `config.json` fields** and removes the
-`~/.ringclaw/oob_pin` file that Phase 2 wrote. Operators upgrading
-from Phase 2 should review the table below.
+Phase 2 introduces **no new `config.json` fields** and adds no
+on-disk state. All OOB state is in-memory and cleared on restart,
+so a crash-restart naturally re-locks the bot until the operator
+explicitly re-grants.
 
-| Surface | Type | Where | Phase 2 behavior | Phase 2b behavior | Operator override |
+| Surface | Type | Where | Phase 1 behavior | Phase 2 behavior | Operator override |
 |---|---|---|---|---|---|
-| `~/.ringclaw/oob_pin` | bcrypt-hashed PIN file | local filesystem (mode `0600`) | Auto-generated on first start; plaintext printed once on `stderr` | **Removed.** The file is no longer created or read. Operators upgrading can safely `rm ~/.ringclaw/oob_pin`. No on-disk state is kept; all OOB state is in-memory and reset on restart. | n/a |
-| `golang.org/x/crypto/bcrypt` | Go dependency | `go.mod` | Direct dependency introduced in Phase 2 | **Removed.** `go mod tidy` drops it and its transitive deps on upgrade. | n/a |
-| Owner cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` | runtime behavior | `messaging/actions.go` | PIN-gated: Adaptive Card challenge posted to owner DM, action blocks until approved or 5-min TTL expires | **Executes immediately**; afterwards a metadata-only heads-up is posted asynchronously to the owner DM when the target chat differs from the origin AND from the owner's own DM. The notice carries `TYPE`, `requesterID`, RFC3339 timestamp, `originChatID`, `targetChatID` — no body, title, or content preview. Best-effort: a failed notice is logged but does not roll back the action. | Tune `crossChatNoticeTimeout` in `messaging/actions.go` (currently 5s). The notice target (`OwnerDMChat`) is derived from the bot DM; it cannot be pointed elsewhere. |
-| `/full-access grant [duration]` | runtime command | bot DM with the owner | PIN-gated: each grant issued a fresh Adaptive Card challenge that the owner approved with `<id> <PIN>` in the DM | **Two-step `/approval`**. `grant` issues a short-lived challenge ID and posts a plain-text prompt to the owner DM; the bot replies to the command with `Full-access grant requested. Confirm via /approval in owner DM.`. The owner then replies `/approval <id>` (or `/approval deny <id>`) within 5 min to activate or reject the grant. No PIN, no card. | **Default grant 1 day**, hard cap 30 days (oversize input is silently clamped). Duration is parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `7d` via `168h`). Restricted to the owner DM; group-chat invocations are refused. |
-| `/approval <id>` / `/approval deny <id>` | slash command | bot DM with the owner | n/a (was `<id> <PIN>` text reply, accepted bare PIN when exactly 1 was pending) | **New canonical shape.** Parsed from the first whitespace-delimited token; `<id>` must be 8 hex characters and `/approval deny <id>` takes precedence over `/approval <id>` when `deny` appears as the first subword. Handled in `messaging/oob.HandleApprovalReply` and routed via `Handler.routeOOBApprovalReply`. Non-requester replies are refused with a plain-text rejection. | n/a |
-| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | Static path still honored via `full_access_ack`; dynamic `oob:/full-access` grant layered on top | **Unchanged from Phase 2.** The static config is still honored; the dynamic grant now activates via `/approval` instead of a PIN. Per-session log lines continue to carry `source` (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`). | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
+| Owner cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` | runtime behavior | `messaging/actions.go` | Honored unconditionally; `WARN action: owner cross-chat dispatch` audit log only | **Executes immediately** (no pre-dispatch gate); afterwards a metadata-only heads-up is asynchronously posted to the owner DM whenever the target chat differs from the origin AND from the owner's own DM. The notice carries `TYPE`, `requesterID`, RFC3339 timestamp, `originChatID`, `targetChatID` — no body, title, or content preview. Best-effort: a failed notice is logged but does not roll back the action. | Tune `crossChatNoticeTimeout` in `messaging/actions.go` (currently 5 s). The notice target (`OwnerDMChat`) is derived from the bot DM; it cannot be pointed elsewhere. |
+| `/full-access` slash command | runtime command | bot DM with the owner | _did not exist_ | **New.** `status` / `grant [duration]` / `revoke`. `grant` is a two-step confirmation: the bot issues a short-lived challenge ID, posts a plain-text `/approval` prompt to the owner DM, and only activates the grant after the owner replies `/approval <id>`. Each newly-created ACP session during an active grant is flipped into `session/set_mode "full-access"` until the grant expires or is revoked. | **Default grant 1 day**, hard cap **30 days**. Oversized inputs are silently clamped. Durations are parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`). Restricted to the owner DM; group-chat invocations are refused. |
+| `/approval <id>` / `/approval deny <id>` | slash command | bot DM with the owner | _did not exist_ | **New.** Canonical reply shape for pending challenges. 8-char hex `<id>`; `/approval deny <id>` explicitly rejects. Non-requester replies are refused with a plain-text message so a teammate sharing the DM cannot cancel another user's pending challenge. Replies never reach the AI agent. | n/a |
+| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` honored at startup when `full_access_ack` (config) or `RINGCLAW_FULL_ACCESS_ACK=1` (env) acknowledges it; otherwise downgraded with a `WARN` | **Unchanged** for the static path. In addition, an active `/full-access` grant overlays it dynamically — new ACP sessions read the TTL state on every creation, so a grant takes effect without restarting and naturally drops back to guarded mode when it expires. The per-session log line now carries a `source` field (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`) for audit. | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
 
 ### Before / after impact for operators
 
 ::: warning
-**Cross-chat behavior change from Phase 2.** Phase 2 blocked owner
-cross-chat ACTIONs until the PIN was typed in. Phase 2b executes
-them immediately and posts a metadata-only heads-up to the owner DM
-**after** the dispatch. Operators who relied on the PIN prompt as a
-moment to review the action should instead tail the owner DM or the
-action audit log.
+**Owner cross-chat behavior change.** Phase 1 always honored owner
+cross-chat ACTIONs and only warned. Phase 2 still honors them, but
+now posts a metadata-only heads-up to the owner DM after dispatch
+so there is a single audit surface for every cross-chat action. The
+action itself is never blocked — operators who want to review before
+dispatch should monitor the owner DM or the action audit log.
 :::
 
-| Scenario | Phase 2 behavior | Phase 2b behavior |
+| Scenario | Phase 1 behavior | Phase 2 behavior |
 |---|---|---|
-| Fresh install | Bot generates a 6-digit PIN, bcrypt-hashes to `~/.ringclaw/oob_pin`, prints plaintext to `stderr` once | **No PIN file, no stderr print, no bcrypt dep.** Bot starts clean; all OOB state is in-memory. |
-| Upgrading from Phase 2 | n/a | `rm ~/.ringclaw/oob_pin` (optional — left-over file is ignored). No config edits required. |
-| Owner asks AI for a cross-chat MESSAGE / CARD / TASK / NOTE | Adaptive Card challenge in bot DM; action blocks until owner replies `<id> <pin>` | Action runs immediately. An asynchronous notice `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` appears in the owner DM when target ≠ origin and target ≠ owner DM. |
+| Owner asks AI for a cross-chat MESSAGE / CARD / TASK / NOTE | Action runs immediately; `WARN action: owner cross-chat dispatch` audit log only | Action runs immediately in the target chat. An asynchronous `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` is posted to the owner DM when target ≠ origin and target ≠ owner DM. |
 | Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | Refused (unchanged). |
-| Operator wants ACP full-access for one task | `/full-access grant 30m` in bot DM, PIN prompt appears, reply `<id> <pin>`, grant activates | `/full-access grant 30m` in bot DM — bot replies `Full-access grant requested. Confirm via /approval in owner DM.` and posts `Pending approval: reply /approval <id> to confirm or /approval deny <id> to reject. Expires in 5 min. Requested TTL: 30m.`. Owner replies `/approval <id>`. Grant activates; bot replies `Full-access granted until <RFC3339 expiry>.`. |
-| Operator wants default-length full-access | `/full-access grant` → 5 min | `/full-access grant` → **24 h** (1 day). Cap is 30 days. |
-| Operator wants to revoke | `/full-access revoke` | Unchanged. |
-| OOB not configured (missing owner DM) | PIN file still created; cross-chat falls back to warn-log; `/full-access` refuses | `/full-access` refuses; cross-chat actions still execute but **no notice is attempted** (logged as `action: cross-chat notice skipped`). |
-| Suspected compromise | `rm ~/.ringclaw/oob_pin` + restart rotated the PIN | Restart the bot — all in-memory state (pending challenges, active `/full-access` grant) is cleared. |
+| Operator wants ACP full-access for one task | Must ship `full_access: true` + `full_access_ack: true` in `config.json` and restart, then remember to revert | Leave `full_access: false`. In the bot DM, run `/full-access grant 30m` — bot replies `Full-access grant requested. Confirm via /approval in owner DM.` and posts `Pending approval: reply /approval <id> to confirm or /approval deny <id> to reject. Expires in 5 min. Requested TTL: 30m.`. Owner replies `/approval <id>`. Bot confirms `Full-access granted until <RFC3339 expiry>.` and the ACP agent runs unlocked for 30 min. |
+| Operator wants default-length full-access | n/a | `/full-access grant` → **24 h** (1 day). Cap is 30 days. |
+| Operator wants to revoke | n/a | `/full-access revoke` — clears the grant immediately. |
+| OOB not configured (owner DM cannot be resolved) | n/a | `/full-access` returns "OOB approval is not configured"; cross-chat actions still execute but **no notice is attempted** (logged as `action: cross-chat notice skipped; no reply client`). |
+| Suspected compromise / want to drop state | n/a | Restart the bot — all in-memory state (pending challenges, active `/full-access` grant) is cleared. |
 
-### Phase 2b audit-log additions
+### Phase 2 audit-log additions
 
 | Event | Log line | Purpose |
 |---|---|---|
@@ -176,8 +168,8 @@ only when the originating sender is on the trusted allowlist (the machine
 owner). For any other sender, `chatid=` is ignored with a warning log and
 the action runs in the origin chat.
 
-For owner-initiated cross-chat dispatches, the Phase 2b behavior is
-a **non-blocking heads-up** rather than a pre-dispatch gate:
+For owner-initiated cross-chat dispatches, Phase 2 adds a
+**non-blocking heads-up** rather than a pre-dispatch gate:
 
 - **Owner DM resolved**: the cross-chat `MESSAGE` / `CARD` / `TASK` /
   `NOTE` executes immediately in the target chat. If the target chat
@@ -238,11 +230,11 @@ When the request is downgraded, the session keeps the default guarded
 mode. When honored, every freshly created ACP session emits an additional
 `WARN ACP session granted full-access` log line for audit (the `source`
 field distinguishes the static `config:full_access` path from the
-dynamic `oob:/full-access` Phase 2b grant described below).
+dynamic `oob:/full-access` Phase 2 grant described below).
 
-### Phase 2b — `/full-access` two-step `/approval` grant
+### Phase 2 — `/full-access` two-step `/approval` grant
 
-Phase 2b layers a dynamic, time-boxed unlock on top of the static
+Phase 2 layers a dynamic, time-boxed unlock on top of the static
 `full_access` toggle. The static config is still honored when set; the
 new flow is **additive** and lets operators leave `full_access: false`
 in `config.json` and unlock full-access on demand from the bot DM:
@@ -281,7 +273,7 @@ Constraints:
   cleared on restart, so a crash-restart re-locks the bot until the
   operator explicitly re-grants.
 
-### Phase 2b — Cross-chat heads-up notices
+### Phase 2 — Cross-chat heads-up notices
 
 Owner-initiated cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` actions
 execute immediately (no pre-dispatch approval). When the target chat
