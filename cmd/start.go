@@ -147,6 +147,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 	handler := initHandler(ctx, cfg)
 	initServices(ctx, cfg, c, handler)
 
+	// Phase 2 OOB approval manager bootstrap. Loaded after clients so
+	// the bot DM chat ID is available; loaded before the monitor starts
+	// so the very first incoming PIN reply finds a configured handler.
+	if err := initOOBManager(handler, c); err != nil {
+		slog.Error("failed to initialize OOB approval manager; cross-chat actions will not be PIN-gated",
+			"component", "start", "error", err)
+	}
+
 	// Start WebSocket monitor
 	slog.Info("starting message bridge", "chatIDs", cfg.RC.ChatIDs)
 

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/ringclaw/ringclaw/internal/util"
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -135,8 +137,19 @@ func parseActionParams(s string) []keyValue {
 // AI-emitted `chatid=` parameter is ignored and the action is forced to run
 // in the origin chat to prevent lateral movement / data exfiltration
 // (Finding #5 in the security review).
+//
+// OOB and OwnerDMChat are the Phase 2 wiring for PIN-gated approvals.
+// When OOB is non-nil and OwnerDMChat is set, owner-initiated cross-chat
+// actions (where chatid != origin) are gated on a PIN approval card
+// posted to the owner's bot DM. RequesterID identifies the originating
+// user for the approval cache key. Leaving OOB nil reverts to the
+// Phase 1 warn-log behavior so library callers (tests, /api/send) keep
+// working without forcing every entry point through OOB plumbing.
 type ActionContext struct {
 	OriginIsOwner bool
+	OOB           *oob.Manager
+	OwnerDMChat   string
+	RequesterID   string
 }
 
 // ExecuteAgentActions executes parsed actions against the RC API.
@@ -156,8 +169,19 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					continue
 				}
 				if resolved != chatID {
-					slog.Warn("action: owner cross-chat dispatch",
-						"type", a.Type, "from", chatID, "to", resolved)
+					approved, gateErr := authorizeCrossChat(ctx, opts, replyClient, a.Type, chatID, resolved)
+					if gateErr != nil {
+						slog.Error("action: cross-chat OOB error",
+							"type", a.Type, "from", chatID, "to", resolved, "error", gateErr)
+						results = append(results, fmt.Sprintf("Cross-chat %s blocked: %v", a.Type, gateErr))
+						continue
+					}
+					if !approved {
+						slog.Warn("action: cross-chat dispatch denied by OOB",
+							"type", a.Type, "from", chatID, "to", resolved)
+						results = append(results, fmt.Sprintf("Cross-chat %s requires PIN approval (denied or expired).", a.Type))
+						continue
+					}
 				}
 				targetChat = resolved
 			}
@@ -268,6 +292,56 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		}
 	}
 	return results
+}
+
+// crossChatApprovalTTL bounds how long we wait for the operator to enter
+// the PIN before the cross-chat action gives up. Five minutes matches
+// oob.DefaultChallengeTTL but is restated here so changing one does not
+// silently change the other. Declared as a var (not const) so tests can
+// shorten the wait without touching production behavior.
+var crossChatApprovalTTL = 5 * time.Minute
+
+// authorizeCrossChat resolves the OOB gate decision for a single
+// cross-chat action. Returns (true, nil) when the action may proceed
+// (manager not configured -> Phase 1 warn-log fallback, or operator
+// approved the PIN challenge). Returns (false, nil) when the operator
+// denied or the challenge expired. Non-nil err signals an unexpected
+// failure that should be surfaced to the caller.
+func authorizeCrossChat(ctx context.Context, opts ActionContext, replyClient *ringcentral.Client, actionType, originChat, resolvedChat string) (bool, error) {
+	if opts.OOB == nil || opts.OwnerDMChat == "" {
+		// Phase 1 fallback: log loudly so audit trails still capture the
+		// dispatch even when no operator is on-call to type a PIN.
+		slog.Warn("action: owner cross-chat dispatch (OOB not configured)",
+			"type", actionType, "from", originChat, "to", resolvedChat)
+		return true, nil
+	}
+	intent := fmt.Sprintf("%s cross-chat from %s to %s", actionType, originChat, resolvedChat)
+	requesterID := opts.RequesterID
+	if requesterID == "" {
+		requesterID = "unknown"
+	}
+	approved, err := opts.OOB.Authorize(ctx, oob.AuthorizeOptions{
+		RequesterID:  requesterID,
+		Intent:       intent,
+		OriginChatID: originChat,
+		OwnerDMChat:  opts.OwnerDMChat,
+		Client:       newOOBClient(replyClient),
+		TTL:          crossChatApprovalTTL,
+	})
+	if err != nil {
+		// Treat ErrChallengeExpired as a non-error denial so the result
+		// message reads "denied or expired" rather than surfacing the
+		// internal sentinel to the user.
+		if err == oob.ErrChallengeExpired {
+			return false, nil
+		}
+		return false, err
+	}
+	if approved {
+		slog.Info("action: cross-chat dispatch approved by OOB",
+			"type", actionType, "from", originChat, "to", resolvedChat, "requesterID", requesterID)
+	}
+	return approved, nil
 }
 
 // extractChatID extracts a numeric chat ID from various formats:

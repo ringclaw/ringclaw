@@ -12,6 +12,7 @@ import (
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/internal/util"
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -60,6 +61,15 @@ type Handler struct {
 	// only the bot's own posts and configured cron jobs may dispatch.
 	trustedSenders  map[string]bool
 	allowAllSenders bool
+
+	// oobManager and ownerDMChatID power the Phase 2 PIN-gated approval
+	// flow. When oobManager is nil, all OOB call sites fall back to the
+	// Phase 1 behavior (warn-log owner cross-chat, env-only full-access
+	// acknowledgement). ownerDMChatID is the chat ID where challenge
+	// cards are delivered; empty disables OOB even when the manager is
+	// configured.
+	oobManager     *oob.Manager
+	ownerDMChatID  string
 }
 
 // NewHandler creates a new message handler.
@@ -97,6 +107,37 @@ func (h *Handler) EnforceSenderAllowlist() {
 	h.mu.Lock()
 	h.allowAllSenders = false
 	h.mu.Unlock()
+}
+
+// SetOOBManager installs the Phase 2 out-of-band approval manager and the
+// chat ID that should receive approval cards (the Private App owner's bot
+// DM). Pass a nil manager to disable OOB and revert to Phase 1 semantics.
+//
+// ownerDMChatID is the bot's own DM chat with the trusted machine owner
+// (typically *ringcentral.Client.IsBotDM(...) returns true for it). When
+// empty, OOB call sites refuse to gate actions.
+func (h *Handler) SetOOBManager(mgr *oob.Manager, ownerDMChatID string) {
+	h.mu.Lock()
+	h.oobManager = mgr
+	h.ownerDMChatID = ownerDMChatID
+	h.mu.Unlock()
+}
+
+// OOBManager returns the configured manager (or nil). Used by callers
+// (e.g. the /full-access slash command, /info status card) that need to
+// inspect or drive OOB state.
+func (h *Handler) OOBManager() *oob.Manager {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.oobManager
+}
+
+// OwnerDMChatID returns the chat ID where OOB approval cards should be
+// posted; empty when OOB is not configured.
+func (h *Handler) OwnerDMChatID() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.ownerDMChatID
 }
 
 // isTrustedSender reports whether a given creator ID may drive the agent.
@@ -405,6 +446,15 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
+	// Phase 2 OOB approval interception. PIN replies are typed back into
+	// the bot DM (the same chat the challenge card was posted to). When
+	// the message matches a recognized approval shape we route it to the
+	// OOB manager and short-circuit normal agent dispatch so the PIN
+	// itself is never forwarded to the AI agent.
+	if h.routeOOBApprovalReply(ctx, client, chatID, post.CreatorID, text) {
+		return
+	}
+
 	// In bot group chats (not bot DM), restrict privileged commands to the bot owner
 	isBotGroup := client.IsBot() && !client.IsBotDM(chatID)
 	if isBotGroup && isPrivilegedCommand(text) {
@@ -510,6 +560,22 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		// Multi-agent broadcast: parallel dispatch
 		h.broadcastToAgents(ctx, client, readClient, post, knownNames, message)
 	}
+}
+
+// routeOOBApprovalReply is the Phase 2 hook that consumes PIN replies in
+// the owner's bot DM before they reach the agent. Returns true when the
+// message was handled (caller must short-circuit). Restricted to bot DM
+// to keep PINs out of group chat history; replies in any other chat
+// fall through unchanged.
+func (h *Handler) routeOOBApprovalReply(ctx context.Context, client *ringcentral.Client, chatID, senderID, text string) bool {
+	mgr := h.OOBManager()
+	if mgr == nil {
+		return false
+	}
+	if !client.IsBotDM(chatID) {
+		return false
+	}
+	return mgr.HandleApprovalReply(ctx, newOOBClient(client), chatID, senderID, text)
 }
 
 // conversationIDForPost returns the session key used to address a single
@@ -632,6 +698,9 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		reply = cleanReply
 		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
 			OriginIsOwner: h.isTrustedSender(post.CreatorID),
+			OOB:           h.OOBManager(),
+			OwnerDMChat:   h.OwnerDMChatID(),
+			RequesterID:   post.CreatorID,
 		})
 		if len(results) > 0 {
 			defer func() {

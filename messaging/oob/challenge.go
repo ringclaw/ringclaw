@@ -228,6 +228,14 @@ func (m *Manager) CachedApproval(requesterID, intent string) bool {
 	return true
 }
 
+// MarkApprovedForTest seeds the approval cache directly. Exported only
+// for use in cross-package tests that need to exercise the cached-
+// approval branch without driving a full PIN round-trip; production
+// code MUST use Authorize / Approve instead.
+func (m *Manager) MarkApprovedForTest(requesterID, intent string, ttl time.Duration) {
+	m.cacheApproval(requesterID, intent, ttl)
+}
+
 // cacheApproval records (requesterID, intent) as approved until now+ttl.
 func (m *Manager) cacheApproval(requesterID, intent string, ttl time.Duration) {
 	if ttl <= 0 {
