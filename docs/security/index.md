@@ -21,6 +21,41 @@ The server also validates the `Host` header to prevent DNS rebinding attacks —
 Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
 :::
 
+## Phase 1 Hardening: Configuration Changes
+
+Phase 1 of the Remote Control hardening review **did not introduce any
+new `config.json` fields**. All hardening reuses fields that already
+existed in the schema, but changes how they are interpreted at startup,
+plus introduces one new environment variable. Operators upgrading from a
+previous release should review the table below — defaults marked "**new**"
+may change behavior even when `config.json` is left untouched.
+
+| Setting | Type | Where | Old default | New default | Operator override |
+|---------|------|-------|-------------|-------------|-------------------|
+| `ringcentral.source_user_ids` | `[]string` | `config.json` (also `RC_SOURCE_USER_IDS` env, comma-separated) | Empty list = **allow every sender** in any allowed chat | Empty list + Private App = **owner-only** (auto-injected). Empty list + no Private App = **deny all** with startup error | List numeric IDs / emails / phone numbers to add additional trusted senders. Email and phone require Private App with `ReadAccounts`. |
+| `agent_workspace` | `string` | `config.json` (also `RINGCLAW_AGENT_WORKSPACE` env) | Used only as the agent's initial cwd; `/cwd` could escape it | **Hard root** for `/cwd` and `Agent.SetCwd`. Falls back to `~/.ringclaw/workspace` when unset | Set to the directory subtree you want to expose to AI agents. Anything outside is rejected at runtime. |
+| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` immediately enabled `session/set_mode "full-access"` on every new ACP session | `true` is **ignored** unless `RINGCLAW_FULL_ACCESS_ACK=1` is also set in the process env; otherwise downgraded with a `WARN` log | Export `RINGCLAW_FULL_ACCESS_ACK=1` for the `ringclaw start` process to acknowledge the risk and honor the flag. |
+| `RINGCLAW_FULL_ACCESS_ACK` | env var | process environment | _did not exist_ | **new** — must equal `1` to honor any agent's `full_access: true` | Unset / any other value = full-access requests are refused for the whole process. |
+
+Behaviors implied by Phase 1 that have **no config knob** (intentionally
+not exposed yet):
+
+- The cross-chat `ACTION` lock is unconditional for non-owner senders.
+  There is no opt-out.
+- `cli_agent.Chat` always rejects empty `conversationID`.
+- The `/cwd` denylist (`.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`,
+  `.config/gcloud`) is hard-coded as a secondary check, even when the
+  `agent_workspace` allowlist would otherwise admit the path.
+
+::: warning
+After upgrading, operators who relied on the legacy "empty
+`source_user_ids` = allow everyone" behavior will see the bot drop
+**every** incoming message until they either (a) configure a Private App
+(the owner is auto-trusted) or (b) populate
+`ringcentral.source_user_ids`. The startup log line
+`sender allowlist is empty: ...` is the canonical signal for this case.
+:::
+
 ## Mandatory Sender Allowlist
 
 When the `start` command boots, the WebSocket monitor and message handler
