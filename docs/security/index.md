@@ -51,6 +51,17 @@ permission so they can be resolved to numeric IDs. Without the Private App,
 list the numeric extensionIds directly.
 :::
 
+## Cross-Chat Action Lock
+
+`ACTION` blocks emitted by the AI may carry a `chatid=` parameter that
+targets a different chat than the one the message arrived in. To prevent
+"summarize chat A in chat B" style data exfiltration, this is now allowed
+only when the originating sender is on the trusted allowlist (the machine
+owner). For any other sender, `chatid=` is ignored with a warning log and
+the action runs in the origin chat. Owner cross-chat dispatches are still
+honored, but each one emits a `WARN action: owner cross-chat dispatch`
+log line for audit.
+
 ## ACP Agent File Permissions
 
 By default, ACP agents are granted **read-only** file access. To allow file writes, set `allow_write: true` in the agent config:

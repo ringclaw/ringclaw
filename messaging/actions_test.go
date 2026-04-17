@@ -589,7 +589,7 @@ func TestExecuteAgentActions_CardUsesBotClientInDM(t *testing.T) {
 		Body: `{"type":"AdaptiveCard","version":"1.3","body":[]}`,
 	}}
 
-	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "dm-chat", actions)
+	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "dm-chat", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Fatalf("expected no action errors, got %v", results)
 	}
@@ -628,7 +628,7 @@ func TestExecuteAgentActions_CardUsesPrivateClientInGroup(t *testing.T) {
 		Body: `{"type":"AdaptiveCard","version":"1.3","body":[]}`,
 	}}
 
-	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "group-chat", actions)
+	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "group-chat", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Fatalf("expected no action errors, got %v", results)
 	}
@@ -668,7 +668,7 @@ func TestExecuteAgentActions_CardFallsBackToBotWithoutPrivateClient(t *testing.T
 		Body: `{"type":"AdaptiveCard","version":"1.3","body":[]}`,
 	}}
 
-	results := ExecuteAgentActions(context.Background(), botClient, botClient, "group-chat", actions)
+	results := ExecuteAgentActions(context.Background(), botClient, botClient, "group-chat", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Fatalf("expected no action errors, got %v", results)
 	}
@@ -806,7 +806,7 @@ func TestExecuteAgentActions_Message(t *testing.T) {
 		Body:   "面试晚点到",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, actionClient, "current-chat", actions)
+	results := ExecuteAgentActions(context.Background(), client, actionClient, "current-chat", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Fatalf("expected no errors, got %v", results)
 	}
@@ -815,6 +815,104 @@ func TestExecuteAgentActions_Message(t *testing.T) {
 	defer mu.Unlock()
 	if !strings.Contains(postedBody, "面试晚点到") {
 		t.Errorf("expected message body in post, got %q", postedBody)
+	}
+}
+
+func TestExecuteAgentActions_NonOwnerForcesOriginChat(t *testing.T) {
+	var mu sync.Mutex
+	var postPaths []string
+	var postedBody string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == "POST" {
+			mu.Lock()
+			postPaths = append(postPaths, r.URL.Path)
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			postedBody, _ = body["text"].(string)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "p-non-owner"})
+	}))
+	defer srv.Close()
+
+	client, _ := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {})
+	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
+	})
+	actionClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	actions := []AgentAction{{
+		Type:   "MESSAGE",
+		Params: map[string]string{"chatid": "99999"}, // attacker-supplied target
+		Body:   "exfiltrated note",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), client, actionClient, "origin-chat", actions, ActionContext{OriginIsOwner: false})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(postPaths) != 1 {
+		t.Fatalf("expected exactly 1 POST, got %v", postPaths)
+	}
+	if !strings.Contains(postPaths[0], "/chats/origin-chat/") {
+		t.Errorf("expected POST to origin chat, got %q", postPaths[0])
+	}
+	if strings.Contains(postPaths[0], "/chats/99999/") {
+		t.Errorf("attacker chatid was honored in path: %q", postPaths[0])
+	}
+	if !strings.Contains(postedBody, "exfiltrated note") {
+		t.Errorf("expected body to be sent, got %q", postedBody)
+	}
+}
+
+func TestExecuteAgentActions_OwnerHonorsCrossChat(t *testing.T) {
+	var mu sync.Mutex
+	var postPaths []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == "POST" {
+			mu.Lock()
+			postPaths = append(postPaths, r.URL.Path)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "p-owner"})
+	}))
+	defer srv.Close()
+
+	client, _ := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {})
+	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
+	})
+	actionClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	actions := []AgentAction{{
+		Type:   "MESSAGE",
+		Params: map[string]string{"chatid": "77777"},
+		Body:   "owner cross-chat",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), client, actionClient, "origin-chat", actions, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(postPaths) != 1 {
+		t.Fatalf("expected exactly 1 POST, got %v", postPaths)
+	}
+	if !strings.Contains(postPaths[0], "/chats/77777/") {
+		t.Errorf("owner chatid was not honored: %q", postPaths[0])
 	}
 }
 
@@ -845,7 +943,7 @@ func TestExecuteAgentActions_UnknownTypeFallback(t *testing.T) {
 		Body: "some content",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), replyClient, replyClient, "chat1", actions)
+	results := ExecuteAgentActions(context.Background(), replyClient, replyClient, "chat1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 1 || !strings.Contains(results[0], "Unknown action type") {
 		t.Errorf("expected unknown action warning, got %v", results)
 	}

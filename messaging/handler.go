@@ -609,11 +609,15 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, actionClient *ringcentral.Client, post ringcentral.Post, reply, placeholderID string) {
 	chatID := post.GroupID
 
-	// Parse and execute any ACTION blocks from the agent's response
+	// Parse and execute any ACTION blocks from the agent's response.
+	// originIsOwner mirrors the trusted-senders allowlist so non-owner posts
+	// cannot pivot the agent's reply into a different chat (Finding #5).
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
 		reply = cleanReply
-		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions)
+		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
+			OriginIsOwner: h.isTrustedSender(post.CreatorID),
+		})
 		if len(results) > 0 {
 			defer func() {
 				logSendError(SendTextReply(ctx, client, chatID, strings.Join(results, "\n")))
