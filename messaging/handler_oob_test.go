@@ -14,9 +14,11 @@ import (
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
-// newDMRoutingServer mirrors newCrossChatActionServer but exposes the
-// captured POST bodies so tests can verify the operator gets a textual
-// confirmation of the approval result.
+// newDMRoutingServer returns an httptest.Server that captures POST
+// /posts bodies (used to verify the operator gets text confirmations)
+// and answers /adaptive-cards with a stub JSON document. Returned for
+// both bodies and the accompanying mutex so tests can safely read the
+// slice.
 func newDMRoutingServer(t *testing.T) (*httptest.Server, *[]string, *sync.Mutex) {
 	var mu sync.Mutex
 	var bodies []string
@@ -45,6 +47,42 @@ func newDMRoutingServer(t *testing.T) (*httptest.Server, *[]string, *sync.Mutex)
 	return srv, &bodies, &mu
 }
 
+// newCardRecordingServer captures POSTs to /adaptive-cards so tests can
+// assert that Phase 2b does NOT emit an Adaptive Card for approval. A
+// fresh server is used per-test to avoid cross-contamination.
+func newCardRecordingServer(t *testing.T) (*httptest.Server, *[]string, *sync.Mutex) {
+	var mu sync.Mutex
+	var cards []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/adaptive-cards") && r.Method == "POST":
+			buf := make([]byte, 0, 256)
+			tmp := make([]byte, 256)
+			for {
+				n, _ := r.Body.Read(tmp)
+				buf = append(buf, tmp[:n]...)
+				if n == 0 {
+					break
+				}
+			}
+			mu.Lock()
+			cards = append(cards, string(buf))
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "card-1", "type": "Adaptive", "version": "1.3"})
+			return
+		case strings.Contains(r.URL.Path, "/posts") && r.Method == "POST":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "post-1"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "x"})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &cards, &mu
+}
+
 func newDMBotClient(serverURL string) *ringcentral.Client {
 	bot := ringcentral.NewBotClient(serverURL, "bot-token")
 	bot.SetDMChatID("dm-1")
@@ -57,32 +95,28 @@ func newDMBotClient(serverURL string) *ringcentral.Client {
 func TestRouteOOBApprovalReply_NoManagerFallsThrough(t *testing.T) {
 	h := newTestHandler()
 	bot := newDMBotClient("http://example.com")
-	if h.routeOOBApprovalReply(context.Background(), bot, "dm-1", "user-1", "123456") {
+	if h.routeOOBApprovalReply(context.Background(), bot, "dm-1", "user-1", "/approval aabbccdd") {
 		t.Fatalf("expected no-op when OOB manager is nil")
 	}
 }
 
-// TestRouteOOBApprovalReply_NonDMFallsThrough confirms that PIN replies
-// posted in any chat other than the bot DM are NOT consumed. This
-// keeps PINs out of group chat history and forces the operator to use
-// the dedicated DM channel.
+// TestRouteOOBApprovalReply_NonDMFallsThrough confirms that approval
+// replies posted in any chat other than the bot DM are NOT consumed.
+// Keeping /approval scoped to the DM avoids a teammate in a group chat
+// poking at another user's pending challenge by guessing IDs.
 func TestRouteOOBApprovalReply_NonDMFallsThrough(t *testing.T) {
 	h := newTestHandler()
-	mgr, _, err := oob.Load(oob.LoadOptions{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("oob.Load: %v", err)
-	}
-	h.SetOOBManager(mgr, "dm-1")
+	h.SetOOBManager(oob.New(oob.Options{}), "dm-1")
 	bot := newDMBotClient("http://example.com")
-	if h.routeOOBApprovalReply(context.Background(), bot, "group-99", "user-1", "123456") {
-		t.Fatalf("PIN replies in non-DM chats must not be consumed")
+	if h.routeOOBApprovalReply(context.Background(), bot, "group-99", "user-1", "/approval aabbccdd") {
+		t.Fatalf("/approval in non-DM chats must not be consumed")
 	}
 }
 
 // TestRouteOOBApprovalReply_DMApprovesPendingChallenge drives the full
-// path: the manager has a pending challenge, the owner replies in the
-// bot DM with the matching challenge ID + PIN, and the helper consumes
-// the message and resolves the challenge.
+// Phase 2b path: the manager has a pending challenge, the owner replies
+// `/approval <id>` in the bot DM, and the helper consumes the message
+// and resolves the challenge.
 func TestRouteOOBApprovalReply_DMApprovesPendingChallenge(t *testing.T) {
 	srv, bodies, mu := newDMRoutingServer(t)
 	bot := ringcentral.NewBotClient(srv.URL, "bot-token")
@@ -90,16 +124,10 @@ func TestRouteOOBApprovalReply_DMApprovesPendingChallenge(t *testing.T) {
 	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
 
 	h := newTestHandler()
-	mgr, pin, err := oob.Load(oob.LoadOptions{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("oob.Load: %v", err)
-	}
-	if pin == "" {
-		t.Fatalf("expected fresh PIN")
-	}
+	mgr := oob.New(oob.Options{})
 	h.SetOOBManager(mgr, "dm-1")
 
-	c, issueErr := mgr.Issue("user-1", "test action", "origin", "dm-1", oob.IssueOptions{TTL: 2 * time.Second})
+	c, issueErr := mgr.Issue("user-1", "test action", "dm-1", "dm-1", oob.IssueOptions{TTL: 2 * time.Second})
 	if issueErr != nil {
 		t.Fatalf("Issue: %v", issueErr)
 	}
@@ -109,8 +137,8 @@ func TestRouteOOBApprovalReply_DMApprovesPendingChallenge(t *testing.T) {
 		doneCh <- approved
 	}()
 
-	if !h.routeOOBApprovalReply(context.Background(), bot, "dm-1", "user-1", c.ID+" "+pin) {
-		t.Fatalf("routeOOBApprovalReply did not consume the PIN message")
+	if !h.routeOOBApprovalReply(context.Background(), bot, "dm-1", "user-1", "/approval "+c.ID) {
+		t.Fatalf("routeOOBApprovalReply did not consume the /approval message")
 	}
 	select {
 	case approved := <-doneCh:
@@ -118,17 +146,17 @@ func TestRouteOOBApprovalReply_DMApprovesPendingChallenge(t *testing.T) {
 			t.Fatalf("expected challenge to be approved")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("challenge did not resolve after PIN reply")
+		t.Fatalf("challenge did not resolve after /approval reply")
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	_ = bodies // confirmation message is best-effort; not asserted here
+	_ = bodies
 }
 
 // TestRouteOOBApprovalReply_NonApprovalPassesThrough confirms that
-// regular DM chatter (not matching the documented approval syntax) is
-// NOT consumed by the OOB router, even when the manager is configured.
-// This keeps normal AI dispatch working in the bot DM.
+// regular DM chatter (not matching the `/approval` syntax) is NOT
+// consumed, even when the manager is configured. Keeps normal AI
+// dispatch working in the bot DM.
 func TestRouteOOBApprovalReply_NonApprovalPassesThrough(t *testing.T) {
 	srv, _, _ := newDMRoutingServer(t)
 	bot := ringcentral.NewBotClient(srv.URL, "bot-token")
@@ -136,17 +164,15 @@ func TestRouteOOBApprovalReply_NonApprovalPassesThrough(t *testing.T) {
 	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
 
 	h := newTestHandler()
-	mgr, _, err := oob.Load(oob.LoadOptions{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("oob.Load: %v", err)
-	}
-	h.SetOOBManager(mgr, "dm-1")
+	h.SetOOBManager(oob.New(oob.Options{}), "dm-1")
 
 	cases := []string{
 		"hello bot",
 		"/help",
 		"/cwd ~/foo",
-		"123 456",
+		"123456",
+		"/approve aabbccdd 123456", // legacy PIN syntax, must fall through
+		"aabbccdd 123456",          // legacy <id> <pin>, must fall through
 	}
 	for _, in := range cases {
 		if h.routeOOBApprovalReply(context.Background(), bot, "dm-1", "user-1", in) {

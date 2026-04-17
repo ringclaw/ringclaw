@@ -21,15 +21,28 @@ func TestParseGrantDuration_DefaultsAndCaps(t *testing.T) {
 	if err != nil || d != 15*time.Minute {
 		t.Fatalf("15m → %v %v", d, err)
 	}
-	d, err = parseGrantDuration("48h")
+	d, err = parseGrantDuration("720h")
 	if err != nil || d != fullAccessMaxGrant {
-		t.Fatalf("48h should clamp to %v, got %v", fullAccessMaxGrant, d)
+		t.Fatalf("720h → %v %v, want cap %v", d, err, fullAccessMaxGrant)
+	}
+	d, err = parseGrantDuration("999h")
+	if err != nil || d != fullAccessMaxGrant {
+		t.Fatalf("999h should clamp to %v, got %v (err %v)", fullAccessMaxGrant, d, err)
 	}
 	if _, err := parseGrantDuration("nonsense"); err == nil {
 		t.Fatalf("expected parse error for 'nonsense'")
 	}
 	if _, err := parseGrantDuration("-1m"); err == nil {
 		t.Fatalf("expected error for negative duration")
+	}
+}
+
+func TestFullAccessDefaultIsOneDay(t *testing.T) {
+	if fullAccessDefaultGrant != 24*time.Hour {
+		t.Fatalf("default grant = %v, want 24h", fullAccessDefaultGrant)
+	}
+	if fullAccessMaxGrant != 30*24*time.Hour {
+		t.Fatalf("max grant = %v, want 30d", fullAccessMaxGrant)
 	}
 }
 
@@ -65,10 +78,7 @@ func TestIsFullAccessCommand(t *testing.T) {
 }
 
 func TestFormatFullAccessStatus(t *testing.T) {
-	mgr, _, err := oob.Load(oob.LoadOptions{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("oob.Load: %v", err)
-	}
+	mgr := oob.New(oob.Options{})
 	off := formatFullAccessStatus(mgr)
 	if !strings.Contains(off, "off") {
 		t.Errorf("off status missing 'off': %q", off)
@@ -106,11 +116,7 @@ func TestHandleFullAccess_RejectsOutsideOwnerDM(t *testing.T) {
 	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
 
 	h := newTestHandler()
-	mgr, _, err := oob.Load(oob.LoadOptions{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("oob.Load: %v", err)
-	}
-	h.SetOOBManager(mgr, "dm-1")
+	h.SetOOBManager(oob.New(oob.Options{}), "dm-1")
 	h.handleFullAccess(context.Background(), bot, "group-99", "user-1", "/full-access status")
 
 	mu.Lock()
@@ -126,10 +132,7 @@ func TestHandleFullAccess_StatusAndRevoke(t *testing.T) {
 	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
 
 	h := newTestHandler()
-	mgr, _, err := oob.Load(oob.LoadOptions{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("oob.Load: %v", err)
-	}
+	mgr := oob.New(oob.Options{})
 	h.SetOOBManager(mgr, "dm-1")
 
 	mgr.GrantFullAccess(time.Minute)
@@ -157,24 +160,18 @@ func TestHandleFullAccess_StatusAndRevoke(t *testing.T) {
 	}
 }
 
-// TestHandleFullAccess_GrantPathRequiresPIN drives the full grant
-// round-trip: handleFullAccess kicks off the OOB challenge in a
-// goroutine; the test responds with the PIN via routeOOBApprovalReply
-// and verifies the manager flips to FullAccessActive.
-func TestHandleFullAccess_GrantPathRequiresPIN(t *testing.T) {
+// TestHandleFullAccess_GrantPathActivatesOnApproval drives the two-step
+// /approval flow: handleFullAccess posts the challenge prompt; the test
+// replies with `/approval <id>` via routeOOBApprovalReply and verifies
+// that the manager flips to FullAccessActive.
+func TestHandleFullAccess_GrantPathActivatesOnApproval(t *testing.T) {
 	srv, bodies, mu := newDMRoutingServer(t)
 	bot := ringcentral.NewBotClient(srv.URL, "bot-token")
 	bot.SetDMChatID("dm-1")
 	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
 
 	h := newTestHandler()
-	mgr, pin, err := oob.Load(oob.LoadOptions{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("oob.Load: %v", err)
-	}
-	if pin == "" {
-		t.Fatalf("expected fresh PIN")
-	}
+	mgr := oob.New(oob.Options{})
 	h.SetOOBManager(mgr, "dm-1")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -183,14 +180,14 @@ func TestHandleFullAccess_GrantPathRequiresPIN(t *testing.T) {
 	h.handleFullAccess(ctx, bot, "dm-1", "user-1", "/full-access grant 30s")
 
 	pending := waitForPending(t, mgr, "user-1", 1, 2*time.Second)
-	if !h.routeOOBApprovalReply(ctx, bot, "dm-1", "user-1", pending[0].ID+" "+pin) {
-		t.Fatalf("PIN reply was not consumed")
+	if !h.routeOOBApprovalReply(ctx, bot, "dm-1", "user-1", "/approval "+pending[0].ID) {
+		t.Fatalf("/approval reply was not consumed")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for !mgr.FullAccessActive() {
 		if time.Now().After(deadline) {
-			t.Fatalf("FullAccess never activated after PIN approval")
+			t.Fatalf("FullAccess never activated after approval")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -199,7 +196,6 @@ func TestHandleFullAccess_GrantPathRequiresPIN(t *testing.T) {
 		t.Fatalf("expected ~30s grant, got expiry %v (in %v)", exp, time.Until(exp))
 	}
 
-	// Also verify the operator received a granted-confirmation message.
 	deadline = time.Now().Add(1 * time.Second)
 	var grantedSeen bool
 	for time.Now().Before(deadline) {
@@ -207,7 +203,7 @@ func TestHandleFullAccess_GrantPathRequiresPIN(t *testing.T) {
 		snap := append([]string(nil), (*bodies)...)
 		mu.Unlock()
 		for _, b := range snap {
-			if strings.Contains(b, "granted") {
+			if strings.Contains(b, "Full-access granted until") {
 				grantedSeen = true
 				break
 			}
@@ -223,19 +219,16 @@ func TestHandleFullAccess_GrantPathRequiresPIN(t *testing.T) {
 	}
 }
 
-// TestHandleFullAccess_GrantPathDeniedKeepsLocked makes sure a /deny
-// reply leaves the manager locked.
-func TestHandleFullAccess_GrantPathDeniedKeepsLocked(t *testing.T) {
+// TestHandleFullAccess_GrantPathDenialKeepsLocked checks that `/approval
+// deny <id>` leaves the manager locked.
+func TestHandleFullAccess_GrantPathDenialKeepsLocked(t *testing.T) {
 	srv, _, _ := newDMRoutingServer(t)
 	bot := ringcentral.NewBotClient(srv.URL, "bot-token")
 	bot.SetDMChatID("dm-1")
 	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
 
 	h := newTestHandler()
-	mgr, _, err := oob.Load(oob.LoadOptions{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("oob.Load: %v", err)
-	}
+	mgr := oob.New(oob.Options{})
 	h.SetOOBManager(mgr, "dm-1")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -244,8 +237,8 @@ func TestHandleFullAccess_GrantPathDeniedKeepsLocked(t *testing.T) {
 	h.handleFullAccess(ctx, bot, "dm-1", "user-1", "/full-access grant 1m")
 
 	pending := waitForPending(t, mgr, "user-1", 1, 2*time.Second)
-	if !h.routeOOBApprovalReply(ctx, bot, "dm-1", "user-1", "/deny "+pending[0].ID) {
-		t.Fatalf("/deny was not consumed")
+	if !h.routeOOBApprovalReply(ctx, bot, "dm-1", "user-1", "/approval deny "+pending[0].ID) {
+		t.Fatalf("/approval deny was not consumed")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -257,3 +250,49 @@ func TestHandleFullAccess_GrantPathDeniedKeepsLocked(t *testing.T) {
 	}
 }
 
+// TestHandleFullAccess_GrantPromptIsTextOnly verifies that the
+// /full-access grant path emits a plain text `/approval` prompt and
+// does NOT post an Adaptive Card. This is the Phase 2b invariant that
+// replaces the old bcrypt-PIN card.
+func TestHandleFullAccess_GrantPromptIsTextOnly(t *testing.T) {
+	srv, cardBodies, mu := newCardRecordingServer(t)
+	bot := ringcentral.NewBotClient(srv.URL, "bot-token")
+	bot.SetDMChatID("dm-1")
+	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
+
+	h := newTestHandler()
+	mgr := oob.New(oob.Options{})
+	h.SetOOBManager(mgr, "dm-1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	h.handleFullAccess(ctx, bot, "dm-1", "user-1", "/full-access grant 30s")
+
+	// Wait for the pending challenge to appear so we know the grant
+	// path executed and posted its prompt.
+	_ = waitForPending(t, mgr, "user-1", 1, 2*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*cardBodies) != 0 {
+		t.Fatalf("expected no Adaptive Card posts from /full-access grant, got %d: %v", len(*cardBodies), *cardBodies)
+	}
+}
+
+// waitForPending polls the manager until at least n challenges are
+// outstanding for the given requester (or the deadline elapses).
+func waitForPending(t *testing.T, mgr *oob.Manager, requesterID string, n int, timeout time.Duration) []*oob.Challenge {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		pending := mgr.PendingFor(requesterID)
+		if len(pending) >= n {
+			return pending
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waitForPending: expected %d pending for %s, have %d", n, requesterID, len(pending))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

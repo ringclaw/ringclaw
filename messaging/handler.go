@@ -62,12 +62,13 @@ type Handler struct {
 	trustedSenders  map[string]bool
 	allowAllSenders bool
 
-	// oobManager and ownerDMChatID power the Phase 2 PIN-gated approval
-	// flow. When oobManager is nil, all OOB call sites fall back to the
-	// Phase 1 behavior (warn-log owner cross-chat, env-only full-access
-	// acknowledgement). ownerDMChatID is the chat ID where challenge
-	// cards are delivered; empty disables OOB even when the manager is
-	// configured.
+	// oobManager and ownerDMChatID power the Phase 2b /approval flow.
+	// When oobManager is nil, /full-access is disabled and cross-chat
+	// actions skip the owner-DM notice (falling back to the Phase 1
+	// warn-log for cross-chat and env-only full-access
+	// acknowledgement). ownerDMChatID is the chat ID where /approval
+	// prompts and cross-chat notices are delivered; empty disables OOB
+	// even when the manager is configured.
 	oobManager     *oob.Manager
 	ownerDMChatID  string
 }
@@ -446,11 +447,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
-	// Phase 2 OOB approval interception. PIN replies are typed back into
-	// the bot DM (the same chat the challenge card was posted to). When
-	// the message matches a recognized approval shape we route it to the
-	// OOB manager and short-circuit normal agent dispatch so the PIN
-	// itself is never forwarded to the AI agent.
+	// Phase 2b OOB approval interception. `/approval <id>` and
+	// `/approval deny <id>` replies are typed back into the bot DM (the
+	// same chat the prompt was posted to). When the message matches a
+	// recognized approval shape we route it to the OOB manager and
+	// short-circuit normal agent dispatch so the slash command is never
+	// forwarded to the AI agent.
 	if h.routeOOBApprovalReply(ctx, client, chatID, post.CreatorID, text) {
 		return
 	}
@@ -565,11 +567,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	}
 }
 
-// routeOOBApprovalReply is the Phase 2 hook that consumes PIN replies in
-// the owner's bot DM before they reach the agent. Returns true when the
-// message was handled (caller must short-circuit). Restricted to bot DM
-// to keep PINs out of group chat history; replies in any other chat
-// fall through unchanged.
+// routeOOBApprovalReply is the Phase 2b hook that consumes `/approval`
+// replies in the owner's bot DM before they reach the agent. Returns
+// true when the message was handled (caller must short-circuit).
+// Restricted to bot DM so a teammate cannot cancel another user's
+// pending challenge by guessing IDs in group chat; replies in any
+// other chat fall through unchanged.
 func (h *Handler) routeOOBApprovalReply(ctx context.Context, client *ringcentral.Client, chatID, senderID, text string) bool {
 	mgr := h.OOBManager()
 	if mgr == nil {

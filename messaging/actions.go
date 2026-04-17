@@ -13,6 +13,11 @@ import (
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
+// crossChatNoticeTimeout bounds how long we let the best-effort
+// owner-DM notification take before giving up. Declared as a var so
+// tests can shrink the wait without changing production behavior.
+var crossChatNoticeTimeout = 5 * time.Second
+
 // AgentAction represents a parsed action from the agent's response.
 type AgentAction struct {
 	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE"
@@ -138,13 +143,14 @@ func parseActionParams(s string) []keyValue {
 // in the origin chat to prevent lateral movement / data exfiltration
 // (Finding #5 in the security review).
 //
-// OOB and OwnerDMChat are the Phase 2 wiring for PIN-gated approvals.
-// When OOB is non-nil and OwnerDMChat is set, owner-initiated cross-chat
-// actions (where chatid != origin) are gated on a PIN approval card
-// posted to the owner's bot DM. RequesterID identifies the originating
-// user for the approval cache key. Leaving OOB nil reverts to the
-// Phase 1 warn-log behavior so library callers (tests, /api/send) keep
-// working without forcing every entry point through OOB plumbing.
+// OwnerDMChat and RequesterID drive the Phase 2b cross-chat
+// notification: when an owner-initiated action is delivered to a chat
+// other than the origin AND other than the owner's own DM, a
+// metadata-only heads-up is posted to the owner DM so the operator
+// has an audit trail in their own timeline. OOB is retained so the
+// rest of the system (notably the /full-access command) can still
+// access the manager through ActionContext, but ExecuteAgentActions
+// itself does not consult it.
 type ActionContext struct {
 	OriginIsOwner bool
 	OOB           *oob.Manager
@@ -157,6 +163,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 	var results []string
 	for _, a := range actions {
 		targetChat := chatID
+		crossChat := false
 		if cid := a.Params["chatid"]; cid != "" {
 			if !opts.OriginIsOwner {
 				slog.Warn("action: ignoring chatid override from non-owner sender; forcing origin chat",
@@ -168,25 +175,12 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					results = append(results, fmt.Sprintf("Failed to resolve chat '%s': %v", cid, err))
 					continue
 				}
-				if resolved != chatID {
-					approved, gateErr := authorizeCrossChat(ctx, opts, replyClient, a.Type, chatID, resolved)
-					if gateErr != nil {
-						slog.Error("action: cross-chat OOB error",
-							"type", a.Type, "from", chatID, "to", resolved, "error", gateErr)
-						results = append(results, fmt.Sprintf("Cross-chat %s blocked: %v", a.Type, gateErr))
-						continue
-					}
-					if !approved {
-						slog.Warn("action: cross-chat dispatch denied by OOB",
-							"type", a.Type, "from", chatID, "to", resolved)
-						results = append(results, fmt.Sprintf("Cross-chat %s requires PIN approval (denied or expired).", a.Type))
-						continue
-					}
-				}
 				targetChat = resolved
+				crossChat = resolved != chatID
 			}
 		}
 
+		dispatched := false
 		switch a.Type {
 		case "NOTE":
 			title := a.Params["title"]
@@ -206,6 +200,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				slog.Error("action: publish note failed", "noteID", note.ID, "error", pubErr)
 			}
 			slog.Info("action: created note", "noteID", note.ID, "chatID", targetChat, "title", title)
+			dispatched = true
 
 		case "TASK":
 			subject := a.Params["subject"]
@@ -229,6 +224,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			slog.Info("action: created task", "taskID", task.ID, "chatID", targetChat, "subject", subject)
+			dispatched = true
 
 		case "EVENT":
 			title := a.Params["title"]
@@ -267,6 +263,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			slog.Info("action: created adaptive card", "cardID", card.ID, "chatID", targetChat)
+			dispatched = true
 
 		case "MESSAGE":
 			body := strings.TrimSpace(a.Body)
@@ -279,6 +276,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			slog.Info("action: sent message", "chatID", targetChat, "text", util.Truncate(body, 60))
+			dispatched = true
 
 		default:
 			slog.Warn("action: unknown action type, sending body as message", "type", a.Type)
@@ -290,58 +288,67 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			}
 			results = append(results, fmt.Sprintf("Unknown action type: %s", a.Type))
 		}
+
+		if dispatched && crossChat {
+			notifyCrossChat(replyClient, opts, a.Type, chatID, targetChat)
+		}
 	}
 	return results
 }
 
-// crossChatApprovalTTL bounds how long we wait for the operator to enter
-// the PIN before the cross-chat action gives up. Five minutes matches
-// oob.DefaultChallengeTTL but is restated here so changing one does not
-// silently change the other. Declared as a var (not const) so tests can
-// shorten the wait without touching production behavior.
-var crossChatApprovalTTL = 5 * time.Minute
-
-// authorizeCrossChat resolves the OOB gate decision for a single
-// cross-chat action. Returns (true, nil) when the action may proceed
-// (manager not configured -> Phase 1 warn-log fallback, or operator
-// approved the PIN challenge). Returns (false, nil) when the operator
-// denied or the challenge expired. Non-nil err signals an unexpected
-// failure that should be surfaced to the caller.
-func authorizeCrossChat(ctx context.Context, opts ActionContext, replyClient *ringcentral.Client, actionType, originChat, resolvedChat string) (bool, error) {
-	if opts.OOB == nil || opts.OwnerDMChat == "" {
-		// Phase 1 fallback: log loudly so audit trails still capture the
-		// dispatch even when no operator is on-call to type a PIN.
-		slog.Warn("action: owner cross-chat dispatch (OOB not configured)",
-			"type", actionType, "from", originChat, "to", resolvedChat)
-		return true, nil
+// notifyCrossChat posts a metadata-only heads-up to the owner's bot
+// DM when an AI-triggered cross-chat ACTION has just been dispatched.
+// It is best-effort: any failure is logged but does not roll back the
+// already-executed action, and the notice is sent asynchronously so
+// ExecuteAgentActions does not block on the network round-trip.
+//
+// The notice intentionally carries no body/title/content — just the
+// action type, requester, timestamp and the origin / target chat IDs.
+// The operator has to open the target chat (or the audit log) to see
+// what was actually written. This matches the Phase 2b decision to
+// trade confirmation-in-advance for visibility-after-the-fact.
+//
+// A target chat that equals the owner's own DM is skipped: the
+// operator already sees the action land in their own timeline and a
+// duplicate notice would be noise.
+func notifyCrossChat(replyClient *ringcentral.Client, opts ActionContext, actionType, originChat, targetChat string) {
+	if opts.OwnerDMChat == "" {
+		return
 	}
-	intent := fmt.Sprintf("%s cross-chat from %s to %s", actionType, originChat, resolvedChat)
-	requesterID := opts.RequesterID
-	if requesterID == "" {
-		requesterID = "unknown"
+	if targetChat == opts.OwnerDMChat {
+		return
 	}
-	approved, err := opts.OOB.Authorize(ctx, oob.AuthorizeOptions{
-		RequesterID:  requesterID,
-		Intent:       intent,
-		OriginChatID: originChat,
-		OwnerDMChat:  opts.OwnerDMChat,
-		Client:       newOOBClient(replyClient),
-		TTL:          crossChatApprovalTTL,
-	})
-	if err != nil {
-		// Treat ErrChallengeExpired as a non-error denial so the result
-		// message reads "denied or expired" rather than surfacing the
-		// internal sentinel to the user.
-		if err == oob.ErrChallengeExpired {
-			return false, nil
+	requester := opts.RequesterID
+	if requester == "" {
+		requester = "unknown"
+	}
+	msg := fmt.Sprintf("[notice] %s by %s at %s: origin=%s target=%s",
+		actionType, requester, time.Now().UTC().Format(time.RFC3339),
+		originChat, targetChat,
+	)
+	client := newOOBClient(replyClient)
+	if client == nil {
+		slog.Warn("action: cross-chat notice skipped; no reply client",
+			"type", actionType, "from", originChat, "to", targetChat)
+		return
+	}
+	go func() {
+		// Detached from the caller's context so a reply-scoped cancel
+		// does not kill the best-effort notice mid-flight. Capped at
+		// crossChatNoticeTimeout so a stuck RC endpoint cannot leak
+		// goroutines.
+		sendCtx, cancel := context.WithTimeout(context.Background(), crossChatNoticeTimeout)
+		defer cancel()
+		if err := client.SendText(sendCtx, opts.OwnerDMChat, msg); err != nil {
+			slog.Warn("action: cross-chat notice delivery failed",
+				"type", actionType, "from", originChat, "to", targetChat,
+				"ownerDMChat", opts.OwnerDMChat, "error", err)
+			return
 		}
-		return false, err
-	}
-	if approved {
-		slog.Info("action: cross-chat dispatch approved by OOB",
-			"type", actionType, "from", originChat, "to", resolvedChat, "requesterID", requesterID)
-	}
-	return approved, nil
+		slog.Info("action: cross-chat notice sent",
+			"type", actionType, "from", originChat, "to", targetChat,
+			"ownerDMChat", opts.OwnerDMChat, "requesterID", requester)
+	}()
 }
 
 // extractChatID extracts a numeric chat ID from various formats:

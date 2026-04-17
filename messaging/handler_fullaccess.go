@@ -12,22 +12,22 @@ import (
 )
 
 // FullAccessCommandPrefix is the slash prefix that toggles ACP
-// full-access via the OOB PIN flow. The command is intentionally only
-// honored from the bot's DM with the trusted owner so the PIN approval
-// stays on the same secured channel as the OOB challenges themselves.
+// full-access via the `/approval` two-step flow. The command is
+// intentionally only honored from the bot's DM with the trusted
+// owner so the approval round-trip stays on the secured channel.
 const FullAccessCommandPrefix = "/full-access"
 
 // fullAccessDefaultGrant is the TTL applied when the operator runs
-// `/full-access grant` without an explicit duration. Five minutes is
-// short enough to limit blast radius if the operator forgets to
-// /full-access revoke afterwards but long enough for a typical
-// interactive task.
-const fullAccessDefaultGrant = 5 * time.Minute
+// `/full-access grant` without an explicit duration. Twenty-four
+// hours covers the typical "I'll be working with the AI today"
+// workflow; oversized durations are clamped at fullAccessMaxGrant.
+const fullAccessDefaultGrant = 24 * time.Hour
 
-// fullAccessMaxGrant caps any explicit duration the operator passes to
-// /full-access grant. We refuse longer windows so a single approval
-// cannot leave the bot unguarded for an entire workday.
-const fullAccessMaxGrant = 4 * time.Hour
+// fullAccessMaxGrant caps any explicit duration the operator passes.
+// Thirty days accommodates long-running unattended scenarios (CI,
+// persistent scratch boxes) while still forcing a deliberate renewal
+// rather than an "effectively forever" toggle.
+const fullAccessMaxGrant = 30 * 24 * time.Hour
 
 // IsFullAccessCommand reports whether text begins with the
 // /full-access slash command (with optional subcommand arguments).
@@ -43,15 +43,16 @@ func IsFullAccessCommand(text string) bool {
 //
 //	/full-access                 → status (same as `status`)
 //	/full-access status          → show current grant state
-//	/full-access grant [dur]     → request a TTL unlock; PIN approval
-//	                               is performed via the standard OOB
-//	                               challenge in this same DM
+//	/full-access grant [dur]     → issue an `/approval <id>` challenge
+//	                               in this DM; the grant activates only
+//	                               after the operator replies with
+//	                               `/approval <id>`
 //	/full-access revoke          → clear any active grant immediately
 //
 // The function only acts when invoked from the bot's DM with the
-// trusted owner — the same chat that receives OOB challenge cards.
-// Group-chat invocations are refused with an explanatory message so
-// operators are not surprised when the command appears to do nothing.
+// trusted owner — the same chat that receives the `/approval`
+// challenge text. Group-chat invocations are refused with an
+// explanatory message.
 func (h *Handler) handleFullAccess(ctx context.Context, client *ringcentral.Client, chatID, requesterID, text string) {
 	mgr := h.OOBManager()
 	if mgr == nil {
@@ -79,58 +80,93 @@ func (h *Handler) handleFullAccess(ctx context.Context, client *ringcentral.Clie
 			logSendError(SendTextReply(ctx, client, chatID, "Invalid duration: "+err.Error()))
 			return
 		}
-		// Async OOB round-trip: the operator must reply with the PIN
-		// (in this same DM) for the grant to take effect. Run on a
-		// background goroutine so the slash-command handler returns
-		// quickly and the WebSocket loop can keep dispatching.
-		go h.runFullAccessGrant(ctx, client, chatID, requesterID, dur)
+		h.startFullAccessGrant(ctx, client, chatID, requesterID, dur)
 	default:
 		logSendError(SendTextReply(ctx, client, chatID,
 			"Usage: `/full-access status` | `/full-access grant [duration]` | `/full-access revoke`"))
 	}
 }
 
-// runFullAccessGrant drives the OOB challenge → PIN approval round-trip
-// and, on success, calls Manager.GrantFullAccess for the requested TTL.
-// All errors are reported back to the same DM so the operator gets a
-// clear acknowledgement either way.
-func (h *Handler) runFullAccessGrant(ctx context.Context, client *ringcentral.Client, chatID, requesterID string, dur time.Duration) {
+// startFullAccessGrant issues a fresh OOB challenge, posts the
+// `/approval <id>` prompt to the owner DM, and drives the Wait/Approve
+// loop asynchronously. The activation itself happens when the
+// approval reply resolves the challenge — see awaitFullAccessGrant
+// below.
+func (h *Handler) startFullAccessGrant(ctx context.Context, client *ringcentral.Client, chatID, requesterID string, dur time.Duration) {
 	mgr := h.OOBManager()
 	if mgr == nil {
 		logSendError(SendTextReply(ctx, client, chatID, "OOB manager went away before approval; aborted."))
 		return
 	}
 	intent := fmt.Sprintf("grant ACP full-access for %s", dur)
-	approved, err := mgr.Authorize(ctx, oob.AuthorizeOptions{
-		RequesterID:  requesterID,
-		Intent:       intent,
-		OriginChatID: chatID,
-		OwnerDMChat:  chatID,
-		Client:       newOOBClient(client),
-		// SkipCache keeps every /full-access invocation explicit:
-		// a recently-approved grant must not bypass the PIN prompt
-		// because the "intent" includes a fresh duration each time.
-		SkipCache: true,
-	})
+	c, err := mgr.Issue(requesterID, intent, chatID, chatID, oob.IssueOptions{TTL: oob.DefaultChallengeTTL})
 	if err != nil {
-		slog.Warn("full-access OOB authorize failed",
-			"component", "handler",
-			"requesterID", requesterID,
-			"error", err,
-		)
+		slog.Error("full-access: issue challenge failed",
+			"component", "handler", "requesterID", requesterID, "error", err)
 		logSendError(SendTextReply(ctx, client, chatID,
 			fmt.Sprintf("Full-access grant aborted: %v", err)))
 		return
 	}
-	if !approved {
+	if err := oob.PostChallengePrompt(ctx, newOOBClient(client), c, dur.String()); err != nil {
+		slog.Error("full-access: post challenge prompt failed",
+			"component", "handler", "challengeID", c.ID, "error", err)
+		// Best-effort cleanup: resolve the challenge as denied so the
+		// awaitFullAccessGrant goroutine does not block for the full
+		// TTL on a prompt that never reached the operator.
+		mgr.Deny(c.ID)
+		logSendError(SendTextReply(ctx, client, chatID,
+			fmt.Sprintf("Full-access grant aborted: %v", err)))
+		return
+	}
+	logSendError(SendTextReply(ctx, client, chatID,
+		"Full-access grant requested. Confirm via /approval in owner DM."))
+
+	go h.awaitFullAccessGrant(client, chatID, c, dur)
+}
+
+// awaitFullAccessGrant blocks on the challenge resolution and, on
+// approval, flips the manager into full-access for dur. All outcomes
+// (approved, denied, expired) emit a confirmation message to the
+// owner DM so the operator has a clear acknowledgement either way.
+//
+// The background context here is intentional: the originating slash
+// command returned as soon as the challenge was posted, so the
+// goroutine must survive independently of the caller's request scope.
+// We cap the wait with the challenge's own ExpiresAt + a small grace
+// window via context.WithTimeout.
+func (h *Handler) awaitFullAccessGrant(client *ringcentral.Client, chatID string, c *oob.Challenge, dur time.Duration) {
+	mgr := h.OOBManager()
+	if mgr == nil {
+		return
+	}
+	timeout := time.Until(c.ExpiresAt) + 5*time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	approved, err := c.Wait(ctx, mgr)
+	switch {
+	case err != nil && err != oob.ErrChallengeExpired:
+		slog.Warn("full-access: challenge wait failed",
+			"component", "handler", "challengeID", c.ID, "error", err)
+		logSendError(SendTextReply(ctx, client, chatID,
+			fmt.Sprintf("Full-access grant aborted: %v", err)))
+		return
+	case err == oob.ErrChallengeExpired:
+		logSendError(SendTextReply(ctx, client, chatID,
+			fmt.Sprintf("Full-access grant expired without approval (challenge %s).", c.ID)))
+		return
+	case !approved:
 		logSendError(SendTextReply(ctx, client, chatID, "Full-access grant denied."))
 		return
 	}
 	mgr.GrantFullAccess(dur)
 	expiry := mgr.FullAccessExpiresAt()
 	logSendError(SendTextReply(ctx, client, chatID,
-		fmt.Sprintf("Full-access granted for %s (until %s).",
-			dur, expiry.Format(time.RFC3339))))
+		fmt.Sprintf("Full-access granted until %s.",
+			expiry.Format(time.RFC3339))))
 }
 
 func formatFullAccessStatus(mgr *oob.Manager) string {
@@ -144,10 +180,10 @@ func formatFullAccessStatus(mgr *oob.Manager) string {
 		exp.Format(time.RFC3339), remaining)
 }
 
-// parseGrantDuration parses an optional duration argument. Empty input
-// yields fullAccessDefaultGrant; oversized inputs are clamped at
-// fullAccessMaxGrant and returned with no error so operators do not
-// have to guess the cap.
+// parseGrantDuration parses an optional duration argument. Empty
+// input yields fullAccessDefaultGrant; oversized inputs are clamped
+// at fullAccessMaxGrant and returned with no error so operators do
+// not have to guess the cap.
 func parseGrantDuration(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
