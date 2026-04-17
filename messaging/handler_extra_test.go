@@ -240,7 +240,7 @@ func TestExecuteAgentActions_MessageAction(t *testing.T) {
 		{Type: "MESSAGE", Params: map[string]string{}, Body: "hello from action"},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no error results, got %v", results)
 	}
@@ -269,7 +269,7 @@ func TestExecuteAgentActions_UnknownType(t *testing.T) {
 		{Type: "UNKNOWN", Params: map[string]string{}, Body: "some body"},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) == 0 {
 		t.Error("expected result for unknown action type")
 	}
@@ -289,7 +289,7 @@ func TestExecuteAgentActions_EmptyMessageBody(t *testing.T) {
 		{Type: "MESSAGE", Params: map[string]string{}, Body: "   "},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no results for empty body, got %v", results)
 	}
@@ -307,7 +307,7 @@ func TestExecuteAgentActions_EmptyEventParams(t *testing.T) {
 		{Type: "EVENT", Params: map[string]string{"title": "Meeting"}, Body: ""},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no results for incomplete event, got %v", results)
 	}
@@ -324,7 +324,7 @@ func TestExecuteAgentActions_EmptyTaskSubject(t *testing.T) {
 		{Type: "TASK", Params: map[string]string{}, Body: ""},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no results for empty task subject, got %v", results)
 	}
@@ -341,7 +341,7 @@ func TestExecuteAgentActions_InvalidCardJSON(t *testing.T) {
 		{Type: "CARD", Params: map[string]string{}, Body: "not valid json"},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) == 0 {
 		t.Error("expected error result for invalid JSON")
 	}
@@ -361,7 +361,7 @@ func TestExecuteAgentActions_EmptyCardBody(t *testing.T) {
 		{Type: "CARD", Params: map[string]string{}, Body: ""},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no results for empty card body, got %v", results)
 	}
@@ -650,7 +650,7 @@ func TestExecuteAgentActions_NoteAction(t *testing.T) {
 		{Type: "NOTE", Params: map[string]string{"title": "Meeting Notes"}, Body: "Key decisions..."},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no error results, got %v", results)
 	}
@@ -687,7 +687,7 @@ func TestExecuteAgentActions_NoteDefaultTitle_Extra(t *testing.T) {
 		{Type: "NOTE", Params: map[string]string{}, Body: "content"},
 	}
 
-	ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if noteTitle != "Note" {
 		t.Errorf("expected default title 'Note', got %q", noteTitle)
 	}

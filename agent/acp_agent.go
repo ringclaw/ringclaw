@@ -159,6 +159,50 @@ type permissionOption struct {
 	Kind     string `json:"kind"`
 }
 
+// fullAccessAckEnv must be set to "1" for the full_access config flag to be
+// honored when no explicit acknowledgement has been configured via
+// SetFullAccessAck. Without one of these, ACP sessions stay in the default
+// guarded mode where every MCP tool call requires explicit approval.
+const fullAccessAckEnv = "RINGCLAW_FULL_ACCESS_ACK"
+
+var (
+	fullAccessAckMu       sync.RWMutex
+	fullAccessAckOverride *bool // nil = fall back to env var
+)
+
+// SetFullAccessAck installs a configured acknowledgement for ACP
+// `full_access` mode. When non-nil, this WINS over the
+// RINGCLAW_FULL_ACCESS_ACK env var. Pass true to acknowledge, false to
+// explicitly refuse (which suppresses any env-var override).
+//
+// Intended to be called once from cmd/start after config load. Pass a
+// fresh value (or call ResetFullAccessAck) in tests to avoid leakage.
+func SetFullAccessAck(ack bool) {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessAckOverride = &ack
+}
+
+// ResetFullAccessAck clears any configured acknowledgement so the env
+// var becomes the source of truth again. Test-only helper.
+func ResetFullAccessAck() {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessAckOverride = nil
+}
+
+// isFullAccessAcked resolves the effective acknowledgement. Config
+// (via SetFullAccessAck) wins over the RINGCLAW_FULL_ACCESS_ACK env var.
+func isFullAccessAcked() bool {
+	fullAccessAckMu.RLock()
+	override := fullAccessAckOverride
+	fullAccessAckMu.RUnlock()
+	if override != nil {
+		return *override
+	}
+	return os.Getenv(fullAccessAckEnv) == "1"
+}
+
 // NewACPAgent creates a new ACP agent.
 func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	if cfg.Command == "" {
@@ -166,6 +210,15 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	}
 	if cfg.Cwd == "" {
 		cfg.Cwd = defaultWorkspace()
+	}
+	fullAccess := cfg.FullAccess
+	if fullAccess && !isFullAccessAcked() {
+		slog.Warn("full_access requested but not acknowledged: refusing to disable MCP guardrails. Set full_access_ack=true in config.json (preferred) or export RINGCLAW_FULL_ACCESS_ACK=1.",
+			"component", "acp", "command", cfg.Command, "ack_env", fullAccessAckEnv, "ack_config", "full_access_ack")
+		fullAccess = false
+	} else if fullAccess {
+		slog.Warn("full_access ENABLED: agent will execute MCP tool calls without per-call approval",
+			"component", "acp", "command", cfg.Command)
 	}
 	return &ACPAgent{
 		command:      cfg.Command,
@@ -175,7 +228,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		cwd:          cfg.Cwd,
 		env:          cfg.Env,
 		allowWrite:   cfg.AllowWrite,
-		fullAccess:   cfg.FullAccess,
+		fullAccess:   fullAccess,
 		sessions:     make(map[string]string),
 		pending:      make(map[int64]chan *rpcResponse),
 		notifyCh:     make(map[string]chan *sessionUpdate),
@@ -311,7 +364,13 @@ func (a *ACPAgent) Stop() {
 }
 
 // SetCwd changes the working directory for subsequent sessions.
+// Rejects paths outside the configured workspace root as a defense-in-depth
+// against bypasses of the /cwd handler.
 func (a *ACPAgent) SetCwd(cwd string) {
+	if err := EnsurePathInWorkspace(cwd); err != nil {
+		slog.Warn("acp agent cwd rejected", "component", "acp", "cwd", cwd, "error", err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.cwd == cwd {
@@ -483,7 +542,8 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 			slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
 				"component", "acp", "session", sessionResult.SessionID, "error", err)
 		} else {
-			slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
+			slog.Warn("ACP session granted full-access (MCP guardrails disabled for this session)",
+				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "conversation", conversationID)
 		}
 	}
 

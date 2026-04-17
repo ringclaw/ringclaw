@@ -36,6 +36,12 @@ func ParseLogLevel(s string) slog.Level {
 type Config struct {
 	DefaultAgent   string                 `json:"default_agent"`
 	AgentWorkspace string                 `json:"agent_workspace,omitempty"`
+	// AgentAllowWorkspaceList is the list of directory roots that /cwd
+	// and Agent.SetCwd are allowed to target. ~/.ringclaw/workspace and
+	// the legacy AgentWorkspace are always implicitly merged in by
+	// cmd/start so the agent's default cwd is admissible. See
+	// docs/security/index.md "Workspace Path Restrictions".
+	AgentAllowWorkspaceList []string `json:"agent_allow_workspace_list,omitempty"`
 	APIAddr        string                 `json:"api_addr,omitempty"`
 	LogLevel       string                 `json:"log_level,omitempty"`  // "debug", "info" (default), "warn", "error"
 	LogFormat      string                 `json:"log_format,omitempty"` // "text" (default), "json", "color"
@@ -43,6 +49,12 @@ type Config struct {
 	RC             RCConfig               `json:"ringcentral,omitempty"`
 	Heartbeat      HeartbeatConfig        `json:"heartbeat,omitempty"`
 	Cron           CronConfig             `json:"cron,omitempty"`
+	// FullAccessAck acknowledges that ACP agents with `full_access: true`
+	// will execute MCP tool calls without per-call approval. When set
+	// (true or false), this value WINS over the RINGCLAW_FULL_ACCESS_ACK
+	// env var. When nil (omitted), the env var is consulted as a
+	// fallback. See docs/security/index.md "ACP Full-Access Mode".
+	FullAccessAck *bool `json:"full_access_ack,omitempty"`
 }
 
 // HeartbeatConfig holds heartbeat runner configuration.
@@ -213,6 +225,17 @@ func loadEnv(cfg *Config) {
 	}
 	if v := os.Getenv("RINGCLAW_AGENT_WORKSPACE"); v != "" {
 		cfg.AgentWorkspace = v
+	}
+	if v := os.Getenv("RINGCLAW_AGENT_ALLOW_WORKSPACE_LIST"); v != "" {
+		parts := strings.Split(v, ",")
+		list := make([]string, 0, len(parts))
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				list = append(list, part)
+			}
+		}
+		cfg.AgentAllowWorkspaceList = list
 	}
 	if v := os.Getenv("RINGCLAW_API_ADDR"); v != "" {
 		cfg.APIAddr = v

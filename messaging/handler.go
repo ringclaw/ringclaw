@@ -52,17 +52,66 @@ type Handler struct {
 
 	groupSummaryGroupID      string
 	groupSummaryMessageLimit int
+
+	// trustedSenders is the set of user IDs allowed to drive the agent.
+	// Mirrors the Monitor's allowlist as a defense-in-depth check so callers
+	// that bypass the WebSocket path (cron, /api/send, tests) cannot inject
+	// posts from arbitrary CreatorIDs. Empty + allowAllSenders=false means
+	// only the bot's own posts and configured cron jobs may dispatch.
+	trustedSenders  map[string]bool
+	allowAllSenders bool
 }
 
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc, version string) *Handler {
 	return &Handler{
-		agents:      make(map[string]agent.Agent),
-		factory:     factory,
-		saveDefault: saveDefault,
-		version:     version,
-		startTime:   time.Now(),
+		agents:          make(map[string]agent.Agent),
+		factory:         factory,
+		saveDefault:     saveDefault,
+		version:         version,
+		startTime:       time.Now(),
+		trustedSenders:  make(map[string]bool),
+		allowAllSenders: true, // legacy-compatible default; cmd/start.go flips this off
 	}
+}
+
+// AddTrustedSender adds a user ID to the handler's defense-in-depth sender
+// allowlist. Mirrors Monitor.AddTrustedSender; both layers must agree before
+// a message is dispatched to an agent.
+func (h *Handler) AddTrustedSender(userID string) {
+	if userID == "" {
+		return
+	}
+	h.mu.Lock()
+	if h.trustedSenders == nil {
+		h.trustedSenders = make(map[string]bool)
+	}
+	h.trustedSenders[userID] = true
+	h.mu.Unlock()
+}
+
+// EnforceSenderAllowlist switches the handler into strict mode: only IDs on
+// the trusted senders list may drive an agent. Should be called by production
+// startup code after AddTrustedSender has populated the allowlist.
+func (h *Handler) EnforceSenderAllowlist() {
+	h.mu.Lock()
+	h.allowAllSenders = false
+	h.mu.Unlock()
+}
+
+// isTrustedSender reports whether a given creator ID may drive the agent.
+// Returns true when allow-all mode is enabled, or when the ID is on the
+// trusted senders allowlist. An empty ID is treated as untrusted.
+func (h *Handler) isTrustedSender(creatorID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.allowAllSenders {
+		return true
+	}
+	if creatorID == "" {
+		return false
+	}
+	return h.trustedSenders[creatorID]
 }
 
 // cleanSeenMsgs removes entries older than 5 minutes from the dedup cache.
@@ -347,6 +396,15 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	chatID := post.GroupID
 	slog.Info("received message", "component", "handler", "creatorID", post.CreatorID, "chatID", chatID, "text", util.Truncate(text, 80))
 
+	// Defense-in-depth sender allowlist. Monitor already filters at the
+	// WebSocket layer; this re-check protects callers that bypass Monitor
+	// (cron jobs, /api/send, tests) from spoofing CreatorID.
+	if !h.isTrustedSender(post.CreatorID) {
+		slog.Warn("dropping message from untrusted sender",
+			"component", "handler", "creatorID", post.CreatorID, "chatID", chatID)
+		return
+	}
+
 	// In bot group chats (not bot DM), restrict privileged commands to the bot owner
 	isBotGroup := client.IsBot() && !client.IsBotDM(chatID)
 	if isBotGroup && isPrivilegedCommand(text) {
@@ -454,6 +512,21 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	}
 }
 
+// conversationIDForPost returns the session key used to address a single
+// agent conversation. The key MUST be unique per (chatID, creatorID) pair
+// so that:
+//
+//  1. Different users in the same group chat get isolated agent contexts
+//     (no piggybacking on another user's prior session). This is the
+//     mitigation referenced in security review Finding #4.
+//  2. The same user in different chats does not leak conversation history
+//     across chats.
+//  3. Bot DMs and group chats live in distinct namespaces so renaming a
+//     chat ID can never collide with an existing DM session.
+//
+// Any caller building an ad-hoc conversationID must preserve these
+// invariants; in particular, do not reduce the key to just the chat or
+// just the user.
 func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) string {
 	chatID := strings.TrimSpace(post.GroupID)
 	creatorID := strings.TrimSpace(post.CreatorID)
@@ -551,11 +624,15 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, actionClient *ringcentral.Client, post ringcentral.Post, reply, placeholderID string) {
 	chatID := post.GroupID
 
-	// Parse and execute any ACTION blocks from the agent's response
+	// Parse and execute any ACTION blocks from the agent's response.
+	// originIsOwner mirrors the trusted-senders allowlist so non-owner posts
+	// cannot pivot the agent's reply into a different chat (Finding #5).
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
 		reply = cleanReply
-		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions)
+		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
+			OriginIsOwner: h.isTrustedSender(post.CreatorID),
+		})
 		if len(results) > 0 {
 			defer func() {
 				logSendError(SendTextReply(ctx, client, chatID, strings.Join(results, "\n")))

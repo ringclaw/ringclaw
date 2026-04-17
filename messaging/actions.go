@@ -127,19 +127,40 @@ func parseActionParams(s string) []keyValue {
 	return result
 }
 
+// ActionContext describes who sent the originating message so that
+// ExecuteAgentActions can decide whether to honor cross-chat targeting.
+//
+// OriginIsOwner is true when the message originated from the trusted machine
+// owner (Private App owner OR an entry in source_user_ids). When false, any
+// AI-emitted `chatid=` parameter is ignored and the action is forced to run
+// in the origin chat to prevent lateral movement / data exfiltration
+// (Finding #5 in the security review).
+type ActionContext struct {
+	OriginIsOwner bool
+}
+
 // ExecuteAgentActions executes parsed actions against the RC API.
-func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcentral.Client, chatID string, actions []AgentAction) []string {
+func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcentral.Client, chatID string, actions []AgentAction, opts ActionContext) []string {
 	var results []string
 	for _, a := range actions {
 		targetChat := chatID
 		if cid := a.Params["chatid"]; cid != "" {
-			resolved, err := resolveChatParam(ctx, actionClient, cid, chatID)
-			if err != nil {
-				slog.Error("action: failed to resolve chatid", "chatid", cid, "error", err)
-				results = append(results, fmt.Sprintf("Failed to resolve chat '%s': %v", cid, err))
-				continue
+			if !opts.OriginIsOwner {
+				slog.Warn("action: ignoring chatid override from non-owner sender; forcing origin chat",
+					"type", a.Type, "requested", cid, "origin", chatID)
+			} else {
+				resolved, err := resolveChatParam(ctx, actionClient, cid, chatID)
+				if err != nil {
+					slog.Error("action: failed to resolve chatid", "chatid", cid, "error", err)
+					results = append(results, fmt.Sprintf("Failed to resolve chat '%s': %v", cid, err))
+					continue
+				}
+				if resolved != chatID {
+					slog.Warn("action: owner cross-chat dispatch",
+						"type", a.Type, "from", chatID, "to", resolved)
+				}
+				targetChat = resolved
 			}
-			targetChat = resolved
 		}
 
 		switch a.Type {

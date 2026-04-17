@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // AgentInfo holds metadata about an agent for logging/debugging.
@@ -26,6 +28,146 @@ func (i AgentInfo) String() string {
 		s += fmt.Sprintf(", pid=%d", i.PID)
 	}
 	return s
+}
+
+// workspaceRoots is the configured allowlist of roots for /cwd and
+// Agent.SetCwd. When non-empty, every requested cwd must resolve to a path
+// inside at least one of these directories. When empty (the test default),
+// the allowlist check is disabled for backward compatibility.
+//
+// The list is sourced from cfg.AgentAllowWorkspaceList plus implicit
+// defaults (~/.ringclaw/workspace and the legacy cfg.AgentWorkspace),
+// resolved by cmd/start.
+var (
+	workspaceRootsMu sync.RWMutex
+	workspaceRoots   []string
+)
+
+// SetWorkspaceRoots configures the allowlist of roots for cwd changes.
+// Production code should call this once at startup with the union of
+// cfg.AgentAllowWorkspaceList, ~/.ringclaw/workspace, and the legacy
+// cfg.AgentWorkspace. Each entry is resolved to its absolute, symlink-
+// cleaned form so containment checks are stable. Empty input clears the
+// allowlist (disabled).
+func SetWorkspaceRoots(roots []string) {
+	cleaned := make([]string, 0, len(roots))
+	seen := make(map[string]struct{}, len(roots))
+	for _, raw := range roots {
+		root := strings.TrimSpace(raw)
+		if root == "" {
+			continue
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			slog.Warn("workspace root: filepath.Abs failed, using raw value", "component", "agent", "root", root, "error", err)
+			abs = root
+		}
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		if _, dup := seen[abs]; dup {
+			continue
+		}
+		seen[abs] = struct{}{}
+		cleaned = append(cleaned, abs)
+	}
+	workspaceRootsMu.Lock()
+	workspaceRoots = cleaned
+	workspaceRootsMu.Unlock()
+}
+
+// SetWorkspaceRoot is a single-root convenience wrapper around
+// SetWorkspaceRoots. Retained for callers/tests that only care about one
+// root.
+func SetWorkspaceRoot(root string) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		SetWorkspaceRoots(nil)
+		return
+	}
+	SetWorkspaceRoots([]string{root})
+}
+
+// WorkspaceRoots returns the configured allowlist, or nil if disabled.
+// The returned slice is a copy and safe to mutate.
+func WorkspaceRoots() []string {
+	workspaceRootsMu.RLock()
+	defer workspaceRootsMu.RUnlock()
+	if len(workspaceRoots) == 0 {
+		return nil
+	}
+	out := make([]string, len(workspaceRoots))
+	copy(out, workspaceRoots)
+	return out
+}
+
+// WorkspaceRoot returns the first configured allowlist root, or "" if
+// unset. Convenience for callers that only need a representative root
+// (e.g. a default cwd to chdir into).
+func WorkspaceRoot() string {
+	workspaceRootsMu.RLock()
+	defer workspaceRootsMu.RUnlock()
+	if len(workspaceRoots) == 0 {
+		return ""
+	}
+	return workspaceRoots[0]
+}
+
+// EnsurePathInWorkspace verifies that absPath is inside any of the
+// configured workspace roots. Returns nil when no roots are configured
+// (allowlist disabled), or when absPath equals / lives under at least
+// one root. Symlinks are resolved for any existing ancestor of the path
+// so the check survives operator paths under /var/folders ->
+// /private/var/folders style indirection.
+func EnsurePathInWorkspace(absPath string) error {
+	roots := WorkspaceRoots()
+	if len(roots) == 0 {
+		return nil
+	}
+	abs, err := filepath.Abs(absPath)
+	if err != nil {
+		return fmt.Errorf("resolve %q: %w", absPath, err)
+	}
+	abs = resolveExistingSymlinks(abs)
+	for _, root := range roots {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == ".." || strings.HasPrefix(rel, "../") {
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("path %q escapes configured workspace allowlist %v", absPath, roots)
+}
+
+// resolveExistingSymlinks walks up the path until an existing ancestor is
+// found, runs filepath.EvalSymlinks on that ancestor, and re-joins the
+// trailing components. This lets us evaluate paths that don't yet exist on
+// disk while still following symlinks on the parts that do.
+func resolveExistingSymlinks(abs string) string {
+	cur := abs
+	var trailing []string
+	for {
+		if _, err := os.Stat(cur); err == nil {
+			if cleaned, err := filepath.EvalSymlinks(cur); err == nil {
+				if len(trailing) == 0 {
+					return cleaned
+				}
+				parts := append([]string{cleaned}, trailing...)
+				return filepath.Join(parts...)
+			}
+			return abs
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs
+		}
+		trailing = append([]string{filepath.Base(cur)}, trailing...)
+		cur = parent
+	}
 }
 
 // defaultWorkspace returns ~/.ringclaw/workspace as the default working directory.

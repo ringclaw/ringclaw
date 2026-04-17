@@ -21,6 +21,90 @@ The server also validates the `Host` header to prevent DNS rebinding attacks —
 Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
 :::
 
+## Phase 1 Hardening: Configuration Changes
+
+Phase 1 of the Remote Control hardening review introduces **two new
+top-level `config.json` fields** (`agent_allow_workspace_list` and
+`full_access_ack`) and otherwise reuses fields that already existed in
+the schema, changing how they are interpreted at startup. It also adds
+two new environment variables as fallbacks. Operators upgrading from a
+previous release should review the table below — defaults marked
+"**new**" may change behavior even when `config.json` is left untouched.
+
+| Setting | Type | Where | Old default | New default | Operator override |
+|---------|------|-------|-------------|-------------|-------------------|
+| `ringcentral.source_user_ids` | `[]string` | `config.json` (also `RC_SOURCE_USER_IDS` env, comma-separated) | Empty list = **allow every sender** in any allowed chat | Empty list + Private App = **owner-only** (auto-injected). Empty list + no Private App = **deny all** with startup error | List numeric IDs / emails / phone numbers to add additional trusted senders. Email and phone require Private App with `ReadAccounts`. |
+| `agent_workspace` | `string` | `config.json` (also `RINGCLAW_AGENT_WORKSPACE` env) | Default cwd for agents (no allowlist enforcement) | **Unchanged behavior** as the default cwd, AND implicitly added to the cwd allowlist so the agent can chdir into it | Continues to control the initial cwd. To widen the allowlist, prefer the dedicated `agent_allow_workspace_list` field below. |
+| `agent_allow_workspace_list` | `[]string` | `config.json` (also `RINGCLAW_AGENT_ALLOW_WORKSPACE_LIST` env, comma-separated) | _did not exist_ | **new** — explicit list of directories that `/cwd` and `Agent.SetCwd` may target. Always merged with `~/.ringclaw/workspace` and (if set) `agent_workspace`; duplicates are dropped | List every subtree the AI agents are allowed to enter. Anything outside every entry is rejected at runtime. |
+| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` immediately enabled `session/set_mode "full-access"` on every new ACP session | `true` is **ignored** unless `full_access_ack` (config) or `RINGCLAW_FULL_ACCESS_ACK=1` (env) acknowledges it; otherwise downgraded with a `WARN` log | Set `full_access_ack: true` in `config.json` (preferred), or export `RINGCLAW_FULL_ACCESS_ACK=1`. |
+| `full_access_ack` | `*bool` | `config.json` (top-level) | _did not exist_ | **new** — `true` honors `full_access`, `false` explicitly refuses (and **suppresses any env-var override**), unset = fall back to env var | Preferred over the env var; lives under version control alongside the agent that needs it. |
+| `RINGCLAW_FULL_ACCESS_ACK` | env var | process environment | _did not exist_ | **new** — must equal `1` to honor any agent's `full_access: true` when `full_access_ack` is unset in `config.json` | Only consulted when `full_access_ack` is omitted from config. |
+
+Resolution order for `full_access_ack`: **config wins over env**. If
+`full_access_ack` is set in `config.json` (either `true` or `false`), the
+env var is ignored. This means an explicit `"full_access_ack": false`
+neutralizes a misplaced shell export.
+
+Behaviors implied by Phase 1 that have **no config knob** (intentionally
+not exposed yet):
+
+- The cross-chat `ACTION` lock is unconditional for non-owner senders.
+  There is no opt-out.
+- `cli_agent.Chat` always rejects empty `conversationID`.
+- The `/cwd` denylist (`.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`,
+  `.config/gcloud`) is hard-coded as a secondary check, even when the
+  `agent_workspace` allowlist would otherwise admit the path.
+
+::: warning
+After upgrading, operators who relied on the legacy "empty
+`source_user_ids` = allow everyone" behavior will see the bot drop
+**every** incoming message until they either (a) configure a Private App
+(the owner is auto-trusted) or (b) populate
+`ringcentral.source_user_ids`. The startup log line
+`sender allowlist is empty: ...` is the canonical signal for this case.
+:::
+
+## Mandatory Sender Allowlist
+
+When the `start` command boots, the WebSocket monitor and message handler
+both switch into **strict sender mode**: only the user IDs on the trusted
+allowlist may drive the AI agent. The allowlist is built from two sources:
+
+- The Private App owner's user ID (auto-injected when a Private App is
+  configured).
+- All entries in `ringcentral.source_user_ids` (resolved to numeric user IDs
+  on startup).
+
+If both sources are empty, the bot logs a startup error and **drops every
+incoming message** until the operator adds at least one trusted sender. This
+prevents the "any user in an allowed chat can run my AI agent" foot-gun
+called out as Finding #1 in the Remote Control security review.
+
+```yaml
+ringcentral:
+  source_user_ids:
+    - "+15551234567"       # phone number, resolved at boot
+    - alice@example.com    # email address, resolved via Private App directory
+    - "987654321"          # bare numeric extensionId / user ID
+```
+
+::: tip
+Email and phone-number entries require a Private App with the `ReadAccounts`
+permission so they can be resolved to numeric IDs. Without the Private App,
+list the numeric extensionIds directly.
+:::
+
+## Cross-Chat Action Lock
+
+`ACTION` blocks emitted by the AI may carry a `chatid=` parameter that
+targets a different chat than the one the message arrived in. To prevent
+"summarize chat A in chat B" style data exfiltration, this is now allowed
+only when the originating sender is on the trusted allowlist (the machine
+owner). For any other sender, `chatid=` is ignored with a warning log and
+the action runs in the origin chat. Owner cross-chat dispatches are still
+honored, but each one emits a `WARN action: owner cross-chat dispatch`
+log line for audit.
+
 ## ACP Agent File Permissions
 
 By default, ACP agents are granted **read-only** file access. To allow file writes, set `allow_write: true` in the agent config:
@@ -33,9 +117,75 @@ By default, ACP agents are granted **read-only** file access. To allow file writ
 }
 ```
 
+## ACP Full-Access Mode
+
+Setting `full_access: true` on an ACP agent calls `session/set_mode
+"full-access"` and disables RingClaw's per-call MCP tool-call approval. This
+is dangerous: a prompt-injected agent could read or destroy any file the
+process can reach.
+
+To prevent silent activation through a stolen or copy-pasted config,
+RingClaw now requires an explicit acknowledgement at startup. There are
+two ways to grant it; **`config.json` wins over the env var**:
+
+```jsonc
+{
+  // Preferred: explicit, version-controlled acknowledgement.
+  "full_access_ack": true
+}
+```
+
+```bash
+# Fallback when full_access_ack is not set in config.json.
+RINGCLAW_FULL_ACCESS_ACK=1 ringclaw start --foreground
+```
+
+Resolution order:
+
+1. If `full_access_ack` is set in `config.json` (`true` or `false`), use
+   that value. Setting it to `false` explicitly **suppresses any env-var
+   override** so a misplaced shell export cannot re-enable full access.
+2. Otherwise, fall back to `RINGCLAW_FULL_ACCESS_ACK=1`.
+3. Otherwise, refuse `full_access` with a loud warning.
+
+When the request is downgraded, the session keeps the default guarded
+mode. When honored, every freshly created ACP session emits an additional
+`WARN ACP session granted full-access` log line for audit.
+
+Phase 2 will replace this static acknowledgement with a PIN-gated
+`/full-access` slash command that issues a TTL-bounded session token.
+
 ## Workspace Path Restrictions
 
-The `/cwd` command blocks access to sensitive directories: `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
+`/cwd` and the underlying `Agent.SetCwd` are pinned to an **allowlist of
+directory roots**. Any attempt to switch the working directory to a path
+outside every configured root is denied with an error like
+`Denied: path "/etc" escapes configured workspace allowlist [/home/alice/code /home/alice/.ringclaw/workspace]`.
+
+The effective allowlist is the union of (deduplicated, symlink-resolved):
+
+1. Every entry in `agent_allow_workspace_list` (or the comma-separated
+   `RINGCLAW_AGENT_ALLOW_WORKSPACE_LIST` env var).
+2. The legacy `agent_workspace` (continues to be the default cwd).
+3. `~/.ringclaw/workspace` — always implicitly trusted so the built-in
+   default cwd is never rejected.
+
+A denylist is kept as a defense-in-depth secondary check: even when the
+allowlist would admit a path, `/cwd` still refuses any of the sensitive
+directories `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
+
+```jsonc
+{
+  // Default cwd (initial directory the agent starts in).
+  "agent_workspace": "/home/alice/projects/main",
+
+  // Additional directories the agent may chdir into via /cwd.
+  "agent_allow_workspace_list": [
+    "/home/alice/projects/secondary",
+    "/home/alice/scratch"
+  ]
+}
+```
 
 ## Permission Matrix
 

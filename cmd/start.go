@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lmittmann/tint"
+	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
@@ -90,6 +91,53 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	verifyAgents(cfg)
 
+	// Configure the cwd allowlist before any agent is created so
+	// /cwd and Agent.SetCwd are pinned to a safe set of subtrees.
+	// Finding #2 from the security review.
+	//
+	// The effective allowlist is the union of:
+	//   - cfg.AgentAllowWorkspaceList (operator-controlled list)
+	//   - cfg.AgentWorkspace          (legacy default cwd, implicitly trusted)
+	//   - ~/.ringclaw/workspace       (always-on default)
+	//
+	// Duplicates and empty entries are dropped by agent.SetWorkspaceRoots.
+	{
+		roots := make([]string, 0, len(cfg.AgentAllowWorkspaceList)+2)
+		roots = append(roots, cfg.AgentAllowWorkspaceList...)
+		if cfg.AgentWorkspace != "" {
+			roots = append(roots, cfg.AgentWorkspace)
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			roots = append(roots, filepath.Join(home, ".ringclaw", "workspace"))
+		}
+		agent.SetWorkspaceRoots(roots)
+		if effective := agent.WorkspaceRoots(); len(effective) > 0 {
+			slog.Info("workspace allowlist configured", "component", "start", "roots", effective)
+		}
+	}
+
+	// Resolve the ACP full-access acknowledgement: config wins over env.
+	// Finding #6 from the security review.
+	{
+		ack := false
+		source := "default(false)"
+		if cfg.FullAccessAck != nil {
+			ack = *cfg.FullAccessAck
+			source = "config.full_access_ack"
+		} else if os.Getenv("RINGCLAW_FULL_ACCESS_ACK") == "1" {
+			ack = true
+			source = "env(RINGCLAW_FULL_ACCESS_ACK)"
+		}
+		agent.SetFullAccessAck(ack)
+		if ack {
+			slog.Warn("full_access acknowledgement ACTIVE: any agent with full_access:true will be allowed to disable MCP guardrails",
+				"component", "start", "source", source)
+		} else {
+			slog.Info("full_access acknowledgement not granted: full_access:true on any agent will be downgraded with a warning",
+				"component", "start", "source", source)
+		}
+	}
+
 	// Initialize clients, handler, and services
 	c, err := initClients(ctx, cfg)
 	if err != nil {
@@ -116,6 +164,21 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if c.private != nil {
 		monitor.SetPrivateClient(c.private)
 		c.private.SetMonitor(monitor)
+		if ownerID := c.private.OwnerID(); ownerID != "" {
+			monitor.AddTrustedSender(ownerID)
+			handler.AddTrustedSender(ownerID)
+		}
+	}
+	for _, id := range resolvedUserIDs {
+		handler.AddTrustedSender(id)
+	}
+	// Mandatory sender allowlist: monitor and handler both deny anyone not on
+	// the trusted set. Findings #1 and #7 from the security review.
+	monitor.EnforceSenderAllowlist()
+	handler.EnforceSenderAllowlist()
+	if !monitor.HasTrustedSenders() {
+		slog.Error("sender allowlist is empty: no source_user_ids configured and no Private App owner detected; the bot will drop ALL incoming messages until you add ringcentral.source_user_ids or configure a Private App",
+			"component", "start")
 	}
 	c.bot.SetMonitor(monitor)
 	if err := monitor.Run(ctx); err != nil && ctx.Err() == nil {

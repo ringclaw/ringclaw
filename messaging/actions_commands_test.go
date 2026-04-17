@@ -555,7 +555,7 @@ func TestExecuteAgentActions_NoteSuccess(t *testing.T) {
 		Body:   "Key points from the sprint.",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %v", results)
 	}
@@ -594,7 +594,7 @@ func TestExecuteAgentActions_NoteDefaultTitle(t *testing.T) {
 		Body:   "No title provided.",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %v", results)
 	}
@@ -620,7 +620,7 @@ func TestExecuteAgentActions_TaskSuccess(t *testing.T) {
 		Params: map[string]string{"subject": "Follow up"},
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %v", results)
 	}
@@ -642,7 +642,7 @@ func TestExecuteAgentActions_TaskSkippedNoSubject(t *testing.T) {
 		Params: map[string]string{},
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors for skipped task, got %v", results)
 	}
@@ -669,7 +669,7 @@ func TestExecuteAgentActions_EventSuccess(t *testing.T) {
 		},
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %v", results)
 	}
@@ -692,7 +692,7 @@ func TestExecuteAgentActions_EventSkippedMissingFields(t *testing.T) {
 		Params: map[string]string{"title": "Meeting", "start": "2026-04-10T10:00:00Z"},
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors for skipped event, got %v", results)
 	}
@@ -714,7 +714,7 @@ func TestExecuteAgentActions_CardInvalidJSON(t *testing.T) {
 		Body: "this is not valid json",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 1 || !strings.Contains(results[0], "invalid JSON") {
 		t.Errorf("expected invalid JSON error, got %v", results)
 	}
@@ -736,7 +736,7 @@ func TestExecuteAgentActions_CardEmptyBody(t *testing.T) {
 		Body: "",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors for skipped empty card, got %v", results)
 	}
@@ -758,7 +758,7 @@ func TestExecuteAgentActions_MessageEmptyBody(t *testing.T) {
 		Body: "   ",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors for empty message, got %v", results)
 	}
