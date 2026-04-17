@@ -25,9 +25,13 @@ Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated
 
 Phase 2 layers two owner-DM-scoped surfaces on top of the Phase 1
 trusted-sender allowlist: a two-step `/approval` confirmation for
-ACP full-access grants, and a non-blocking metadata-only heads-up
-notice whenever an owner-initiated ACTION dispatches into a chat
-other than the origin or the owner's own DM.
+ACP full-access grants, and a **fail-closed** metadata-only heads-up
+notice that must land in the owner DM **before** an owner-initiated
+ACTION dispatches into a chat other than the origin or the owner's
+own DM. If that pre-dispatch notice cannot be delivered (no owner DM
+resolved, or RC transport failure), the cross-chat action is refused
+— a silent cross-chat write with no audit record is not an
+acceptable failure mode.
 
 Trust assumption: an attacker with a foothold inside RingCentral
 (account compromise, prompt injection in a bot DM, malicious
@@ -45,8 +49,8 @@ explicitly re-grants.
 
 | Surface | Type | Where | Phase 1 behavior | Phase 2 behavior | Operator override |
 |---|---|---|---|---|---|
-| Owner cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` | runtime behavior | `messaging/actions.go` | Honored unconditionally; `WARN action: owner cross-chat dispatch` audit log only | **Executes immediately** (no pre-dispatch gate); afterwards a metadata-only heads-up is asynchronously posted to the owner DM whenever the target chat differs from the origin AND from the owner's own DM. The notice carries `TYPE`, `requesterID`, RFC3339 timestamp, `originChatID`, `targetChatID` — no body, title, or content preview. Best-effort: a failed notice is logged but does not roll back the action. | Tune `crossChatNoticeTimeout` in `messaging/actions.go` (currently 5 s). The notice target (`OwnerDMChat`) is derived from the bot DM; it cannot be pointed elsewhere. |
-| `/full-access` slash command | runtime command | bot DM with the owner | _did not exist_ | **New.** `status` / `grant [duration]` / `revoke`. `grant` is a two-step confirmation: the bot issues a short-lived challenge ID, posts a plain-text `/approval` prompt to the owner DM, and only activates the grant after the owner replies `/approval <id>`. Each newly-created ACP session during an active grant is flipped into `session/set_mode "full-access"` until the grant expires or is revoked. | **Default grant 1 day**, hard cap **30 days**. Oversized inputs are silently clamped. Durations are parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`). Restricted to the owner DM; group-chat invocations are refused. |
+| Owner cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` | runtime behavior | `messaging/actions.go` | Honored unconditionally; `WARN action: owner cross-chat dispatch` audit log only | **Synchronous fail-closed pre-dispatch notice.** Before the action is dispatched, a metadata-only heads-up is posted to the owner DM when the target chat differs from the origin AND from the owner's own DM. The notice carries `TYPE`, `requesterID`, RFC3339 timestamp, `originChatID`, `targetChatID` — no body, title, or content preview. If the owner DM is not configured or the notice send fails, **the cross-chat action is refused** (caller receives `Refused cross-chat <TYPE>: …`). | Tune `crossChatNoticeTimeout` in `messaging/actions.go` (currently 5 s). The notice target (`OwnerDMChat`) is derived from the bot DM; it cannot be pointed elsewhere. |
+| `/full-access` slash command | runtime command | bot DM with the owner | _did not exist_ | **New.** `status` / `grant [duration]` / `revoke`. `grant` is a two-step confirmation: the bot issues a short-lived challenge ID, posts a plain-text `/approval` prompt to the owner DM, and only activates the grant after the owner replies `/approval <id>`. While a grant is active, each newly-created ACP session is flipped into `session/set_mode "full-access"`. When the grant is revoked (explicitly or by TTL expiry), **every live ACP session is also demoted back to `set_mode "default"`** via a revoke hook — sessions whose demote call fails are dropped from the session map so the next prompt rebuilds them in the locked-down mode. | **Default grant 1 day**, hard cap **30 days**. Oversized inputs are silently clamped. Durations are parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`). Restricted to the owner DM; group-chat invocations are refused. |
 | `/approval <id>` / `/approval deny <id>` | slash command | bot DM with the owner | _did not exist_ | **New.** Canonical reply shape for pending challenges. 8-char hex `<id>`; `/approval deny <id>` explicitly rejects. Non-requester replies are refused with a plain-text message so a teammate sharing the DM cannot cancel another user's pending challenge. Replies never reach the AI agent. | n/a |
 | `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` honored at startup when `full_access_ack` (config) or `RINGCLAW_FULL_ACCESS_ACK=1` (env) acknowledges it; otherwise downgraded with a `WARN` | **Unchanged** for the static path. In addition, an active `/full-access` grant overlays it dynamically — new ACP sessions read the TTL state on every creation, so a grant takes effect without restarting and naturally drops back to guarded mode when it expires. The per-session log line now carries a `source` field (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`) for audit. | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
 
@@ -54,21 +58,34 @@ explicitly re-grants.
 
 ::: warning
 **Owner cross-chat behavior change.** Phase 1 always honored owner
-cross-chat ACTIONs and only warned. Phase 2 still honors them, but
-now posts a metadata-only heads-up to the owner DM after dispatch
-so there is a single audit surface for every cross-chat action. The
-action itself is never blocked — operators who want to review before
-dispatch should monitor the owner DM or the action audit log.
+cross-chat ACTIONs and only warned. Phase 2 gates them on a
+synchronous pre-dispatch audit notice to the owner DM. If the
+owner DM is not configured, or the notice send fails, **the
+cross-chat action is refused** — nothing lands on the target chat
+and the caller sees a `Refused cross-chat <TYPE>` entry. Operators
+running without a resolvable bot DM must either resolve it or keep
+all owner-driven actions in the origin chat.
+:::
+
+::: warning
+**`/full-access` revoke demotes live sessions.** In Phase 2
+`/full-access revoke` (and TTL expiry) not only prevent NEW sessions
+from entering full-access but also proactively send
+`session/set_mode "default"` to every live ACP session that was
+unlocked during the grant window. Sessions whose demote call fails
+are dropped from the session map; the next prompt in that
+conversation rebuilds a fresh session in the locked-down mode (so a
+small amount of in-memory conversation context may be lost).
 :::
 
 | Scenario | Phase 1 behavior | Phase 2 behavior |
 |---|---|---|
-| Owner asks AI for a cross-chat MESSAGE / CARD / TASK / NOTE | Action runs immediately; `WARN action: owner cross-chat dispatch` audit log only | Action runs immediately in the target chat. An asynchronous `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` is posted to the owner DM when target ≠ origin and target ≠ owner DM. |
+| Owner asks AI for a cross-chat MESSAGE / CARD / TASK / NOTE | Action runs immediately; `WARN action: owner cross-chat dispatch` audit log only | Bot first posts `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` to the owner DM (when target ≠ origin and target ≠ owner DM). Only if that pre-notice succeeds does the action run on the target chat. |
 | Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | Refused (unchanged). |
 | Operator wants ACP full-access for one task | Must ship `full_access: true` + `full_access_ack: true` in `config.json` and restart, then remember to revert | Leave `full_access: false`. In the bot DM, run `/full-access grant 30m` — bot replies `Full-access grant requested. Confirm via /approval in owner DM.` and posts `Pending approval: reply /approval <id> to confirm or /approval deny <id> to reject. Expires in 5 min. Requested TTL: 30m.`. Owner replies `/approval <id>`. Bot confirms `Full-access granted until <RFC3339 expiry>.` and the ACP agent runs unlocked for 30 min. |
 | Operator wants default-length full-access | n/a | `/full-access grant` → **24 h** (1 day). Cap is 30 days. |
-| Operator wants to revoke | n/a | `/full-access revoke` — clears the grant immediately. |
-| OOB not configured (owner DM cannot be resolved) | n/a | `/full-access` returns "OOB approval is not configured"; cross-chat actions still execute but **no notice is attempted** (logged as `action: cross-chat notice skipped; no reply client`). |
+| Operator wants to revoke | n/a | `/full-access revoke` — clears the grant AND immediately demotes every live session back to `set_mode "default"`. |
+| OOB not configured (owner DM cannot be resolved) | n/a | `/full-access` returns "OOB approval is not configured". **Owner cross-chat actions are refused** with `Refused cross-chat <TYPE>: no owner DM audit channel configured` (logged as `WARN action: cross-chat ACTION refused (fail-closed on pre-notice)`). |
 | Suspected compromise / want to drop state | n/a | Restart the bot — all in-memory state (pending challenges, active `/full-access` grant) is cleared. |
 
 ### Phase 2 audit-log additions
@@ -82,9 +99,11 @@ dispatch should monitor the owner DM or the action audit log.
 | `/approval deny` refused (non-requester) | `WARN oob: deny refused for non-requester` | Same invariant for denials. |
 | Full-access granted | `WARN oob: ACP full-access granted` (`ttl`, `expiresAt`) | Separate from the per-session `WARN ACP session granted full-access` line. |
 | Full-access revoked | `WARN oob: ACP full-access revoked` | Triggered by `/full-access revoke` or by re-grant. |
-| Cross-chat notice sent | `INFO action: cross-chat notice sent` (`type`, `from`, `to`, `ownerDMChat`, `requesterID`) | Confirms the heads-up reached the owner DM. |
-| Cross-chat notice failed | `WARN action: cross-chat notice delivery failed` (with `error`) | Best-effort failure; action already executed. |
-| Cross-chat notice skipped | `WARN action: cross-chat notice skipped; no reply client` | Fired when OOB is not wired (no bot DM resolved). |
+| Full-access expired (TTL) | `WARN oob: ACP full-access expired (TTL reached)` | Fires proactively when the grant's `expiresAt` is reached, before any caller polls `FullAccessActive`. |
+| Live session demoted | `INFO acp demote: session returned to default mode` (`session`, `conversation`) | Confirms `session/set_mode "default"` landed on a live session after revoke / expiry. |
+| Live session demotion failed | `WARN acp demote: set_mode default failed, session dropped from map` (with `error`) | The session is removed from the session map; the next prompt on that conversation creates a fresh (default-mode) session. |
+| Cross-chat notice sent (pre-dispatch) | `INFO action: cross-chat notice sent (pre-dispatch)` (`type`, `from`, `to`, `ownerDMChat`, `requesterID`) | Confirms the heads-up reached the owner DM; the action is then dispatched. |
+| Cross-chat action refused | `WARN action: cross-chat ACTION refused (fail-closed on pre-notice)` (with `error`) | Fires when the audit channel is missing or the notice send fails; the action is NOT dispatched. |
 
 ## Phase 1 Hardening: Configuration Changes
 
@@ -169,19 +188,24 @@ owner). For any other sender, `chatid=` is ignored with a warning log and
 the action runs in the origin chat.
 
 For owner-initiated cross-chat dispatches, Phase 2 adds a
-**non-blocking heads-up** rather than a pre-dispatch gate:
+**synchronous fail-closed pre-dispatch gate**:
 
-- **Owner DM resolved**: the cross-chat `MESSAGE` / `CARD` / `TASK` /
-  `NOTE` executes immediately in the target chat. If the target chat
-  differs from both the origin chat and the owner's own DM, the bot
-  asynchronously posts a metadata-only notice to the owner DM:
+- **Owner DM resolved**: before the cross-chat `MESSAGE` / `CARD` /
+  `TASK` / `NOTE` is dispatched, the bot posts a metadata-only notice
+  to the owner DM (when target ≠ origin and target ≠ owner DM):
   `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>`.
-  No body, title, or content preview is leaked into the owner DM.
-  Delivery is best-effort (capped at `crossChatNoticeTimeout`, 5 s).
-- **Owner DM not resolved** (OOB not configured): the dispatch still
-  executes but no notice is attempted; the event is recorded via
-  `WARN action: cross-chat notice skipped; no reply client` plus the
-  Phase 1 `WARN action: owner cross-chat dispatch` audit log line.
+  No body, title, or content preview is leaked into the owner DM. The
+  notice send is capped at `crossChatNoticeTimeout` (5 s). Only after
+  the notice succeeds does the action run on the target chat.
+- **Notice delivery fails** (transport error, 5xx, timeout): the
+  cross-chat action is **refused**. Caller sees
+  `Refused cross-chat <TYPE>: audit notice delivery failed: …` and
+  nothing lands on the target chat.
+- **Owner DM not resolved** (OOB not configured): the cross-chat
+  action is **refused** with
+  `Refused cross-chat <TYPE>: no owner DM audit channel configured`.
+  Operators who run without a resolvable bot DM must either resolve
+  it or keep all owner-driven actions in the origin chat.
 
 ## ACP Agent File Permissions
 
@@ -272,14 +296,29 @@ Constraints:
   `/full-access revoke` is called. All OOB state is in-memory and is
   cleared on restart, so a crash-restart re-locks the bot until the
   operator explicitly re-grants.
+- **Live sessions are also demoted on revoke / TTL expiry.** When a
+  grant ends (explicit `/full-access revoke` OR the TTL elapses),
+  the manager fires a revoke hook wired to
+  `agent.DemoteAllACPFullAccess`. That walker iterates every live
+  ACP session created during the grant window and sends
+  `session/set_mode "default"` to each. Sessions whose demote call
+  fails are dropped from the session map so the next prompt rebuilds
+  them fresh in default mode (a small amount of in-memory
+  conversation context may be lost, but the session cannot linger
+  in full-access). A narrow race between grant-and-revoke landing
+  during session creation is also closed by a double-read in
+  `getOrCreateSession`; if revoke lands while the initial
+  `set_mode "full-access"` call is in flight, the agent immediately
+  compensates with `set_mode "default"`.
 
-### Phase 2 — Cross-chat heads-up notices
+### Phase 2 — Cross-chat heads-up notices (fail-closed)
 
 Owner-initiated cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` actions
-execute immediately (no pre-dispatch approval). When the target chat
-differs from both the origin chat and the owner's own DM, the bot
-posts a **metadata-only** heads-up to the owner DM after the action
-lands:
+are gated on a **synchronous pre-dispatch notice**. When the target
+chat differs from both the origin chat and the owner's own DM, the
+bot posts a **metadata-only** heads-up to the owner DM **before** the
+action runs, and refuses the action if that notice cannot be
+delivered:
 
 ```text
 [notice] MESSAGE by 12345 at 2026-04-17T10:15:00Z: origin=chat-7 target=chat-42
@@ -287,13 +326,24 @@ lands:
 
 The notice carries `TYPE`, `requesterID`, an RFC3339 timestamp,
 `originChatID`, and `targetChatID` — no body, title, or content
-preview leaks into the owner DM. Delivery is best-effort and runs
-on a detached goroutine capped at `crossChatNoticeTimeout` (5s) so
-a stuck RC endpoint cannot block the caller or leak goroutines.
+preview leaks into the owner DM. The send is capped at
+`crossChatNoticeTimeout` (5 s) so a stuck RC endpoint cannot wedge
+the prompt pipeline; when that cap triggers, the cross-chat action
+is refused rather than dispatched without an audit record.
+
+Refusal paths (the cross-chat action does NOT land on the target
+chat):
+
+- `OwnerDMChat` is empty (bot DM with the owner not yet resolved, or
+  OOB not wired): the caller sees `Refused cross-chat <TYPE>: no
+  owner DM audit channel configured`.
+- Notice send returns an error (timeout, 5xx, transport error):
+  `Refused cross-chat <TYPE>: audit notice delivery failed: <cause>`.
 
 Non-owner cross-chat actions remain **unconditionally refused** by
-the Phase 1 trusted-sender lock — the notification path only applies
-to owner-initiated dispatches.
+the Phase 1 trusted-sender lock — the fail-closed notice path only
+applies to owner-initiated dispatches (non-owner `chatid=` overrides
+are ignored earlier in the dispatch loop).
 
 ## Workspace Path Restrictions
 
