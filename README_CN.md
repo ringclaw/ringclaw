@@ -17,12 +17,12 @@ curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | 
 # 一键安装 (Windows PowerShell)
 irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
-# 设置 Bot Token 并启动
-export RC_BOT_TOKEN="your_bot_token"
+# 配置（生成 ~/.ringclaw/config.json）并启动
+ringclaw setup
 ringclaw start
 ```
 
-首次启动时，RingClaw 会自动检测已安装的 AI 智能体并保存配置到 `~/.ringclaw/config.json`。运行 `ringclaw setup` 可使用交互式配置向导。
+所有配置都存放在 `~/.ringclaw/config.json` 中。首次启动时，RingClaw 会自动检测已安装的 AI 智能体并更新该文件。不再读取 `RC_BOT_TOKEN` 等环境变量——请使用 `ringclaw setup` 或直接编辑该文件。
 
 ## 功能特性
 
