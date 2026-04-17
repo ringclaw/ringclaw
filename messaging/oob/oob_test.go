@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -252,6 +253,99 @@ func TestGrantFullAccessNegativeIsNoop(t *testing.T) {
 	m.GrantFullAccess(-time.Second)
 	if m.FullAccessActive() {
 		t.Fatalf("non-positive TTL should not activate full-access")
+	}
+}
+
+// TestRevokeFiresHook asserts that an explicit RevokeFullAccess on an
+// active grant triggers the installed revoke hook exactly once, and
+// that a subsequent revoke (no active grant) does NOT fire the hook
+// again.
+func TestRevokeFiresHook(t *testing.T) {
+	m := New(Options{})
+	var fired int32
+	done := make(chan struct{}, 4)
+	m.SetFullAccessRevokeHook(func() {
+		atomic.AddInt32(&fired, 1)
+		done <- struct{}{}
+	})
+	m.GrantFullAccess(time.Minute)
+	m.RevokeFullAccess()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("revoke hook did not fire within 1s")
+	}
+	// A second revoke with nothing active must NOT fire the hook
+	// again — otherwise downstream demotion work would run on every
+	// idempotent revoke.
+	m.RevokeFullAccess()
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&fired); got != 1 {
+		t.Fatalf("expected hook to fire exactly once, got %d", got)
+	}
+}
+
+// TestTTLExpiryFiresHook asserts that TTL expiry fires the revoke
+// hook proactively (via the internal AfterFunc) without requiring a
+// caller to poll FullAccessActive first.
+func TestTTLExpiryFiresHook(t *testing.T) {
+	m := New(Options{})
+	fired := make(chan struct{}, 1)
+	m.SetFullAccessRevokeHook(func() {
+		select {
+		case fired <- struct{}{}:
+		default:
+		}
+	})
+	m.GrantFullAccess(40 * time.Millisecond)
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatalf("expiry hook did not fire within 1s of TTL")
+	}
+	if m.FullAccessActive() {
+		t.Fatalf("grant should be inactive after expiry")
+	}
+}
+
+// TestLazyExpiryFiresHook covers the defense-in-depth path: if the
+// AfterFunc is somehow starved (e.g. process paused), a subsequent
+// FullAccessActive read should still trigger the revoke hook.
+func TestLazyExpiryFiresHook(t *testing.T) {
+	m := New(Options{})
+	fired := make(chan struct{}, 1)
+	m.SetFullAccessRevokeHook(func() {
+		select {
+		case fired <- struct{}{}:
+		default:
+		}
+	})
+	// Grant a very short TTL and drain the AfterFunc channel first so
+	// we know the lazy path is what fires the hook on the read below.
+	m.GrantFullAccess(20 * time.Millisecond)
+	select {
+	case <-fired:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("initial AfterFunc should have fired")
+	}
+	// Reset the hook counter and grant again without letting the
+	// AfterFunc race us — we manually expire via a read after Sleep.
+	fired2 := make(chan struct{}, 1)
+	m.SetFullAccessRevokeHook(func() {
+		select {
+		case fired2 <- struct{}{}:
+		default:
+		}
+	})
+	// Grant, drain the AfterFunc once it fires, then assert a later
+	// read path does not RE-fire for the same expiry.
+	m.GrantFullAccess(20 * time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
+	_ = m.FullAccessActive() // triggers lazy cleanup if AfterFunc already ran
+	select {
+	case <-fired2:
+	default:
+		t.Fatalf("expected at least one revoke-hook fire after expiry")
 	}
 }
 

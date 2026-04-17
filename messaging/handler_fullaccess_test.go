@@ -135,6 +135,18 @@ func TestHandleFullAccess_StatusAndRevoke(t *testing.T) {
 	mgr := oob.New(oob.Options{})
 	h.SetOOBManager(mgr, "dm-1")
 
+	// Install the revoke hook to assert that /full-access revoke
+	// actually triggers the live-session demotion path. In
+	// production the hook is wired to agent.DemoteAllACPFullAccess
+	// via cmd.initOOBManager; here we just capture the call.
+	hookFired := make(chan struct{}, 1)
+	mgr.SetFullAccessRevokeHook(func() {
+		select {
+		case hookFired <- struct{}{}:
+		default:
+		}
+	})
+
 	mgr.GrantFullAccess(time.Minute)
 	h.handleFullAccess(context.Background(), bot, "dm-1", "user-1", "/full-access status")
 	h.handleFullAccess(context.Background(), bot, "dm-1", "user-1", "/full-access revoke")
@@ -157,6 +169,11 @@ func TestHandleFullAccess_StatusAndRevoke(t *testing.T) {
 	}
 	if mgr.FullAccessActive() {
 		t.Fatalf("manager should be off after revoke")
+	}
+	select {
+	case <-hookFired:
+	case <-time.After(time.Second):
+		t.Fatalf("/full-access revoke did not invoke the live-session demotion hook")
 	}
 }
 
