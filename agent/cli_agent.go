@@ -104,7 +104,13 @@ func (a *CLIAgent) Info() AgentInfo {
 }
 
 // SetCwd changes the working directory for subsequent CLI invocations.
+// Rejects paths outside the configured workspace root as a defense-in-depth
+// against bypasses of the /cwd handler.
 func (a *CLIAgent) SetCwd(cwd string) {
+	if err := EnsurePathInWorkspace(cwd); err != nil {
+		slog.Warn("cli agent cwd rejected", "component", "cli", "agent", a.name, "cwd", cwd, "error", err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.cwd = cwd

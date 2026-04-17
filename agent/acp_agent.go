@@ -311,7 +311,13 @@ func (a *ACPAgent) Stop() {
 }
 
 // SetCwd changes the working directory for subsequent sessions.
+// Rejects paths outside the configured workspace root as a defense-in-depth
+// against bypasses of the /cwd handler.
 func (a *ACPAgent) SetCwd(cwd string) {
+	if err := EnsurePathInWorkspace(cwd); err != nil {
+		slog.Warn("acp agent cwd rejected", "component", "acp", "cwd", cwd, "error", err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.cwd == cwd {

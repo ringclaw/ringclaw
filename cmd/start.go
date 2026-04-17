@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lmittmann/tint"
+	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
@@ -89,6 +90,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	verifyAgents(cfg)
+
+	// Configure the cwd allowlist root before any agent is created so
+	// /cwd and Agent.SetCwd are pinned to a single safe subtree.
+	// Finding #2 from the security review.
+	workspaceRoot := cfg.AgentWorkspace
+	if workspaceRoot == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			workspaceRoot = filepath.Join(home, ".ringclaw", "workspace")
+		}
+	}
+	if workspaceRoot != "" {
+		agent.SetWorkspaceRoot(workspaceRoot)
+		slog.Info("workspace root configured", "component", "start", "root", workspaceRoot)
+	}
 
 	// Initialize clients, handler, and services
 	c, err := initClients(ctx, cfg)

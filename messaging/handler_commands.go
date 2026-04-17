@@ -45,6 +45,14 @@ func (h *Handler) handleCwd(text string) string {
 		return fmt.Sprintf("Invalid path: %v", err)
 	}
 
+	// Allowlist check: must be inside the configured AgentWorkspace.
+	// Returns nil when no workspace root is configured (legacy mode).
+	if err := agent.EnsurePathInWorkspace(absPath); err != nil {
+		slog.Warn("cwd rejected: outside workspace root", "component", "handler", "path", absPath, "error", err)
+		return fmt.Sprintf("Denied: %v", err)
+	}
+	// Denylist check (defense in depth): block sensitive dotfile dirs even
+	// if a misconfigured AgentWorkspace would otherwise admit them.
 	if err := validateCwdPath(absPath); err != nil {
 		return fmt.Sprintf("Denied: %v", err)
 	}

@@ -65,7 +65,19 @@ By default, ACP agents are granted **read-only** file access. To allow file writ
 
 ## Workspace Path Restrictions
 
-The `/cwd` command blocks access to sensitive directories: `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
+`/cwd` and the underlying `Agent.SetCwd` are pinned to a **subtree of
+`AgentWorkspace`** (or the default `~/.ringclaw/workspace` when the config
+key is unset). Any attempt to switch the working directory to a path that
+escapes the configured root is denied with an error like
+`Denied: path "/etc" escapes workspace root "/home/alice/code"`.
+
+A denylist is kept as a defense-in-depth secondary check: even when the
+allowlist would admit a path, `/cwd` still refuses any of the sensitive
+directories `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
+
+To widen the allowlist, change `agent_workspace` in your config (or set the
+`RINGCLAW_AGENT_WORKSPACE` env var) to the parent directory you want to
+expose to AI agents.
 
 ## Permission Matrix
 
