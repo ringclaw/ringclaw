@@ -105,6 +105,28 @@ func runStart(cmd *cobra.Command, args []string) error {
 		slog.Info("workspace root configured", "component", "start", "root", workspaceRoot)
 	}
 
+	// Resolve the ACP full-access acknowledgement: config wins over env.
+	// Finding #6 from the security review.
+	{
+		ack := false
+		source := "default(false)"
+		if cfg.FullAccessAck != nil {
+			ack = *cfg.FullAccessAck
+			source = "config.full_access_ack"
+		} else if os.Getenv("RINGCLAW_FULL_ACCESS_ACK") == "1" {
+			ack = true
+			source = "env(RINGCLAW_FULL_ACCESS_ACK)"
+		}
+		agent.SetFullAccessAck(ack)
+		if ack {
+			slog.Warn("full_access acknowledgement ACTIVE: any agent with full_access:true will be allowed to disable MCP guardrails",
+				"component", "start", "source", source)
+		} else {
+			slog.Info("full_access acknowledgement not granted: full_access:true on any agent will be downgraded with a warning",
+				"component", "start", "source", source)
+		}
+	}
+
 	// Initialize clients, handler, and services
 	c, err := initClients(ctx, cfg)
 	if err != nil {

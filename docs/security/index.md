@@ -23,19 +23,26 @@ Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated
 
 ## Phase 1 Hardening: Configuration Changes
 
-Phase 1 of the Remote Control hardening review **did not introduce any
-new `config.json` fields**. All hardening reuses fields that already
-existed in the schema, but changes how they are interpreted at startup,
-plus introduces one new environment variable. Operators upgrading from a
-previous release should review the table below — defaults marked "**new**"
-may change behavior even when `config.json` is left untouched.
+Phase 1 of the Remote Control hardening review introduces **one new
+top-level `config.json` field** (`full_access_ack`) and otherwise reuses
+fields that already existed in the schema, changing how they are
+interpreted at startup. It also adds one new environment variable as a
+fallback. Operators upgrading from a previous release should review the
+table below — defaults marked "**new**" may change behavior even when
+`config.json` is left untouched.
 
 | Setting | Type | Where | Old default | New default | Operator override |
 |---------|------|-------|-------------|-------------|-------------------|
 | `ringcentral.source_user_ids` | `[]string` | `config.json` (also `RC_SOURCE_USER_IDS` env, comma-separated) | Empty list = **allow every sender** in any allowed chat | Empty list + Private App = **owner-only** (auto-injected). Empty list + no Private App = **deny all** with startup error | List numeric IDs / emails / phone numbers to add additional trusted senders. Email and phone require Private App with `ReadAccounts`. |
 | `agent_workspace` | `string` | `config.json` (also `RINGCLAW_AGENT_WORKSPACE` env) | Used only as the agent's initial cwd; `/cwd` could escape it | **Hard root** for `/cwd` and `Agent.SetCwd`. Falls back to `~/.ringclaw/workspace` when unset | Set to the directory subtree you want to expose to AI agents. Anything outside is rejected at runtime. |
-| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` immediately enabled `session/set_mode "full-access"` on every new ACP session | `true` is **ignored** unless `RINGCLAW_FULL_ACCESS_ACK=1` is also set in the process env; otherwise downgraded with a `WARN` log | Export `RINGCLAW_FULL_ACCESS_ACK=1` for the `ringclaw start` process to acknowledge the risk and honor the flag. |
-| `RINGCLAW_FULL_ACCESS_ACK` | env var | process environment | _did not exist_ | **new** — must equal `1` to honor any agent's `full_access: true` | Unset / any other value = full-access requests are refused for the whole process. |
+| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` immediately enabled `session/set_mode "full-access"` on every new ACP session | `true` is **ignored** unless `full_access_ack` (config) or `RINGCLAW_FULL_ACCESS_ACK=1` (env) acknowledges it; otherwise downgraded with a `WARN` log | Set `full_access_ack: true` in `config.json` (preferred), or export `RINGCLAW_FULL_ACCESS_ACK=1`. |
+| `full_access_ack` | `*bool` | `config.json` (top-level) | _did not exist_ | **new** — `true` honors `full_access`, `false` explicitly refuses (and **suppresses any env-var override**), unset = fall back to env var | Preferred over the env var; lives under version control alongside the agent that needs it. |
+| `RINGCLAW_FULL_ACCESS_ACK` | env var | process environment | _did not exist_ | **new** — must equal `1` to honor any agent's `full_access: true` when `full_access_ack` is unset in `config.json` | Only consulted when `full_access_ack` is omitted from config. |
+
+Resolution order for `full_access_ack`: **config wins over env**. If
+`full_access_ack` is set in `config.json` (either `true` or `false`), the
+env var is ignored. This means an explicit `"full_access_ack": false`
+neutralizes a misplaced shell export.
 
 Behaviors implied by Phase 1 that have **no config knob** (intentionally
 not exposed yet):
@@ -117,18 +124,34 @@ is dangerous: a prompt-injected agent could read or destroy any file the
 process can reach.
 
 To prevent silent activation through a stolen or copy-pasted config,
-RingClaw now requires an explicit acknowledgement at startup:
+RingClaw now requires an explicit acknowledgement at startup. There are
+two ways to grant it; **`config.json` wins over the env var**:
+
+```jsonc
+{
+  // Preferred: explicit, version-controlled acknowledgement.
+  "full_access_ack": true
+}
+```
 
 ```bash
+# Fallback when full_access_ack is not set in config.json.
 RINGCLAW_FULL_ACCESS_ACK=1 ringclaw start --foreground
 ```
 
-If the env var is unset (or any value other than `1`), the request is
-downgraded with a loud warning and the session keeps the default guarded
+Resolution order:
+
+1. If `full_access_ack` is set in `config.json` (`true` or `false`), use
+   that value. Setting it to `false` explicitly **suppresses any env-var
+   override** so a misplaced shell export cannot re-enable full access.
+2. Otherwise, fall back to `RINGCLAW_FULL_ACCESS_ACK=1`.
+3. Otherwise, refuse `full_access` with a loud warning.
+
+When the request is downgraded, the session keeps the default guarded
 mode. When honored, every freshly created ACP session emits an additional
 `WARN ACP session granted full-access` log line for audit.
 
-Phase 2 will replace the env-var acknowledgement with a PIN-gated
+Phase 2 will replace this static acknowledgement with a PIN-gated
 `/full-access` slash command that issues a TTL-bounded session token.
 
 ## Workspace Path Restrictions

@@ -43,6 +43,12 @@ type Config struct {
 	RC             RCConfig               `json:"ringcentral,omitempty"`
 	Heartbeat      HeartbeatConfig        `json:"heartbeat,omitempty"`
 	Cron           CronConfig             `json:"cron,omitempty"`
+	// FullAccessAck acknowledges that ACP agents with `full_access: true`
+	// will execute MCP tool calls without per-call approval. When set
+	// (true or false), this value WINS over the RINGCLAW_FULL_ACCESS_ACK
+	// env var. When nil (omitted), the env var is consulted as a
+	// fallback. See docs/security/index.md "ACP Full-Access Mode".
+	FullAccessAck *bool `json:"full_access_ack,omitempty"`
 }
 
 // HeartbeatConfig holds heartbeat runner configuration.

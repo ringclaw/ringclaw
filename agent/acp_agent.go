@@ -160,9 +160,48 @@ type permissionOption struct {
 }
 
 // fullAccessAckEnv must be set to "1" for the full_access config flag to be
-// honored. Without this acknowledgement, ACP sessions stay in the default
+// honored when no explicit acknowledgement has been configured via
+// SetFullAccessAck. Without one of these, ACP sessions stay in the default
 // guarded mode where every MCP tool call requires explicit approval.
 const fullAccessAckEnv = "RINGCLAW_FULL_ACCESS_ACK"
+
+var (
+	fullAccessAckMu       sync.RWMutex
+	fullAccessAckOverride *bool // nil = fall back to env var
+)
+
+// SetFullAccessAck installs a configured acknowledgement for ACP
+// `full_access` mode. When non-nil, this WINS over the
+// RINGCLAW_FULL_ACCESS_ACK env var. Pass true to acknowledge, false to
+// explicitly refuse (which suppresses any env-var override).
+//
+// Intended to be called once from cmd/start after config load. Pass a
+// fresh value (or call ResetFullAccessAck) in tests to avoid leakage.
+func SetFullAccessAck(ack bool) {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessAckOverride = &ack
+}
+
+// ResetFullAccessAck clears any configured acknowledgement so the env
+// var becomes the source of truth again. Test-only helper.
+func ResetFullAccessAck() {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessAckOverride = nil
+}
+
+// isFullAccessAcked resolves the effective acknowledgement. Config
+// (via SetFullAccessAck) wins over the RINGCLAW_FULL_ACCESS_ACK env var.
+func isFullAccessAcked() bool {
+	fullAccessAckMu.RLock()
+	override := fullAccessAckOverride
+	fullAccessAckMu.RUnlock()
+	if override != nil {
+		return *override
+	}
+	return os.Getenv(fullAccessAckEnv) == "1"
+}
 
 // NewACPAgent creates a new ACP agent.
 func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
@@ -173,9 +212,9 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		cfg.Cwd = defaultWorkspace()
 	}
 	fullAccess := cfg.FullAccess
-	if fullAccess && os.Getenv(fullAccessAckEnv) != "1" {
-		slog.Warn("full_access requested but RINGCLAW_FULL_ACCESS_ACK!=1: refusing to disable MCP guardrails. Set the env var to acknowledge that the agent will execute tool calls without per-call approval.",
-			"component", "acp", "command", cfg.Command, "ack_env", fullAccessAckEnv)
+	if fullAccess && !isFullAccessAcked() {
+		slog.Warn("full_access requested but not acknowledged: refusing to disable MCP guardrails. Set full_access_ack=true in config.json (preferred) or export RINGCLAW_FULL_ACCESS_ACK=1.",
+			"component", "acp", "command", cfg.Command, "ack_env", fullAccessAckEnv, "ack_config", "full_access_ack")
 		fullAccess = false
 	} else if fullAccess {
 		slog.Warn("full_access ENABLED: agent will execute MCP tool calls without per-call approval",
