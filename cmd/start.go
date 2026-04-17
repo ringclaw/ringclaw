@@ -91,18 +91,29 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	verifyAgents(cfg)
 
-	// Configure the cwd allowlist root before any agent is created so
-	// /cwd and Agent.SetCwd are pinned to a single safe subtree.
+	// Configure the cwd allowlist before any agent is created so
+	// /cwd and Agent.SetCwd are pinned to a safe set of subtrees.
 	// Finding #2 from the security review.
-	workspaceRoot := cfg.AgentWorkspace
-	if workspaceRoot == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			workspaceRoot = filepath.Join(home, ".ringclaw", "workspace")
+	//
+	// The effective allowlist is the union of:
+	//   - cfg.AgentAllowWorkspaceList (operator-controlled list)
+	//   - cfg.AgentWorkspace          (legacy default cwd, implicitly trusted)
+	//   - ~/.ringclaw/workspace       (always-on default)
+	//
+	// Duplicates and empty entries are dropped by agent.SetWorkspaceRoots.
+	{
+		roots := make([]string, 0, len(cfg.AgentAllowWorkspaceList)+2)
+		roots = append(roots, cfg.AgentAllowWorkspaceList...)
+		if cfg.AgentWorkspace != "" {
+			roots = append(roots, cfg.AgentWorkspace)
 		}
-	}
-	if workspaceRoot != "" {
-		agent.SetWorkspaceRoot(workspaceRoot)
-		slog.Info("workspace root configured", "component", "start", "root", workspaceRoot)
+		if home, err := os.UserHomeDir(); err == nil {
+			roots = append(roots, filepath.Join(home, ".ringclaw", "workspace"))
+		}
+		agent.SetWorkspaceRoots(roots)
+		if effective := agent.WorkspaceRoots(); len(effective) > 0 {
+			slog.Info("workspace allowlist configured", "component", "start", "roots", effective)
+		}
 	}
 
 	// Resolve the ACP full-access acknowledgement: config wins over env.

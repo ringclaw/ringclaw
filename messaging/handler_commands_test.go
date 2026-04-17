@@ -75,7 +75,7 @@ func TestHandleCwd_RejectsOutsideWorkspaceRoot(t *testing.T) {
 	if !strings.HasPrefix(got, "Denied:") {
 		t.Errorf("expected denial reply, got %q", got)
 	}
-	if !strings.Contains(got, "escapes workspace root") {
+	if !strings.Contains(got, "escapes configured workspace allowlist") {
 		t.Errorf("expected escape message, got %q", got)
 	}
 }

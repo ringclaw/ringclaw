@@ -30,56 +30,98 @@ func (i AgentInfo) String() string {
 	return s
 }
 
-// workspaceRoot is the configured allowlist root for /cwd and Agent.SetCwd.
-// When non-empty, every requested cwd must resolve to a path inside this
-// directory. When empty (the test default), the allowlist check is disabled
-// for backward compatibility.
+// workspaceRoots is the configured allowlist of roots for /cwd and
+// Agent.SetCwd. When non-empty, every requested cwd must resolve to a path
+// inside at least one of these directories. When empty (the test default),
+// the allowlist check is disabled for backward compatibility.
+//
+// The list is sourced from cfg.AgentAllowWorkspaceList plus implicit
+// defaults (~/.ringclaw/workspace and the legacy cfg.AgentWorkspace),
+// resolved by cmd/start.
 var (
-	workspaceRootMu sync.RWMutex
-	workspaceRoot   string
+	workspaceRootsMu sync.RWMutex
+	workspaceRoots   []string
 )
 
-// SetWorkspaceRoot configures the allowlist root for cwd changes. Production
-// code should call this once at startup with cfg.AgentWorkspace (or the
-// default ~/.ringclaw/workspace). The path is resolved to its absolute,
-// symlink-cleaned form so containment checks are stable.
+// SetWorkspaceRoots configures the allowlist of roots for cwd changes.
+// Production code should call this once at startup with the union of
+// cfg.AgentAllowWorkspaceList, ~/.ringclaw/workspace, and the legacy
+// cfg.AgentWorkspace. Each entry is resolved to its absolute, symlink-
+// cleaned form so containment checks are stable. Empty input clears the
+// allowlist (disabled).
+func SetWorkspaceRoots(roots []string) {
+	cleaned := make([]string, 0, len(roots))
+	seen := make(map[string]struct{}, len(roots))
+	for _, raw := range roots {
+		root := strings.TrimSpace(raw)
+		if root == "" {
+			continue
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			slog.Warn("workspace root: filepath.Abs failed, using raw value", "component", "agent", "root", root, "error", err)
+			abs = root
+		}
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		if _, dup := seen[abs]; dup {
+			continue
+		}
+		seen[abs] = struct{}{}
+		cleaned = append(cleaned, abs)
+	}
+	workspaceRootsMu.Lock()
+	workspaceRoots = cleaned
+	workspaceRootsMu.Unlock()
+}
+
+// SetWorkspaceRoot is a single-root convenience wrapper around
+// SetWorkspaceRoots. Retained for callers/tests that only care about one
+// root.
 func SetWorkspaceRoot(root string) {
 	root = strings.TrimSpace(root)
 	if root == "" {
-		workspaceRootMu.Lock()
-		workspaceRoot = ""
-		workspaceRootMu.Unlock()
+		SetWorkspaceRoots(nil)
 		return
 	}
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		slog.Warn("workspace root: filepath.Abs failed, using raw value", "component", "agent", "root", root, "error", err)
-		abs = root
-	}
-	if cleaned, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = cleaned
-	}
-	workspaceRootMu.Lock()
-	workspaceRoot = abs
-	workspaceRootMu.Unlock()
+	SetWorkspaceRoots([]string{root})
 }
 
-// WorkspaceRoot returns the configured allowlist root, or "" if unset.
+// WorkspaceRoots returns the configured allowlist, or nil if disabled.
+// The returned slice is a copy and safe to mutate.
+func WorkspaceRoots() []string {
+	workspaceRootsMu.RLock()
+	defer workspaceRootsMu.RUnlock()
+	if len(workspaceRoots) == 0 {
+		return nil
+	}
+	out := make([]string, len(workspaceRoots))
+	copy(out, workspaceRoots)
+	return out
+}
+
+// WorkspaceRoot returns the first configured allowlist root, or "" if
+// unset. Convenience for callers that only need a representative root
+// (e.g. a default cwd to chdir into).
 func WorkspaceRoot() string {
-	workspaceRootMu.RLock()
-	defer workspaceRootMu.RUnlock()
-	return workspaceRoot
+	workspaceRootsMu.RLock()
+	defer workspaceRootsMu.RUnlock()
+	if len(workspaceRoots) == 0 {
+		return ""
+	}
+	return workspaceRoots[0]
 }
 
-// EnsurePathInWorkspace verifies that absPath is inside the configured
-// workspace root. Returns nil when no root is configured (allowlist
-// disabled), when absPath equals the root, or when filepath.Rel reports a
-// non-escaping relative path. Symlinks are resolved for any existing
-// ancestor of the path so the check survives operator paths under
-// /var/folders -> /private/var/folders style indirection.
+// EnsurePathInWorkspace verifies that absPath is inside any of the
+// configured workspace roots. Returns nil when no roots are configured
+// (allowlist disabled), or when absPath equals / lives under at least
+// one root. Symlinks are resolved for any existing ancestor of the path
+// so the check survives operator paths under /var/folders ->
+// /private/var/folders style indirection.
 func EnsurePathInWorkspace(absPath string) error {
-	root := WorkspaceRoot()
-	if root == "" {
+	roots := WorkspaceRoots()
+	if len(roots) == 0 {
 		return nil
 	}
 	abs, err := filepath.Abs(absPath)
@@ -87,15 +129,18 @@ func EnsurePathInWorkspace(absPath string) error {
 		return fmt.Errorf("resolve %q: %w", absPath, err)
 	}
 	abs = resolveExistingSymlinks(abs)
-	rel, err := filepath.Rel(root, abs)
-	if err != nil {
-		return fmt.Errorf("path %q is not under workspace root %q", absPath, root)
+	for _, root := range roots {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == ".." || strings.HasPrefix(rel, "../") {
+			continue
+		}
+		return nil
 	}
-	rel = filepath.ToSlash(rel)
-	if rel == ".." || strings.HasPrefix(rel, "../") {
-		return fmt.Errorf("path %q escapes workspace root %q", absPath, root)
-	}
-	return nil
+	return fmt.Errorf("path %q escapes configured workspace allowlist %v", absPath, roots)
 }
 
 // resolveExistingSymlinks walks up the path until an existing ancestor is
