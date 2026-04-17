@@ -128,10 +128,21 @@ func (a *CLIAgent) ResetSession(_ context.Context, conversationID string) (strin
 }
 
 // Chat sends a message to the CLI agent and returns the response.
+//
+// Refuses an empty conversationID as a defense-in-depth check against
+// callers that would otherwise spawn a new subprocess per message without a
+// proper session key (see security review Finding #7). The handler builds
+// the conversationID from the chat ID + creator ID, so an empty value
+// indicates the message bypassed the normal Monitor/Handler flow.
 func (a *CLIAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
+	if strings.TrimSpace(conversationID) == "" {
+		slog.Error("cli agent: refusing to chat with empty conversationID",
+			"component", "cli", "command", a.command, "agent", a.name)
+		return "", fmt.Errorf("cli agent %q: empty conversationID", a.name)
+	}
 	switch a.name {
 	case "codex":
-		return a.chatCodex(ctx, message)
+		return a.chatCodex(ctx, conversationID, message)
 	default:
 		return a.chatClaude(ctx, conversationID, message)
 	}
@@ -180,10 +191,11 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 	}
 
 	if err := cmd.Start(); err != nil {
+		slog.Error("cli spawn failed", "component", "cli", "agent", a.name, "command", a.command, "conversation", conversationID, "error", err)
 		return "", fmt.Errorf("start %s: %w", a.name, err)
 	}
 
-	slog.Info("spawned process", "component", "cli", "command", a.command, "pid", cmd.Process.Pid, "conversation", conversationID)
+	slog.Info("cli spawned subprocess", "component", "cli", "agent", a.name, "command", a.command, "pid", cmd.Process.Pid, "conversation", conversationID, "cwd", a.cwd)
 
 	var result string
 	var newSessionID string
@@ -256,7 +268,7 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 }
 
 // chatCodex handles codex CLI invocation using "codex exec".
-func (a *CLIAgent) chatCodex(ctx context.Context, message string) (string, error) {
+func (a *CLIAgent) chatCodex(ctx context.Context, conversationID, message string) (string, error) {
 	args := []string{"exec", message}
 	if a.model != "" {
 		args = append(args, "--model", a.model)
@@ -264,7 +276,7 @@ func (a *CLIAgent) chatCodex(ctx context.Context, message string) (string, error
 	// Append extra args from config (e.g. --skip-git-repo-check)
 	args = append(args, a.args...)
 
-	slog.Info("running codex exec", "component", "cli", "command", a.command)
+	slog.Info("cli spawning subprocess", "component", "cli", "agent", a.name, "command", a.command, "conversation", conversationID, "cwd", a.cwd)
 	cmd := exec.CommandContext(ctx, a.command, args...)
 	if a.cwd != "" {
 		cmd.Dir = a.cwd

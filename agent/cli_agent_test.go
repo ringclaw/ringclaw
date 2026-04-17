@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -135,6 +136,28 @@ func TestCLIAgent_ResetSession_NonExistent(t *testing.T) {
 	_, err := a.ResetSession(context.Background(), "nonexistent")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCLIAgent_Chat_RefusesEmptyConversationID(t *testing.T) {
+	for _, name := range []string{"codex", "claude"} {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			a := NewCLIAgent(CLIAgentConfig{
+				Name:    name,
+				Command: "nonexistent_binary",
+				Cwd:     t.TempDir(),
+			})
+			for _, convID := range []string{"", "   ", "\t\n"} {
+				_, err := a.Chat(context.Background(), convID, "hello")
+				if err == nil {
+					t.Fatalf("expected error for empty conversationID %q", convID)
+				}
+				if !strings.Contains(err.Error(), "empty conversationID") {
+					t.Fatalf("expected empty conversationID error, got %v", err)
+				}
+			}
+		})
 	}
 }
 
