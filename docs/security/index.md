@@ -371,18 +371,123 @@ directories `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
 
 ## Permission Matrix
 
-| Operation | Bot DM | Bot Group (owner) | Bot Group (others) |
+RingClaw gates incoming messages through three orthogonal layers. They
+compose bottom-up: a message must clear every applicable layer before
+it takes effect.
+
+1. **Layer 1 — Chat command authorization**: who may trigger each slash command in each chat shape.
+2. **Layer 2 — AI-driven ACTION dispatch**: whether an AI-emitted `ACTION:` block may fan out (especially cross-chat).
+3. **Layer 3 — ACP session capabilities**: what an ACP agent can read, write, or execute inside a session.
+
+::: tip Full access only affects Layer 3
+The `/full-access` grant (and the static `full_access: true` config) only
+changes ACP **session mode**. It does not unlock any chat command — a
+non-owner still cannot use `/cwd` in a group, and `/full-access` itself
+is still DM-only. It also does not relax the Layer 2 cross-chat
+fail-closed notice.
+:::
+
+**Layer 0 reminder** — every message first passes through the Phase 1
+trusted-sender allowlist ([`messaging/handler.go:444-448`](https://github.com/ringclaw/ringclaw/blob/main/messaging/handler.go#L444)).
+Senders outside the allowlist are dropped before any layer below
+applies.
+
+### Layer 1 — Chat command authorization
+
+Column legend: ✅ allowed; ❌ blocked (bot replies with an explicit
+refusal or silently drops); ⚠️ allowed with an extra check.
+
+| Command / Message Shape | Bot DM (owner) | Bot Group (owner) | Bot Group (others) | Gate |
+|---|---|---|---|---|
+| Plain text with no `/` prefix (→ default agent) | ✅ | ✅ | ✅ | `handler.go:528-530` |
+| `/help` | ✅ | ✅ | ✅ | `handler.go:491` |
+| `/info` / `/status` | ✅ | ✅ | ✅ | `handler.go:475` |
+| `/chatinfo [id]` | ✅ | ✅ | ✅ | `handler.go:505` |
+| `/task` / `/note` / `/event` / `/card` | ✅ | ✅ | ✅ | `actions_commands.go:30` |
+| `/<agent> <msg>` (send / broadcast) | ✅ | ✅ | ✅ | `handler.go:562` |
+| `/<agent>` (switch default agent) | ✅ | ✅ | ❌ | `handler.go:537-539` |
+| `/new` / `/clear` | ✅ | ✅ | ❌ | `handler.go:462-468` + `handler_commands.go:248` |
+| `/cwd [path]` | ✅ ⚠️ | ✅ ⚠️ | ❌ | `handler_commands.go:19` (allowlist + denylist) |
+| `/cron add\|list\|delete` | ✅ | ✅ | ❌ | `handler.go:498` + `handler_commands.go:254` |
+| `/reload` | ✅ | ✅ | ❌ | `handler.go:471` + `handler_commands.go:257` |
+| Summarize (NL trigger, e.g. "总结", "summarize") | ✅ (needs Private App) | ⚠️ configured group only | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
+| Summarize without Private App | ❌ disabled | ❌ disabled | ❌ disabled | `handler_summarize.go:76` |
+| `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌ (DM-only) | ❌ (DM-only) | `handler_fullaccess.go:62-67` |
+| `/approval <id>` / `/approval deny <id>` | ✅ ⚠️ (requester only) | ⚠️ not parsed; forwarded to agent as text | ⚠️ not parsed; forwarded to agent as text | `handler.go:576-585` + `oob/authorize.go:126` |
+
+Extra checks:
+
+- `/cwd` — the absolute path must land inside `agent_allow_workspace_list ∪ agent_workspace ∪ ~/.ringclaw/workspace` AND must not contain any of the denylisted directories (`.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`). Both checks run regardless of full-access state.
+- `/full-access grant [duration]` — only activates after the owner replies `/approval <id>`. Challenge TTL 5 min, default grant 24 h, max 30 d.
+- `/approval` — only the original requester may resolve their own challenge (`oob/authorize.go:146-154`). Group-chat `/approval <id>` messages are not intercepted; they fall through to the default agent as ordinary text.
+- Summarize in group — only the group whose ID matches `ringcentral.group_summary_group_id`; cross-group / cross-person summarize refused (`handler_summarize.go:84-115`).
+
+### Layer 2 — AI-driven ACTION dispatch
+
+An `ACTION: NOTE|TASK|EVENT|CARD|MESSAGE ... END_ACTION` block embedded
+in the agent's reply is parsed by `ParseAgentActions` and executed by
+`ExecuteAgentActions` (`messaging/actions.go:166`). Gating is
+**independent of full-access**.
+
+**Typical triggers** (what a user types → what the agent may emit):
+
+```text
+User: "记个笔记：本周优先级 A/B/C"
+→ Agent reply includes:
+    ACTION: NOTE title=本周优先级
+    A. …
+    B. …
+    END_ACTION
+
+User: "创建一个任务交给 Alice：跟进 PR #42"
+→ ACTION: TASK subject=跟进 PR #42 assignee=Alice END_ACTION
+
+User: "把刚才的会议要点发消息告诉 David"
+→ ACTION: MESSAGE chatid=David
+    会议要点:
+    …
+    END_ACTION
+
+User: "这个讨论的摘要发到 #engineering 频道"
+→ ACTION: MESSAGE chatid=engineering
+    …
+    END_ACTION    # ← triggers the Layer 2 cross-chat fail-closed path
+```
+
+| Scenario | Behavior | Gate |
+|---|---|---|
+| ACTION in the origin chat (any sender) | ✅ always allowed | `actions.go:166-310` |
+| `chatid=` override; requester is **not** on the trusted-sender allowlist | ⚠️ `chatid` silently dropped, forced back to origin chat (`WARN action: ignoring chatid override from non-owner sender`) | `actions.go:172-184` |
+| `chatid=` override by owner; target = origin chat | ✅ allowed (same as row 1) | — |
+| `chatid=` override by owner; target = owner's own DM | ✅ allowed without audit notice | `actions.go:195` (guard) |
+| `chatid=` override by owner; target ≠ origin AND target ≠ owner DM | 🔒 **fail-closed**: bot first posts `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` to the owner DM; if the notice succeeds within `crossChatNoticeTimeout` (5 s) the action dispatches, otherwise it is **refused** with `Refused cross-chat <TYPE>: …` | `actions.go:195-203`; `announceCrossChatOrRefuse` at `actions.go:329-357` |
+| Owner cross-chat action, but OOB not configured (no owner DM resolved) | ❌ refused with `Refused cross-chat <TYPE>: no owner DM audit channel configured` | `actions.go:330-332` |
+
+### Layer 3 — ACP session capabilities (full-access toggle)
+
+Applies **only to ACP agents** (`agent/acp_agent.go`). HTTP and CLI
+agents do not expose a `session/set_mode` equivalent.
+
+The `full_access` toggle flips newly-created ACP sessions between
+`session/set_mode "default"` and `session/set_mode "full-access"`
+(`acp_agent.go:570-620`). The effective RingClaw-side gates are:
+
+| Capability | Default mode | Full-access mode | Gate |
 |---|---|---|---|
-| Chat with agent | Bot replies | Bot replies | Bot replies |
-| Summarize | Private App read, Bot reply | **Blocked** (data leak) | **Blocked** (data leak) |
-| Summarize (no Private App) | **Disabled** | **Disabled** | **Disabled** |
-| `/clear`, `/new` | Allowed | Allowed | **Blocked** (owner only) |
-| `/cwd` | Allowed | Allowed | **Blocked** (owner only) |
-| Agent switch (`/cc`) | Allowed | Allowed | **Blocked** (owner only) |
-| `/info`, `/help` | Allowed | Allowed | Allowed |
-| `/full-access` | Allowed (`/approval` required for `grant`) | **Blocked** (DM-only) | **Blocked** (DM-only) |
-| `/task`, `/note`, `/event` | Private App (or Bot) | Private App (or Bot) | Private App (or Bot) |
-| ACTION blocks | Private App (or Bot) | Private App (or Bot) | Private App (or Bot) |
+| `session/set_mode` parameter | `"default"` | `"full-access"` | `acp_agent.go:570-620` |
+| `session/request_permission` callbacks from the agent | **Auto-allowed by RingClaw** (the client always replies with the first `"allow"` option) — RingClaw itself does not interactively gate MCP tool calls | Agent generally stops issuing `request_permission` under full-access mode | `acp_rpc.go:230-265` |
+| `fs/read_text_file` (ACP protocol) | ✅ allowed; no path check, no sandbox | ✅ allowed (unchanged) | `acp_terminal.go:420-463` |
+| `fs/write_text_file` (ACP protocol) | ✅ iff agent config `allow_write: true`; otherwise `write permission denied: allowWrite is false` | ✅ iff `allow_write: true` — **full-access does NOT override `allow_write`** | `acp_terminal.go:472-475` |
+| `terminal/create` (shell subprocess) | ✅ arbitrary command, arbitrary `cwd`, **no `allow_write` check, no path allowlist check** | ✅ same (unchanged) | `acp_terminal.go:295-315`, `acp_terminal.go:128-187` |
+| Agent-visible tool catalog | Whatever the ACP agent exposes in `default` mode (per-agent policy) | Whatever the ACP agent exposes in `full-access` mode | ACP-agent-specific |
+| Top-level `/cwd` allowlist + denylist | Applies to `/cwd` command and `Agent.SetCwd` initial cwd only | **Unchanged** — the allowlist never applies to agent-chosen paths inside tool calls | `handler_commands.go:19-98` |
+
+::: warning ACP Layer 3 invariants worth highlighting
+- **`allow_write: false` is not airtight.** It blocks the ACP protocol path (`fs/write_text_file`). It does **not** block the agent from shelling out via `terminal/create` to run `echo … > file`, `sed -i`, `git commit`, etc. Treat `allow_write` as a hint, not a sandbox.
+- **No per-call approval in RingClaw.** `handlePermissionRequest` auto-selects the first `allow` option. A stricter gate lives in the ACP agent itself (for example, Claude's own tool-approval logic), not in RingClaw. Moving from default → full-access does not flip a RingClaw-side gate on or off; it just changes which `session/set_mode` RingClaw asks the agent to adopt.
+- **`/cwd` allowlist ≠ file-access sandbox.** The allowlist constrains where the `/cwd` command may chdir the agent's starting working directory. An ACP agent can still read/write any file it has OS permission to touch, and can open terminals in any cwd it picks.
+- **Full-access is additive on TWO axes.** Either a static `full_access: true` + top-level `full_access_ack: true` in `config.json` (`acp_agent.go:246-252`), or a runtime `/full-access grant` → `/approval <id>` handshake in the owner DM (`handler_fullaccess.go`), will flip new sessions into full-access mode. Revoke / TTL expiry also **demotes every live session** via `DemoteAllACPFullAccess` (`acp_agent.go:703-728`); sessions whose demote call fails are dropped from the session map and rebuilt fresh on the next prompt.
+:::
 
 ## Client Responsibilities
 
