@@ -18,7 +18,7 @@ curl -H "X-RingClaw-Token: $(cat ~/.ringclaw/api_token)" \
 服务还会验证 `Host` 请求头以防止 DNS 重绑定攻击 — 仅接受 `localhost`、`127.0.0.1` 和 `::1`。
 
 ::: danger
-不要将 `RINGCLAW_API_ADDR` 设为 `0.0.0.0`，这会将未加密的企业 RingCentral 账号网关暴露在局域网中。默认的 `127.0.0.1` 绑定已满足所有正常使用场景。
+不要将 `config.json` 中的 `api_addr` 设为 `0.0.0.0`，这会将未加密的企业 RingCentral 账号网关暴露在局域网中。默认的 `127.0.0.1` 绑定已满足所有正常使用场景。
 :::
 
 ## ACP Agent 文件权限

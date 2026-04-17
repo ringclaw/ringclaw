@@ -17,12 +17,12 @@ curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | 
 # One-line install (Windows PowerShell)
 irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
-# Set bot token and start
-export RC_BOT_TOKEN="your_bot_token"
+# Configure (creates ~/.ringclaw/config.json) and start
+ringclaw setup
 ringclaw start
 ```
 
-On first start, RingClaw auto-detects installed AI agents and saves config to `~/.ringclaw/config.json`. Run `ringclaw setup` for an interactive credential wizard.
+All configuration lives in `~/.ringclaw/config.json`. On first start, RingClaw auto-detects installed AI agents and updates the file. Environment variables like `RC_BOT_TOKEN` are no longer read — use `ringclaw setup` or edit the file directly.
 
 ## Features
 

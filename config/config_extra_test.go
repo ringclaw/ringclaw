@@ -10,14 +10,6 @@ import (
 func TestLoad_MissingFile_ReturnsDefault(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
-	// Clear env vars that loadEnv would pick up
-	for _, k := range []string{
-		"RINGCLAW_DEFAULT_AGENT", "RINGCLAW_AGENT_WORKSPACE", "RINGCLAW_API_ADDR",
-		"RC_CLIENT_ID", "RC_CLIENT_SECRET", "RC_JWT_TOKEN", "RC_SERVER_URL",
-		"RC_CHAT_IDS", "RC_SOURCE_USER_IDS", "RC_BOT_TOKEN", "RC_BOT_MENTION_ONLY",
-	} {
-		t.Setenv(k, "")
-	}
 
 	cfg, err := Load()
 	if err != nil {
@@ -37,7 +29,6 @@ func TestLoad_MissingFile_ReturnsDefault(t *testing.T) {
 func TestLoad_ValidFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
-	clearConfigEnv(t)
 
 	dir := filepath.Join(tmpDir, ".ringclaw")
 	os.MkdirAll(dir, 0o700)
@@ -90,7 +81,6 @@ func TestLoad_ValidFile(t *testing.T) {
 func TestLoad_MalformedJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
-	clearConfigEnv(t)
 
 	dir := filepath.Join(tmpDir, ".ringclaw")
 	os.MkdirAll(dir, 0o700)
@@ -105,11 +95,9 @@ func TestLoad_MalformedJSON(t *testing.T) {
 func TestLoad_NilAgentsInitialized(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
-	clearConfigEnv(t)
 
 	dir := filepath.Join(tmpDir, ".ringclaw")
 	os.MkdirAll(dir, 0o700)
-	// JSON with no "agents" key
 	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"default_agent":"test"}`), 0o600)
 
 	cfg, err := Load()
@@ -121,11 +109,29 @@ func TestLoad_NilAgentsInitialized(t *testing.T) {
 	}
 }
 
-func TestLoad_EnvOverrides(t *testing.T) {
+// TestLoad_EnvVarsIgnored verifies that previously supported env vars are
+// now silently ignored and never influence Load() when config.json exists.
+func TestLoad_EnvVarsIgnored(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+
+	dir := filepath.Join(tmpDir, ".ringclaw")
+	os.MkdirAll(dir, 0o700)
+	payload := `{
+		"default_agent": "json-agent",
+		"agent_workspace": "/json/ws",
+		"api_addr": "127.0.0.1:3333",
+		"ringcentral": {
+			"client_id": "json-cid",
+			"bot_token": "json-bot",
+			"chat_ids": ["json-c1"]
+		}
+	}`
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(payload), 0o600)
+
 	t.Setenv("RINGCLAW_DEFAULT_AGENT", "codex")
 	t.Setenv("RINGCLAW_AGENT_WORKSPACE", "/env/workspace")
+	t.Setenv("RINGCLAW_AGENT_ALLOW_WORKSPACE_LIST", "/env/a,/env/b")
 	t.Setenv("RINGCLAW_API_ADDR", "127.0.0.1:7777")
 	t.Setenv("RC_CLIENT_ID", "env-cid")
 	t.Setenv("RC_CLIENT_SECRET", "env-csec")
@@ -140,39 +146,44 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.DefaultAgent != "codex" {
-		t.Errorf("DefaultAgent = %q, want codex", cfg.DefaultAgent)
+	if cfg.DefaultAgent != "json-agent" {
+		t.Errorf("DefaultAgent: env must be ignored, got %q", cfg.DefaultAgent)
 	}
-	if cfg.AgentWorkspace != "/env/workspace" {
-		t.Errorf("AgentWorkspace = %q", cfg.AgentWorkspace)
+	if cfg.AgentWorkspace != "/json/ws" {
+		t.Errorf("AgentWorkspace: env must be ignored, got %q", cfg.AgentWorkspace)
 	}
-	if cfg.APIAddr != "127.0.0.1:7777" {
-		t.Errorf("APIAddr = %q", cfg.APIAddr)
+	if len(cfg.AgentAllowWorkspaceList) != 0 {
+		t.Errorf("AgentAllowWorkspaceList: env must be ignored, got %v", cfg.AgentAllowWorkspaceList)
 	}
-	if cfg.RC.ClientID != "env-cid" {
-		t.Errorf("ClientID = %q", cfg.RC.ClientID)
+	if cfg.APIAddr != "127.0.0.1:3333" {
+		t.Errorf("APIAddr: env must be ignored, got %q", cfg.APIAddr)
 	}
-	if cfg.RC.ServerURL != "https://env.example.com" {
-		t.Errorf("ServerURL = %q", cfg.RC.ServerURL)
+	if cfg.RC.ClientID != "json-cid" {
+		t.Errorf("RC.ClientID: env must be ignored, got %q", cfg.RC.ClientID)
 	}
-	if len(cfg.RC.ChatIDs) != 2 || cfg.RC.ChatIDs[0] != "ec1" {
-		t.Errorf("ChatIDs = %v", cfg.RC.ChatIDs)
+	if cfg.RC.ClientSecret != "" {
+		t.Errorf("RC.ClientSecret: env must be ignored, got %q", cfg.RC.ClientSecret)
 	}
-	if len(cfg.RC.SourceUserIDs) != 3 || cfg.RC.SourceUserIDs[0] != "u1" {
-		t.Errorf("SourceUserIDs = %v", cfg.RC.SourceUserIDs)
+	if cfg.RC.ServerURL != "" {
+		t.Errorf("RC.ServerURL: env must be ignored, got %q", cfg.RC.ServerURL)
 	}
-	if cfg.RC.BotToken != "env-bot" {
-		t.Errorf("BotToken = %q", cfg.RC.BotToken)
+	if len(cfg.RC.ChatIDs) != 1 || cfg.RC.ChatIDs[0] != "json-c1" {
+		t.Errorf("RC.ChatIDs: env must be ignored, got %v", cfg.RC.ChatIDs)
 	}
-	if cfg.RC.BotMentionOnly == nil || !*cfg.RC.BotMentionOnly {
-		t.Error("expected BotMentionOnly=true")
+	if len(cfg.RC.SourceUserIDs) != 0 {
+		t.Errorf("RC.SourceUserIDs: env must be ignored, got %v", cfg.RC.SourceUserIDs)
+	}
+	if cfg.RC.BotToken != "json-bot" {
+		t.Errorf("RC.BotToken: env must be ignored, got %q", cfg.RC.BotToken)
+	}
+	if cfg.RC.BotMentionOnly != nil {
+		t.Errorf("RC.BotMentionOnly: env must be ignored, got %#v", cfg.RC.BotMentionOnly)
 	}
 }
 
 func TestSave_RoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
-	clearConfigEnv(t)
 
 	original := &Config{
 		DefaultAgent:   "kimi",
@@ -190,12 +201,12 @@ func TestSave_RoundTrip(t *testing.T) {
 			},
 		},
 		RC: RCConfig{
-			ClientID:                "c1",
-			ClientSecret:            "s1",
-			JWTToken:                "j1",
-			ServerURL:               "https://rc.example.com",
-			ChatIDs:                 []string{"chat1"},
-			GroupSummaryGroupID:     "g1",
+			ClientID:                 "c1",
+			ClientSecret:             "s1",
+			JWTToken:                 "j1",
+			ServerURL:                "https://rc.example.com",
+			ChatIDs:                  []string{"chat1"},
+			GroupSummaryGroupID:      "g1",
 			GroupSummaryMessageLimit: 100,
 		},
 		Heartbeat: HeartbeatConfig{Enabled: true, Interval: "15m", ActiveHours: "09:00-17:00"},
@@ -362,126 +373,22 @@ func TestRCConfigLogValue_EmptyFields(t *testing.T) {
 	rc := RCConfig{}
 	v := rc.LogValue()
 	s := v.String()
-	// Should not contain *** for empty fields
 	if s == "" {
 		t.Error("expected non-empty log value string")
-	}
-}
-
-func TestLoadEnv_SourceUserIDs(t *testing.T) {
-	cfg := DefaultConfig()
-	t.Setenv("RC_SOURCE_USER_IDS", "u1, u2")
-	clearNonUserIDEnv(t)
-	loadEnv(cfg)
-	if len(cfg.RC.SourceUserIDs) != 2 {
-		t.Fatalf("expected 2 source user IDs, got %d", len(cfg.RC.SourceUserIDs))
-	}
-	if cfg.RC.SourceUserIDs[0] != "u1" || cfg.RC.SourceUserIDs[1] != "u2" {
-		t.Errorf("unexpected user IDs: %v", cfg.RC.SourceUserIDs)
-	}
-}
-
-func TestLoadEnv_BotMentionOnly_Variants(t *testing.T) {
-	tests := []struct {
-		envVal string
-		want   bool
-	}{
-		{"true", true},
-		{"TRUE", true},
-		{"True", true},
-		{"1", true},
-		{"yes", true},
-		{"YES", true},
-		{"false", false},
-		{"0", false},
-		{"no", false},
-		{"anything", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.envVal, func(t *testing.T) {
-			cfg := DefaultConfig()
-			t.Setenv("RC_BOT_MENTION_ONLY", tt.envVal)
-			clearNonBotMentionEnv(t)
-			loadEnv(cfg)
-			if cfg.RC.BotMentionOnly == nil {
-				t.Fatal("BotMentionOnly should be set")
-			}
-			if *cfg.RC.BotMentionOnly != tt.want {
-				t.Errorf("envVal=%q: BotMentionOnly = %v, want %v", tt.envVal, *cfg.RC.BotMentionOnly, tt.want)
-			}
-		})
-	}
-}
-
-func TestLoadEnv_ServerURL(t *testing.T) {
-	cfg := DefaultConfig()
-	t.Setenv("RC_SERVER_URL", "https://custom.rc.example.com")
-	clearNonServerURLEnv(t)
-	loadEnv(cfg)
-	if cfg.RC.ServerURL != "https://custom.rc.example.com" {
-		t.Errorf("ServerURL = %q", cfg.RC.ServerURL)
 	}
 }
 
 func TestLoad_FileReadError(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
-	clearConfigEnv(t)
 
 	dir := filepath.Join(tmpDir, ".ringclaw")
 	os.MkdirAll(dir, 0o700)
-	// Create config.json as a directory to cause a read error
 	cfgPath := filepath.Join(dir, "config.json")
 	os.MkdirAll(cfgPath, 0o700)
 
 	_, err := Load()
 	if err == nil {
 		t.Error("expected error when config.json is a directory")
-	}
-}
-
-// helpers to clear env vars
-
-func clearConfigEnv(t *testing.T) {
-	t.Helper()
-	for _, k := range []string{
-		"RINGCLAW_DEFAULT_AGENT", "RINGCLAW_AGENT_WORKSPACE", "RINGCLAW_API_ADDR",
-		"RC_CLIENT_ID", "RC_CLIENT_SECRET", "RC_JWT_TOKEN", "RC_SERVER_URL",
-		"RC_CHAT_IDS", "RC_SOURCE_USER_IDS", "RC_BOT_TOKEN", "RC_BOT_MENTION_ONLY",
-	} {
-		t.Setenv(k, "")
-	}
-}
-
-func clearNonUserIDEnv(t *testing.T) {
-	t.Helper()
-	for _, k := range []string{
-		"RINGCLAW_DEFAULT_AGENT", "RINGCLAW_AGENT_WORKSPACE", "RINGCLAW_API_ADDR",
-		"RC_CLIENT_ID", "RC_CLIENT_SECRET", "RC_JWT_TOKEN", "RC_SERVER_URL",
-		"RC_CHAT_IDS", "RC_BOT_TOKEN", "RC_BOT_MENTION_ONLY",
-	} {
-		t.Setenv(k, "")
-	}
-}
-
-func clearNonBotMentionEnv(t *testing.T) {
-	t.Helper()
-	for _, k := range []string{
-		"RINGCLAW_DEFAULT_AGENT", "RINGCLAW_AGENT_WORKSPACE", "RINGCLAW_API_ADDR",
-		"RC_CLIENT_ID", "RC_CLIENT_SECRET", "RC_JWT_TOKEN", "RC_SERVER_URL",
-		"RC_CHAT_IDS", "RC_SOURCE_USER_IDS", "RC_BOT_TOKEN",
-	} {
-		t.Setenv(k, "")
-	}
-}
-
-func clearNonServerURLEnv(t *testing.T) {
-	t.Helper()
-	for _, k := range []string{
-		"RINGCLAW_DEFAULT_AGENT", "RINGCLAW_AGENT_WORKSPACE", "RINGCLAW_API_ADDR",
-		"RC_CLIENT_ID", "RC_CLIENT_SECRET", "RC_JWT_TOKEN",
-		"RC_CHAT_IDS", "RC_SOURCE_USER_IDS", "RC_BOT_TOKEN", "RC_BOT_MENTION_ONLY",
-	} {
-		t.Setenv(k, "")
 	}
 }

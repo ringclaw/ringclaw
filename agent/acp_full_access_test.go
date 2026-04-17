@@ -5,7 +5,6 @@ import (
 )
 
 func TestNewACPAgent_FullAccessDowngradedWithoutAck(t *testing.T) {
-	t.Setenv(fullAccessAckEnv, "")
 	ResetFullAccessAck()
 	t.Cleanup(ResetFullAccessAck)
 
@@ -15,13 +14,12 @@ func TestNewACPAgent_FullAccessDowngradedWithoutAck(t *testing.T) {
 		FullAccess: true,
 	})
 	if a.fullAccess {
-		t.Errorf("expected fullAccess to be downgraded to false when neither config nor %s is set", fullAccessAckEnv)
+		t.Errorf("expected fullAccess to be downgraded to false when full_access_ack is not set in config")
 	}
 }
 
-func TestNewACPAgent_FullAccessHonoredWithAckEnv(t *testing.T) {
-	t.Setenv(fullAccessAckEnv, "1")
-	ResetFullAccessAck()
+func TestNewACPAgent_FullAccessHonoredWithConfigAck(t *testing.T) {
+	SetFullAccessAck(true)
 	t.Cleanup(ResetFullAccessAck)
 
 	a := NewACPAgent(ACPAgentConfig{
@@ -30,13 +28,12 @@ func TestNewACPAgent_FullAccessHonoredWithAckEnv(t *testing.T) {
 		FullAccess: true,
 	})
 	if !a.fullAccess {
-		t.Errorf("expected fullAccess to be honored when %s=1", fullAccessAckEnv)
+		t.Errorf("expected fullAccess to be honored when full_access_ack=true")
 	}
 }
 
 func TestNewACPAgent_FullAccessOffStaysOff(t *testing.T) {
-	t.Setenv(fullAccessAckEnv, "1") // even with ack, off stays off
-	ResetFullAccessAck()
+	SetFullAccessAck(true) // even with ack, off stays off
 	t.Cleanup(ResetFullAccessAck)
 
 	a := NewACPAgent(ACPAgentConfig{
@@ -49,14 +46,14 @@ func TestNewACPAgent_FullAccessOffStaysOff(t *testing.T) {
 	}
 }
 
-// TestNewACPAgent_FullAccessConfigWinsOverEnv locks in the documented
-// precedence: an explicit config acknowledgement (set via
-// SetFullAccessAck) WINS over the RINGCLAW_FULL_ACCESS_ACK env var.
-func TestNewACPAgent_FullAccessConfigWinsOverEnv(t *testing.T) {
+// TestNewACPAgent_FullAccessConfigOnly pins the post-migration behavior:
+// config.json (via SetFullAccessAck) is the SOLE source for the
+// acknowledgement. The former RINGCLAW_FULL_ACCESS_ACK env var is
+// silently ignored.
+func TestNewACPAgent_FullAccessConfigOnly(t *testing.T) {
 	t.Cleanup(ResetFullAccessAck)
 
-	t.Run("config_true_overrides_env_unset", func(t *testing.T) {
-		t.Setenv(fullAccessAckEnv, "")
+	t.Run("config_true_enables", func(t *testing.T) {
 		SetFullAccessAck(true)
 		t.Cleanup(ResetFullAccessAck)
 
@@ -66,12 +63,11 @@ func TestNewACPAgent_FullAccessConfigWinsOverEnv(t *testing.T) {
 			FullAccess: true,
 		})
 		if !a.fullAccess {
-			t.Error("expected fullAccess honored when config ack=true even with env unset")
+			t.Error("expected fullAccess honored when config ack=true")
 		}
 	})
 
-	t.Run("config_false_overrides_env_set", func(t *testing.T) {
-		t.Setenv(fullAccessAckEnv, "1")
+	t.Run("config_false_disables", func(t *testing.T) {
 		SetFullAccessAck(false)
 		t.Cleanup(ResetFullAccessAck)
 
@@ -81,12 +77,12 @@ func TestNewACPAgent_FullAccessConfigWinsOverEnv(t *testing.T) {
 			FullAccess: true,
 		})
 		if a.fullAccess {
-			t.Error("expected fullAccess refused when config ack=false even with env=1")
+			t.Error("expected fullAccess refused when config ack=false")
 		}
 	})
 
-	t.Run("config_unset_falls_back_to_env", func(t *testing.T) {
-		t.Setenv(fullAccessAckEnv, "1")
+	t.Run("env_is_ignored", func(t *testing.T) {
+		t.Setenv("RINGCLAW_FULL_ACCESS_ACK", "1")
 		ResetFullAccessAck()
 		t.Cleanup(ResetFullAccessAck)
 
@@ -95,8 +91,8 @@ func TestNewACPAgent_FullAccessConfigWinsOverEnv(t *testing.T) {
 			Cwd:        t.TempDir(),
 			FullAccess: true,
 		})
-		if !a.fullAccess {
-			t.Error("expected fullAccess honored when config unset and env=1")
+		if a.fullAccess {
+			t.Error("expected fullAccess refused: RINGCLAW_FULL_ACCESS_ACK env must be ignored")
 		}
 	})
 }

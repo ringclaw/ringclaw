@@ -18,7 +18,7 @@ curl -H "X-RingClaw-Token: $(cat ~/.ringclaw/api_token)" \
 The server also validates the `Host` header to prevent DNS rebinding attacks — only `localhost`, `127.0.0.1`, and `::1` are accepted.
 
 ::: danger
-Do not bind `RINGCLAW_API_ADDR` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
+Do not bind `api_addr` in `config.json` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
 :::
 
 ## Phase 2 Hardening: `/approval` + Cross-Chat Notices
@@ -52,7 +52,7 @@ explicitly re-grants.
 | Owner cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` | runtime behavior | `messaging/actions.go` | Honored unconditionally; `WARN action: owner cross-chat dispatch` audit log only | **Synchronous fail-closed pre-dispatch notice.** Before the action is dispatched, a metadata-only heads-up is posted to the owner DM when the target chat differs from the origin AND from the owner's own DM. The notice carries `TYPE`, `requesterID`, RFC3339 timestamp, `originChatID`, `targetChatID` — no body, title, or content preview. If the owner DM is not configured or the notice send fails, **the cross-chat action is refused** (caller receives `Refused cross-chat <TYPE>: …`). | Tune `crossChatNoticeTimeout` in `messaging/actions.go` (currently 5 s). The notice target (`OwnerDMChat`) is derived from the bot DM; it cannot be pointed elsewhere. |
 | `/full-access` slash command | runtime command | bot DM with the owner | _did not exist_ | **New.** `status` / `grant [duration]` / `revoke`. `grant` is a two-step confirmation: the bot issues a short-lived challenge ID, posts a plain-text `/approval` prompt to the owner DM, and only activates the grant after the owner replies `/approval <id>`. While a grant is active, each newly-created ACP session is flipped into `session/set_mode "full-access"`. When the grant is revoked (explicitly or by TTL expiry), **every live ACP session is also demoted back to `set_mode "default"`** via a revoke hook — sessions whose demote call fails are dropped from the session map so the next prompt rebuilds them in the locked-down mode. | **Default grant 1 day**, hard cap **30 days**. Oversized inputs are silently clamped. Durations are parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`). Restricted to the owner DM; group-chat invocations are refused. |
 | `/approval <id>` / `/approval deny <id>` | slash command | bot DM with the owner | _did not exist_ | **New.** Canonical reply shape for pending challenges. 8-char hex `<id>`; `/approval deny <id>` explicitly rejects. Non-requester replies are refused with a plain-text message so a teammate sharing the DM cannot cancel another user's pending challenge. Replies never reach the AI agent. | n/a |
-| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` honored at startup when `full_access_ack` (config) or `RINGCLAW_FULL_ACCESS_ACK=1` (env) acknowledges it; otherwise downgraded with a `WARN` | **Unchanged** for the static path. In addition, an active `/full-access` grant overlays it dynamically — new ACP sessions read the TTL state on every creation, so a grant takes effect without restarting and naturally drops back to guarded mode when it expires. The per-session log line now carries a `source` field (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`) for audit. | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
+| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` honored at startup when the top-level `full_access_ack: true` is also set in `config.json`; otherwise downgraded with a `WARN` | **Unchanged** for the static path. In addition, an active `/full-access` grant overlays it dynamically — new ACP sessions read the TTL state on every creation, so a grant takes effect without restarting and naturally drops back to guarded mode when it expires. The per-session log line now carries a `source` field (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`) for audit. | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
 
 ### Before / after impact for operators
 
@@ -110,24 +110,22 @@ small amount of in-memory conversation context may be lost).
 Phase 1 of the Remote Control hardening review introduces **two new
 top-level `config.json` fields** (`agent_allow_workspace_list` and
 `full_access_ack`) and otherwise reuses fields that already existed in
-the schema, changing how they are interpreted at startup. It also adds
-two new environment variables as fallbacks. Operators upgrading from a
-previous release should review the table below — defaults marked
-"**new**" may change behavior even when `config.json` is left untouched.
+the schema, changing how they are interpreted at startup. Operators
+upgrading from a previous release should review the table below —
+defaults marked "**new**" may change behavior even when `config.json`
+is left untouched.
+
+All configuration lives in `~/.ringclaw/config.json`; the previously
+supported `RC_*` / `RINGCLAW_*` / `OPENCLAW_GATEWAY_*` env-var
+fallbacks have been removed and are silently ignored.
 
 | Setting | Type | Where | Old default | New default | Operator override |
 |---------|------|-------|-------------|-------------|-------------------|
-| `ringcentral.source_user_ids` | `[]string` | `config.json` (also `RC_SOURCE_USER_IDS` env, comma-separated) | Empty list = **allow every sender** in any allowed chat | Empty list + Private App = **owner-only** (auto-injected). Empty list + no Private App = **deny all** with startup error | List numeric IDs / emails / phone numbers to add additional trusted senders. Email and phone require Private App with `ReadAccounts`. |
-| `agent_workspace` | `string` | `config.json` (also `RINGCLAW_AGENT_WORKSPACE` env) | Default cwd for agents (no allowlist enforcement) | **Unchanged behavior** as the default cwd, AND implicitly added to the cwd allowlist so the agent can chdir into it | Continues to control the initial cwd. To widen the allowlist, prefer the dedicated `agent_allow_workspace_list` field below. |
-| `agent_allow_workspace_list` | `[]string` | `config.json` (also `RINGCLAW_AGENT_ALLOW_WORKSPACE_LIST` env, comma-separated) | _did not exist_ | **new** — explicit list of directories that `/cwd` and `Agent.SetCwd` may target. Always merged with `~/.ringclaw/workspace` and (if set) `agent_workspace`; duplicates are dropped | List every subtree the AI agents are allowed to enter. Anything outside every entry is rejected at runtime. |
-| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` immediately enabled `session/set_mode "full-access"` on every new ACP session | `true` is **ignored** unless `full_access_ack` (config) or `RINGCLAW_FULL_ACCESS_ACK=1` (env) acknowledges it; otherwise downgraded with a `WARN` log | Set `full_access_ack: true` in `config.json` (preferred), or export `RINGCLAW_FULL_ACCESS_ACK=1`. |
-| `full_access_ack` | `*bool` | `config.json` (top-level) | _did not exist_ | **new** — `true` honors `full_access`, `false` explicitly refuses (and **suppresses any env-var override**), unset = fall back to env var | Preferred over the env var; lives under version control alongside the agent that needs it. |
-| `RINGCLAW_FULL_ACCESS_ACK` | env var | process environment | _did not exist_ | **new** — must equal `1` to honor any agent's `full_access: true` when `full_access_ack` is unset in `config.json` | Only consulted when `full_access_ack` is omitted from config. |
-
-Resolution order for `full_access_ack`: **config wins over env**. If
-`full_access_ack` is set in `config.json` (either `true` or `false`), the
-env var is ignored. This means an explicit `"full_access_ack": false`
-neutralizes a misplaced shell export.
+| `ringcentral.source_user_ids` | `[]string` | `config.json` | Empty list = **allow every sender** in any allowed chat | Empty list + Private App = **owner-only** (auto-injected). Empty list + no Private App = **deny all** with startup error | List numeric IDs / emails / phone numbers to add additional trusted senders. Email and phone require Private App with `ReadAccounts`. |
+| `agent_workspace` | `string` | `config.json` | Default cwd for agents (no allowlist enforcement) | **Unchanged behavior** as the default cwd, AND implicitly added to the cwd allowlist so the agent can chdir into it | Continues to control the initial cwd. To widen the allowlist, prefer the dedicated `agent_allow_workspace_list` field below. |
+| `agent_allow_workspace_list` | `[]string` | `config.json` | _did not exist_ | **new** — explicit list of directories that `/cwd` and `Agent.SetCwd` may target. Always merged with `~/.ringclaw/workspace` and (if set) `agent_workspace`; duplicates are dropped | List every subtree the AI agents are allowed to enter. Anything outside every entry is rejected at runtime. |
+| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` immediately enabled `session/set_mode "full-access"` on every new ACP session | `true` is **ignored** unless the top-level `full_access_ack: true` also appears in `config.json`; otherwise downgraded with a `WARN` log | Set `full_access_ack: true` in `config.json`. |
+| `full_access_ack` | `*bool` | `config.json` (top-level) | _did not exist_ | **new** — `true` honors `full_access`, `false` or unset refuses | Version-controlled alongside the agent that needs it. |
 
 Behaviors implied by Phase 1 that have **no config knob** (intentionally
 not exposed yet):
@@ -227,28 +225,23 @@ is dangerous: a prompt-injected agent could read or destroy any file the
 process can reach.
 
 To prevent silent activation through a stolen or copy-pasted config,
-RingClaw now requires an explicit acknowledgement at startup. There are
-two ways to grant it; **`config.json` wins over the env var**:
+RingClaw now requires an explicit acknowledgement in `config.json`:
 
 ```jsonc
 {
-  // Preferred: explicit, version-controlled acknowledgement.
+  // Explicit, version-controlled acknowledgement.
   "full_access_ack": true
 }
 ```
 
-```bash
-# Fallback when full_access_ack is not set in config.json.
-RINGCLAW_FULL_ACCESS_ACK=1 ringclaw start --foreground
-```
+Resolution:
 
-Resolution order:
+1. `full_access_ack: true` in `config.json` → honor `full_access`.
+2. Anything else (omitted or `false`) → refuse `full_access` with a
+   loud warning.
 
-1. If `full_access_ack` is set in `config.json` (`true` or `false`), use
-   that value. Setting it to `false` explicitly **suppresses any env-var
-   override** so a misplaced shell export cannot re-enable full access.
-2. Otherwise, fall back to `RINGCLAW_FULL_ACCESS_ACK=1`.
-3. Otherwise, refuse `full_access` with a loud warning.
+The legacy `RINGCLAW_FULL_ACCESS_ACK` environment variable is silently
+ignored — a stray shell export cannot re-enable full access.
 
 When the request is downgraded, the session keeps the default guarded
 mode. When honored, every freshly created ACP session emits an additional
@@ -354,8 +347,7 @@ outside every configured root is denied with an error like
 
 The effective allowlist is the union of (deduplicated, symlink-resolved):
 
-1. Every entry in `agent_allow_workspace_list` (or the comma-separated
-   `RINGCLAW_AGENT_ALLOW_WORKSPACE_LIST` env var).
+1. Every entry in `agent_allow_workspace_list` from `config.json`.
 2. The legacy `agent_workspace` (continues to be the default cwd).
 3. `~/.ringclaw/workspace` — always implicitly trusted so the built-in
    default cwd is never rejected.

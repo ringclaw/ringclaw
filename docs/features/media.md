@@ -61,7 +61,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
   -d '{"text": "See this", "media_url": "https://example.com/photo.png"}'
 ```
 
-Set `RINGCLAW_API_ADDR` to change the listen address (e.g. `0.0.0.0:18011`).
+Set `api_addr` in `~/.ringclaw/config.json` to change the listen address (e.g. `0.0.0.0:18011`).
 
 ## Resource APIs
 

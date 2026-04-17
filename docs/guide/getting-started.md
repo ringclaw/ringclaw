@@ -13,12 +13,17 @@ curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | 
 # One-line install (Windows PowerShell)
 irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
-# Set bot token (required)
-export RC_BOT_TOKEN="your_bot_token"
+# Interactive setup (prompts for bot token, chat IDs, etc.)
+ringclaw setup
 
 # Start
 ringclaw start
 ```
+
+> All configuration lives in `~/.ringclaw/config.json`. Environment
+> variables such as `RC_BOT_TOKEN` are no longer consulted — run
+> `ringclaw setup` or edit the file directly. See
+> [Configuration](./configuration.md).
 
 That's it. On first start, RingClaw will:
 1. Connect to RingCentral via the Bot App's WebSocket
@@ -126,8 +131,7 @@ The installer and `ringclaw update` automatically clear Gatekeeper quarantine at
 # Via Go
 go install github.com/ringclaw/ringclaw@latest
 
-# Via Docker
+# Via Docker (mount ~/.ringclaw to share config.json with the container)
 docker run -it -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_BOT_TOKEN=xxx \
   ghcr.io/ringclaw/ringclaw start
 ```
