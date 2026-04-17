@@ -512,6 +512,21 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	}
 }
 
+// conversationIDForPost returns the session key used to address a single
+// agent conversation. The key MUST be unique per (chatID, creatorID) pair
+// so that:
+//
+//  1. Different users in the same group chat get isolated agent contexts
+//     (no piggybacking on another user's prior session). This is the
+//     mitigation referenced in security review Finding #4.
+//  2. The same user in different chats does not leak conversation history
+//     across chats.
+//  3. Bot DMs and group chats live in distinct namespaces so renaming a
+//     chat ID can never collide with an existing DM session.
+//
+// Any caller building an ad-hoc conversationID must preserve these
+// invariants; in particular, do not reduce the key to just the chat or
+// just the user.
 func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) string {
 	chatID := strings.TrimSpace(post.GroupID)
 	creatorID := strings.TrimSpace(post.CreatorID)

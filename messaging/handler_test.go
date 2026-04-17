@@ -1410,6 +1410,72 @@ func TestConversationIDForPost_Group(t *testing.T) {
 	}
 }
 
+// TestConversationIDForPost_PerUserIsolation locks in the security
+// invariant from review Finding #4: within the same group chat, two
+// different users MUST receive distinct conversationIDs so they cannot
+// share or hijack each other's agent session.
+func TestConversationIDForPost_PerUserIsolation(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+
+	chatID := "group-shared"
+	a := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "alice"})
+	b := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "bob"})
+
+	if a == b {
+		t.Fatalf("expected distinct conversation IDs for different users in same chat, got %q == %q", a, b)
+	}
+	if !strings.Contains(a, "alice") {
+		t.Errorf("expected conversation ID to bind to creator id, got %q", a)
+	}
+	if !strings.Contains(b, "bob") {
+		t.Errorf("expected conversation ID to bind to creator id, got %q", b)
+	}
+}
+
+// TestConversationIDForPost_PerChatIsolation ensures the same user in
+// different chats receives distinct conversationIDs. Without this,
+// private DM history could leak into a group chat (or vice versa).
+func TestConversationIDForPost_PerChatIsolation(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+
+	user := "alice"
+	g1 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-A", CreatorID: user})
+	g2 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-B", CreatorID: user})
+
+	if g1 == g2 {
+		t.Fatalf("expected distinct conversation IDs for same user in different chats, got %q == %q", g1, g2)
+	}
+}
+
+// TestConversationIDForPost_DMAndGroupNamespaces verifies that DM and
+// group chat IDs occupy disjoint namespaces, so a renamed/recycled chat
+// ID can never collide with an existing DM session.
+func TestConversationIDForPost_DMAndGroupNamespaces(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("shared-id")
+
+	dmPost := ringcentral.Post{GroupID: "shared-id", CreatorID: "alice"}
+	groupPost := ringcentral.Post{GroupID: "shared-id", CreatorID: "alice"}
+	// Force the second post to evaluate as a group chat.
+	other := ringcentral.NewBotClient("http://localhost", "token")
+	other.SetDMChatID("different-id")
+
+	dmID := conversationIDForPost(client, dmPost)
+	groupID := conversationIDForPost(other, groupPost)
+
+	if dmID == groupID {
+		t.Fatalf("expected DM and group chat IDs to live in different namespaces, got %q == %q", dmID, groupID)
+	}
+	if !strings.HasPrefix(dmID, "rc:dm:") {
+		t.Errorf("expected dm prefix, got %q", dmID)
+	}
+	if !strings.HasPrefix(groupID, "rc:chat:") {
+		t.Errorf("expected chat prefix, got %q", groupID)
+	}
+}
+
 // --- cleanSeenMsgs test ---
 
 func TestCleanSeenMsgs(t *testing.T) {
