@@ -106,6 +106,7 @@ func buildHelpText() string {
 /cwd /path - Switch workspace directory
 /info - Show current agent info
 /help - Show this help message
+/full-access status|grant [dur]|revoke - Owner DM only; PIN-gated ACP unlock
 
 /task list|create|get|update|delete|complete
 /note list|create|get|update|delete|lock|unlock
@@ -135,6 +136,7 @@ func buildHelpCard() json.RawMessage {
 		{"/cwd /path", "Switch workspace directory"},
 		{"/info", "Show current agent info"},
 		{"/reload", "Re-detect installed agents"},
+		{"/full-access", "status | grant [dur] | revoke (owner DM, PIN gated)"},
 		{"/help", "Show this help"},
 	}
 
@@ -253,6 +255,11 @@ func isPrivilegedCommand(text string) bool {
 		return true
 	}
 	if text == "/reload" {
+		return true
+	}
+	// /full-access bypasses all ACP guardrails; restrict it to the bot
+	// owner even before the handler's stricter "DM-only" check kicks in.
+	if IsFullAccessCommand(text) {
 		return true
 	}
 	return false

@@ -483,6 +483,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	} else if strings.HasPrefix(text, "/cwd") {
 		logSendError(SendTextReply(ctx, client, chatID, h.handleCwd(text)))
 		return
+	} else if IsFullAccessCommand(text) {
+		h.handleFullAccess(ctx, client, chatID, post.CreatorID, text)
+		return
 	} else if text == "/help" {
 		cardJSON := buildHelpCard()
 		if _, err := client.CreateAdaptiveCard(ctx, chatID, cardJSON); err != nil {

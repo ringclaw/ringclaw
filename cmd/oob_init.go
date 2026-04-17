@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/messaging"
 	"github.com/ringclaw/ringclaw/messaging/oob"
 )
@@ -44,6 +45,12 @@ func initOOBManager(handler *messaging.Handler, c *clients) error {
 		dmChat = botDMChatID(c)
 	}
 	handler.SetOOBManager(mgr, dmChat)
+	// Wire the dynamic full-access source so /full-access TTL grants
+	// flip ACP sessions into full-access mode without needing to
+	// re-instantiate any agents. The check is consulted on every new
+	// ACP session (see agent.ACPAgent.getOrCreateSession), so an
+	// expired grant naturally drops back to the default safe mode.
+	agent.SetFullAccessGrantSource(mgr.FullAccessActive)
 	if dmChat == "" {
 		slog.Warn("bot DM chat with owner not resolved; OOB approval cards cannot be delivered. Cross-chat ACTION dispatches will fall back to Phase 1 warn-log behavior",
 			"component", "start")

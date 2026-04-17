@@ -168,6 +168,18 @@ const fullAccessAckEnv = "RINGCLAW_FULL_ACCESS_ACK"
 var (
 	fullAccessAckMu       sync.RWMutex
 	fullAccessAckOverride *bool // nil = fall back to env var
+
+	// fullAccessGrantSource, when non-nil, is consulted on every new
+	// ACP session to decide whether full-access mode should be enabled
+	// for that session. Phase 2 wires it to oob.Manager.FullAccessActive
+	// so the /full-access slash command can issue a TTL-bounded unlock
+	// without flipping any persistent config field.
+	//
+	// The startup-time `full_access: true` toggle still takes effect
+	// when isFullAccessAcked() is true; this source is additive — a
+	// session is granted full-access when EITHER the static config is
+	// on OR the dynamic source returns true.
+	fullAccessGrantSource func() bool
 )
 
 // SetFullAccessAck installs a configured acknowledgement for ACP
@@ -189,6 +201,32 @@ func ResetFullAccessAck() {
 	fullAccessAckMu.Lock()
 	defer fullAccessAckMu.Unlock()
 	fullAccessAckOverride = nil
+}
+
+// SetFullAccessGrantSource installs a callback that the agent layer
+// consults on every new ACP session. When the callback returns true,
+// the session is granted full-access mode regardless of the static
+// `full_access` config field. Pass nil to clear (test-only).
+//
+// Phase 2 wires this to oob.Manager.FullAccessActive so the
+// /full-access slash command can grant a TTL-bounded unlock.
+func SetFullAccessGrantSource(source func() bool) {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessGrantSource = source
+}
+
+// isFullAccessGranted reports whether the dynamic grant source (e.g.
+// the OOB /full-access flow) is currently active. Returns false when
+// no source has been installed.
+func isFullAccessGranted() bool {
+	fullAccessAckMu.RLock()
+	src := fullAccessGrantSource
+	fullAccessAckMu.RUnlock()
+	if src == nil {
+		return false
+	}
+	return src()
 }
 
 // isFullAccessAcked resolves the effective acknowledgement. Config
@@ -534,16 +572,29 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
 
-	if a.fullAccess {
+	// The static a.fullAccess toggle covers operators who configured
+	// `full_access: true` + acknowledged it at startup. The dynamic
+	// grant source (Phase 2 OOB /full-access) covers TTL-bounded
+	// unlocks. Either one flips the session into full-access mode for
+	// THIS conversation; we record which source granted it so audit
+	// logs distinguish the two.
+	dynGrant := isFullAccessGranted()
+	if a.fullAccess || dynGrant {
+		grantSource := "config:full_access"
+		if !a.fullAccess && dynGrant {
+			grantSource = "oob:/full-access"
+		} else if a.fullAccess && dynGrant {
+			grantSource = "config:full_access+oob"
+		}
 		if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
 			"sessionId": sessionResult.SessionID,
 			"modeId":    "full-access",
 		}); err != nil {
 			slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
-				"component", "acp", "session", sessionResult.SessionID, "error", err)
+				"component", "acp", "session", sessionResult.SessionID, "source", grantSource, "error", err)
 		} else {
 			slog.Warn("ACP session granted full-access (MCP guardrails disabled for this session)",
-				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "conversation", conversationID)
+				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "conversation", conversationID, "source", grantSource)
 		}
 	}
 
