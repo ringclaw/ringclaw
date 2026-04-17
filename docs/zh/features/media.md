@@ -61,7 +61,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
   -d '{"text": "看看这个", "media_url": "https://example.com/photo.png"}'
 ```
 
-设置 `RINGCLAW_API_ADDR` 环境变量可更改监听地址（如 `0.0.0.0:18011`）。
+在 `~/.ringclaw/config.json` 中设置 `api_addr` 可更改监听地址（如 `0.0.0.0:18011`）。
 
 ## 资源 API
 

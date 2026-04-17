@@ -6,10 +6,18 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/ringclaw/ringclaw/internal/util"
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
+
+// crossChatNoticeTimeout bounds how long we wait for the synchronous
+// owner-DM heads-up before giving up and refusing the cross-chat
+// ACTION. Declared as a var so tests can shrink the wait without
+// changing production behavior.
+var crossChatNoticeTimeout = 5 * time.Second
 
 // AgentAction represents a parsed action from the agent's response.
 type AgentAction struct {
@@ -135,8 +143,23 @@ func parseActionParams(s string) []keyValue {
 // AI-emitted `chatid=` parameter is ignored and the action is forced to run
 // in the origin chat to prevent lateral movement / data exfiltration
 // (Finding #5 in the security review).
+//
+// OwnerDMChat and RequesterID drive the fail-closed cross-chat
+// pre-dispatch heads-up: when an owner-initiated action is delivered
+// to a chat other than the origin AND other than the owner's own DM,
+// a metadata-only notice is posted SYNCHRONOUSLY to the owner DM
+// before the action fires. If OwnerDMChat is empty, or the notice
+// send fails (timeout / 5xx / transport error), the action is
+// refused — callers see a "Refused cross-chat …" entry in the
+// returned results slice and nothing is dispatched to the target
+// chat. OOB is retained so the rest of the system (notably
+// /full-access) can still access the manager through ActionContext,
+// but ExecuteAgentActions itself does not consult it.
 type ActionContext struct {
 	OriginIsOwner bool
+	OOB           *oob.Manager
+	OwnerDMChat   string
+	RequesterID   string
 }
 
 // ExecuteAgentActions executes parsed actions against the RC API.
@@ -144,6 +167,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 	var results []string
 	for _, a := range actions {
 		targetChat := chatID
+		crossChat := false
 		if cid := a.Params["chatid"]; cid != "" {
 			if !opts.OriginIsOwner {
 				slog.Warn("action: ignoring chatid override from non-owner sender; forcing origin chat",
@@ -155,11 +179,26 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					results = append(results, fmt.Sprintf("Failed to resolve chat '%s': %v", cid, err))
 					continue
 				}
-				if resolved != chatID {
-					slog.Warn("action: owner cross-chat dispatch",
-						"type", a.Type, "from", chatID, "to", resolved)
-				}
 				targetChat = resolved
+				crossChat = resolved != chatID
+			}
+		}
+
+		// Fail-closed cross-chat gate. Owner-initiated ACTIONs that
+		// leave both the origin chat AND the owner's own DM must
+		// first land a heads-up notice in the owner DM — that is
+		// the audit trail the operator relies on to detect hijacked
+		// cross-chat dispatch. If the notice cannot be delivered
+		// (no owner DM wired, or RC transport failure), the action
+		// is refused entirely; a silent cross-chat write with no
+		// audit record is not an acceptable failure mode.
+		if crossChat && targetChat != opts.OwnerDMChat {
+			if err := announceCrossChatOrRefuse(ctx, replyClient, opts, a.Type, chatID, targetChat); err != nil {
+				slog.Warn("action: cross-chat ACTION refused (fail-closed on pre-notice)",
+					"type", a.Type, "origin", chatID, "target", targetChat,
+					"requesterID", opts.RequesterID, "error", err)
+				results = append(results, fmt.Sprintf("Refused cross-chat %s: %v", a.Type, err))
+				continue
 			}
 		}
 
@@ -268,6 +307,53 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		}
 	}
 	return results
+}
+
+// announceCrossChatOrRefuse posts a metadata-only heads-up to the
+// owner's bot DM BEFORE an AI-triggered cross-chat ACTION is
+// dispatched. The action lands only if this pre-notice succeeds;
+// every other path returns an error and the caller refuses the
+// action. This is the fail-closed replacement for the earlier
+// best-effort async notice — see Finding 2 in the Phase 2 follow-up
+// review.
+//
+// The notice intentionally carries no body/title/content — just the
+// action type, requester, timestamp and the origin / target chat
+// IDs. The operator has to open the target chat (or the audit log)
+// to see what was actually written.
+//
+// A target chat that equals the owner's own DM is handled by the
+// caller (the heads-up would be noise because the owner already
+// sees the action land in their own timeline). Callers MUST guard
+// that case before invoking this function.
+func announceCrossChatOrRefuse(ctx context.Context, replyClient *ringcentral.Client, opts ActionContext, actionType, originChat, targetChat string) error {
+	if opts.OwnerDMChat == "" {
+		return fmt.Errorf("no owner DM audit channel configured")
+	}
+	requester := opts.RequesterID
+	if requester == "" {
+		requester = "unknown"
+	}
+	msg := fmt.Sprintf("[notice] %s by %s at %s: origin=%s target=%s",
+		actionType, requester, time.Now().UTC().Format(time.RFC3339),
+		originChat, targetChat,
+	)
+	client := newOOBClient(replyClient)
+	if client == nil {
+		return fmt.Errorf("no reply client available for audit channel")
+	}
+	// Cap the wait so a stuck RC endpoint cannot wedge the whole
+	// prompt pipeline. We still respect the caller's ctx via
+	// context.WithTimeout, so an upstream cancel is honored too.
+	sendCtx, cancel := context.WithTimeout(ctx, crossChatNoticeTimeout)
+	defer cancel()
+	if err := client.SendText(sendCtx, opts.OwnerDMChat, msg); err != nil {
+		return fmt.Errorf("audit notice delivery failed: %w", err)
+	}
+	slog.Info("action: cross-chat notice sent (pre-dispatch)",
+		"type", actionType, "from", originChat, "to", targetChat,
+		"ownerDMChat", opts.OwnerDMChat, "requesterID", requester)
+	return nil
 }
 
 // extractChatID extracts a numeric chat ID from various formats:

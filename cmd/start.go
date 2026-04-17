@@ -74,7 +74,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Validate RC config: bot token is required, private app is optional
 	if cfg.RC.BotToken == "" {
-		return fmt.Errorf("bot token not configured. Set RC_BOT_TOKEN environment variable or add bot_token to config file. Run 'ringclaw setup' for guided configuration")
+		return fmt.Errorf("bot token not configured. Add ringcentral.bot_token to ~/.ringclaw/config.json or run 'ringclaw setup' for guided configuration")
 	}
 	if len(cfg.RC.ChatIDs) == 0 {
 		return fmt.Errorf("RingCentral chat IDs not configured. Add chat_ids to config file")
@@ -116,7 +116,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Resolve the ACP full-access acknowledgement: config wins over env.
+	// Resolve the ACP full-access acknowledgement. config.json is the
+	// sole source; any previously supported env override was removed.
 	// Finding #6 from the security review.
 	{
 		ack := false
@@ -124,9 +125,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 		if cfg.FullAccessAck != nil {
 			ack = *cfg.FullAccessAck
 			source = "config.full_access_ack"
-		} else if os.Getenv("RINGCLAW_FULL_ACCESS_ACK") == "1" {
-			ack = true
-			source = "env(RINGCLAW_FULL_ACCESS_ACK)"
 		}
 		agent.SetFullAccessAck(ack)
 		if ack {
@@ -146,6 +144,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	handler := initHandler(ctx, cfg)
 	initServices(ctx, cfg, c, handler)
+
+	// Phase 2b OOB approval manager bootstrap. Loaded after clients so
+	// the bot DM chat ID is available; loaded before the monitor starts
+	// so the very first incoming /approval reply finds a configured
+	// handler.
+	if err := initOOBManager(handler, c); err != nil {
+		slog.Error("failed to initialize OOB approval manager; /full-access and cross-chat notices will be disabled",
+			"component", "start", "error", err)
+	}
 
 	// Start WebSocket monitor
 	slog.Info("starting message bridge", "chatIDs", cfg.RC.ChatIDs)

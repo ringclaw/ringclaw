@@ -13,12 +13,15 @@ curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | 
 # 一键安装（Windows PowerShell）
 irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
-# 设置 Bot Token（必需）
-export RC_BOT_TOKEN="your_bot_token"
+# 交互式配置（会提示输入 Bot Token、Chat ID 等）
+ringclaw setup
 
 # 启动
 ringclaw start
 ```
+
+> 所有配置都存放在 `~/.ringclaw/config.json` 中，不再读取 `RC_BOT_TOKEN`
+> 等环境变量。运行 `ringclaw setup` 或直接编辑该文件，详见[配置](./configuration.md)。
 
 就这么简单。启动时，RingClaw 会：
 
@@ -127,8 +130,7 @@ ringclaw update --channel alpha --branch feature/foo  # 切换到 alpha 分支
 # 通过 Go 安装
 go install github.com/ringclaw/ringclaw@latest
 
-# 通过 Docker
+# 通过 Docker（挂载 ~/.ringclaw 与宿主机共享 config.json）
 docker run -it -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_BOT_TOKEN=xxx \
   ghcr.io/ringclaw/ringclaw start
 ```

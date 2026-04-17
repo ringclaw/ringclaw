@@ -47,7 +47,6 @@ func TestResolveCandidate_BinaryNotFound(t *testing.T) {
 
 func TestResolveCandidate_BinaryFound(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Create a fake binary
 	fakeBin := filepath.Join(tmpDir, "test-agent-bin")
 	os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
@@ -73,13 +72,9 @@ func TestResolveCandidate_NpxNotFound(t *testing.T) {
 
 func TestDetectAndConfigure_WithFakeBinary(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Create a fake claude-agent-acp binary
 	fakeBin := filepath.Join(tmpDir, "claude-agent-acp")
 	os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
@@ -102,16 +97,11 @@ func TestDetectAndConfigure_WithFakeBinary(t *testing.T) {
 
 func TestDetectAndConfigure_UpgradeToACP(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Create both CLI and ACP binaries
 	os.WriteFile(filepath.Join(tmpDir, "claude-agent-acp"), []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
-	// Pre-set claude as CLI
 	cfg.Agents["claude"] = AgentConfig{Type: "cli", Command: "/usr/bin/claude", Model: "haiku"}
 
 	modified := DetectAndConfigure(cfg)
@@ -123,7 +113,6 @@ func TestDetectAndConfigure_UpgradeToACP(t *testing.T) {
 	if claude.Type != "acp" {
 		t.Errorf("expected upgrade to acp, got %q", claude.Type)
 	}
-	// Model should be preserved from old config
 	if claude.Model != "haiku" {
 		t.Errorf("expected model to be preserved as haiku, got %q", claude.Model)
 	}
@@ -133,9 +122,6 @@ func TestDetectAndConfigure_NoUpgradeIfAlreadyACP(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "claude-agent-acp"), []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
@@ -143,7 +129,6 @@ func TestDetectAndConfigure_NoUpgradeIfAlreadyACP(t *testing.T) {
 
 	DetectAndConfigure(cfg)
 
-	// Should keep existing ACP config
 	if cfg.Agents["claude"].Command != "/custom/claude-acp" {
 		t.Errorf("existing ACP config should not be overwritten, got %q", cfg.Agents["claude"].Command)
 	}
@@ -152,12 +137,13 @@ func TestDetectAndConfigure_NoUpgradeIfAlreadyACP(t *testing.T) {
 func TestDetectAndConfigure_OpenclawHTTPFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "wss://gw.test.com")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "tok123")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
+	cfg.OpenclawGateway = OpenclawGatewayConfig{
+		URL:   "wss://gw.test.com",
+		Token: "tok123",
+	}
 	modified := DetectAndConfigure(cfg)
 
 	if !modified {
@@ -182,9 +168,6 @@ func TestDetectAndConfigure_OpenclawBinaryNoGateway(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "openclaw"), []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
@@ -197,16 +180,17 @@ func TestDetectAndConfigure_OpenclawBinaryNoGateway(t *testing.T) {
 	}
 }
 
-func TestDetectAndConfigure_OpenclawBinaryWithGatewayEnv(t *testing.T) {
+func TestDetectAndConfigure_OpenclawBinaryWithGatewayConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "openclaw"), []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "wss://gw.test.com")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "tok-abc")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
+	cfg.OpenclawGateway = OpenclawGatewayConfig{
+		URL:   "wss://gw.test.com",
+		Token: "tok-abc",
+	}
 	DetectAndConfigure(cfg)
 
 	oc, ok := cfg.Agents["openclaw"]
@@ -216,7 +200,6 @@ func TestDetectAndConfigure_OpenclawBinaryWithGatewayEnv(t *testing.T) {
 	if oc.Type != "acp" {
 		t.Errorf("expected acp type, got %q", oc.Type)
 	}
-	// Should have args with --url and --token
 	found := false
 	for _, a := range oc.Args {
 		if a == "--token" {
@@ -232,12 +215,13 @@ func TestDetectAndConfigure_OpenclawBinaryWithGatewayPassword(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "openclaw"), []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:9999")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "pass123")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
+	cfg.OpenclawGateway = OpenclawGatewayConfig{
+		URL:      "ws://127.0.0.1:9999",
+		Password: "pass123",
+	}
 	DetectAndConfigure(cfg)
 
 	oc, ok := cfg.Agents["openclaw"]
@@ -257,9 +241,6 @@ func TestDetectAndConfigure_OpenclawBinaryWithGatewayPassword(t *testing.T) {
 
 func TestLoadOpenclawGateway_JSONConfig_RemoteGateway(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", tmpDir)
 
 	ocDir := filepath.Join(tmpDir, ".openclaw")
@@ -276,7 +257,7 @@ func TestLoadOpenclawGateway_JSONConfig_RemoteGateway(t *testing.T) {
 	data, _ := json.Marshal(ocCfg)
 	os.WriteFile(filepath.Join(ocDir, "openclaw.json"), data, 0o600)
 
-	gwURL, gwToken, gwPassword := loadOpenclawGateway()
+	gwURL, gwToken, gwPassword := loadOpenclawGateway(&Config{})
 	if gwURL != "wss://remote.gw.com" {
 		t.Errorf("expected remote URL, got %q", gwURL)
 	}
@@ -290,9 +271,6 @@ func TestLoadOpenclawGateway_JSONConfig_RemoteGateway(t *testing.T) {
 
 func TestLoadOpenclawGateway_JSONConfig_LocalGateway_Token(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", tmpDir)
 
 	ocDir := filepath.Join(tmpDir, ".openclaw")
@@ -310,7 +288,7 @@ func TestLoadOpenclawGateway_JSONConfig_LocalGateway_Token(t *testing.T) {
 	data, _ := json.Marshal(ocCfg)
 	os.WriteFile(filepath.Join(ocDir, "openclaw.json"), data, 0o600)
 
-	gwURL, gwToken, gwPassword := loadOpenclawGateway()
+	gwURL, gwToken, gwPassword := loadOpenclawGateway(&Config{})
 	if gwURL != "ws://127.0.0.1:8080" {
 		t.Errorf("expected local URL, got %q", gwURL)
 	}
@@ -324,9 +302,6 @@ func TestLoadOpenclawGateway_JSONConfig_LocalGateway_Token(t *testing.T) {
 
 func TestLoadOpenclawGateway_JSONConfig_LocalGateway_Password(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", tmpDir)
 
 	ocDir := filepath.Join(tmpDir, ".openclaw")
@@ -344,7 +319,7 @@ func TestLoadOpenclawGateway_JSONConfig_LocalGateway_Password(t *testing.T) {
 	data, _ := json.Marshal(ocCfg)
 	os.WriteFile(filepath.Join(ocDir, "openclaw.json"), data, 0o600)
 
-	gwURL, gwToken, gwPassword := loadOpenclawGateway()
+	gwURL, gwToken, gwPassword := loadOpenclawGateway(&Config{})
 	if gwURL != "ws://127.0.0.1:9090" {
 		t.Errorf("expected local URL, got %q", gwURL)
 	}
@@ -358,16 +333,13 @@ func TestLoadOpenclawGateway_JSONConfig_LocalGateway_Password(t *testing.T) {
 
 func TestLoadOpenclawGateway_JSONConfig_MalformedJSON(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", tmpDir)
 
 	ocDir := filepath.Join(tmpDir, ".openclaw")
 	os.MkdirAll(ocDir, 0o700)
 	os.WriteFile(filepath.Join(ocDir, "openclaw.json"), []byte("{bad json"), 0o600)
 
-	gwURL, _, _ := loadOpenclawGateway()
+	gwURL, _, _ := loadOpenclawGateway(&Config{})
 	if gwURL != "" {
 		t.Errorf("expected empty URL for malformed JSON, got %q", gwURL)
 	}
@@ -375,15 +347,11 @@ func TestLoadOpenclawGateway_JSONConfig_MalformedJSON(t *testing.T) {
 
 func TestLoadOpenclawGateway_JSONConfig_NoPorts(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", tmpDir)
 
 	ocDir := filepath.Join(tmpDir, ".openclaw")
 	os.MkdirAll(ocDir, 0o700)
 
-	// Gateway with no remote URL and port=0
 	ocCfg := map[string]interface{}{
 		"gateway": map[string]interface{}{
 			"port": 0,
@@ -392,18 +360,48 @@ func TestLoadOpenclawGateway_JSONConfig_NoPorts(t *testing.T) {
 	data, _ := json.Marshal(ocCfg)
 	os.WriteFile(filepath.Join(ocDir, "openclaw.json"), data, 0o600)
 
-	gwURL, _, _ := loadOpenclawGateway()
+	gwURL, _, _ := loadOpenclawGateway(&Config{})
 	if gwURL != "" {
 		t.Errorf("expected empty URL when no port, got %q", gwURL)
+	}
+}
+
+// TestLoadOpenclawGateway_ConfigOverridesJSON verifies that the config.json
+// openclaw_gateway section wins over ~/.openclaw/openclaw.json.
+func TestLoadOpenclawGateway_ConfigOverridesJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	ocDir := filepath.Join(tmpDir, ".openclaw")
+	os.MkdirAll(ocDir, 0o700)
+	ocCfg := map[string]interface{}{
+		"gateway": map[string]interface{}{
+			"remote": map[string]string{
+				"url":   "wss://should-be-ignored.com",
+				"token": "ignored",
+			},
+		},
+	}
+	data, _ := json.Marshal(ocCfg)
+	os.WriteFile(filepath.Join(ocDir, "openclaw.json"), data, 0o600)
+
+	cfg := &Config{OpenclawGateway: OpenclawGatewayConfig{
+		URL:   "wss://from-config.com",
+		Token: "config-tok",
+	}}
+
+	gwURL, gwToken, _ := loadOpenclawGateway(cfg)
+	if gwURL != "wss://from-config.com" {
+		t.Errorf("config.json openclaw_gateway must win, got %q", gwURL)
+	}
+	if gwToken != "config-tok" {
+		t.Errorf("expected config token, got %q", gwToken)
 	}
 }
 
 func TestDetectAndConfigure_DefaultAgentPreserved(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
@@ -421,9 +419,6 @@ func TestDetectAndConfigure_DefaultAgentInvalid(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "codex"), []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
@@ -431,7 +426,6 @@ func TestDetectAndConfigure_DefaultAgentInvalid(t *testing.T) {
 
 	DetectAndConfigure(cfg)
 
-	// Default should be updated since "nonexistent" is not in agents
 	if cfg.DefaultAgent == "nonexistent" {
 		t.Error("default agent should be updated from nonexistent")
 	}
@@ -443,9 +437,6 @@ func TestDetectAndConfigure_MultipleBinaries(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "codex"), []byte("#!/bin/sh\n"), 0o755)
 	os.WriteFile(filepath.Join(tmpDir, "kimi"), []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
@@ -457,7 +448,6 @@ func TestDetectAndConfigure_MultipleBinaries(t *testing.T) {
 	if len(cfg.Agents) < 3 {
 		t.Errorf("expected at least 3 agents, got %d", len(cfg.Agents))
 	}
-	// claude has highest priority
 	if cfg.DefaultAgent != "claude" {
 		t.Errorf("expected default agent claude, got %q", cfg.DefaultAgent)
 	}
@@ -466,19 +456,16 @@ func TestDetectAndConfigure_MultipleBinaries(t *testing.T) {
 func TestDetectAndConfigure_OpenclawHTTPFallback_WS(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("PATH", tmpDir)
-	t.Setenv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:8080")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := DefaultConfig()
+	cfg.OpenclawGateway = OpenclawGatewayConfig{URL: "ws://127.0.0.1:8080"}
 	DetectAndConfigure(cfg)
 
 	oc := cfg.Agents["openclaw"]
 	if oc.Type != "http" {
 		t.Errorf("expected http type, got %q", oc.Type)
 	}
-	// ws:// should be replaced with http://
 	if oc.Endpoint == "" {
 		t.Error("expected non-empty endpoint")
 	}

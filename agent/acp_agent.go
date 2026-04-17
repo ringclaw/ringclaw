@@ -159,21 +159,26 @@ type permissionOption struct {
 	Kind     string `json:"kind"`
 }
 
-// fullAccessAckEnv must be set to "1" for the full_access config flag to be
-// honored when no explicit acknowledgement has been configured via
-// SetFullAccessAck. Without one of these, ACP sessions stay in the default
-// guarded mode where every MCP tool call requires explicit approval.
-const fullAccessAckEnv = "RINGCLAW_FULL_ACCESS_ACK"
-
 var (
 	fullAccessAckMu       sync.RWMutex
-	fullAccessAckOverride *bool // nil = fall back to env var
+	fullAccessAckOverride *bool // nil = not acknowledged (treated as false)
+
+	// fullAccessGrantSource, when non-nil, is consulted on every new
+	// ACP session to decide whether full-access mode should be enabled
+	// for that session. Phase 2 wires it to oob.Manager.FullAccessActive
+	// so the /full-access slash command can issue a TTL-bounded unlock
+	// without flipping any persistent config field.
+	//
+	// The startup-time `full_access: true` toggle still takes effect
+	// when isFullAccessAcked() is true; this source is additive — a
+	// session is granted full-access when EITHER the static config is
+	// on OR the dynamic source returns true.
+	fullAccessGrantSource func() bool
 )
 
 // SetFullAccessAck installs a configured acknowledgement for ACP
-// `full_access` mode. When non-nil, this WINS over the
-// RINGCLAW_FULL_ACCESS_ACK env var. Pass true to acknowledge, false to
-// explicitly refuse (which suppresses any env-var override).
+// `full_access` mode. config.json is the sole source; pass true to
+// acknowledge, false to explicitly refuse.
 //
 // Intended to be called once from cmd/start after config load. Pass a
 // fresh value (or call ResetFullAccessAck) in tests to avoid leakage.
@@ -183,16 +188,43 @@ func SetFullAccessAck(ack bool) {
 	fullAccessAckOverride = &ack
 }
 
-// ResetFullAccessAck clears any configured acknowledgement so the env
-// var becomes the source of truth again. Test-only helper.
+// ResetFullAccessAck clears any configured acknowledgement so that the
+// effective value falls back to its default (false). Test-only helper.
 func ResetFullAccessAck() {
 	fullAccessAckMu.Lock()
 	defer fullAccessAckMu.Unlock()
 	fullAccessAckOverride = nil
 }
 
-// isFullAccessAcked resolves the effective acknowledgement. Config
-// (via SetFullAccessAck) wins over the RINGCLAW_FULL_ACCESS_ACK env var.
+// SetFullAccessGrantSource installs a callback that the agent layer
+// consults on every new ACP session. When the callback returns true,
+// the session is granted full-access mode regardless of the static
+// `full_access` config field. Pass nil to clear (test-only).
+//
+// Phase 2 wires this to oob.Manager.FullAccessActive so the
+// /full-access slash command can grant a TTL-bounded unlock.
+func SetFullAccessGrantSource(source func() bool) {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessGrantSource = source
+}
+
+// isFullAccessGranted reports whether the dynamic grant source (e.g.
+// the OOB /full-access flow) is currently active. Returns false when
+// no source has been installed.
+func isFullAccessGranted() bool {
+	fullAccessAckMu.RLock()
+	src := fullAccessGrantSource
+	fullAccessAckMu.RUnlock()
+	if src == nil {
+		return false
+	}
+	return src()
+}
+
+// isFullAccessAcked resolves the effective acknowledgement. config.json
+// (via SetFullAccessAck) is the sole source; absent config is treated as
+// not acknowledged.
 func isFullAccessAcked() bool {
 	fullAccessAckMu.RLock()
 	override := fullAccessAckOverride
@@ -200,7 +232,7 @@ func isFullAccessAcked() bool {
 	if override != nil {
 		return *override
 	}
-	return os.Getenv(fullAccessAckEnv) == "1"
+	return false
 }
 
 // NewACPAgent creates a new ACP agent.
@@ -213,8 +245,8 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	}
 	fullAccess := cfg.FullAccess
 	if fullAccess && !isFullAccessAcked() {
-		slog.Warn("full_access requested but not acknowledged: refusing to disable MCP guardrails. Set full_access_ack=true in config.json (preferred) or export RINGCLAW_FULL_ACCESS_ACK=1.",
-			"component", "acp", "command", cfg.Command, "ack_env", fullAccessAckEnv, "ack_config", "full_access_ack")
+		slog.Warn("full_access requested but not acknowledged: refusing to disable MCP guardrails. Set full_access_ack: true in ~/.ringclaw/config.json.",
+			"component", "acp", "command", cfg.Command, "ack_config", "full_access_ack")
 		fullAccess = false
 	} else if fullAccess {
 		slog.Warn("full_access ENABLED: agent will execute MCP tool calls without per-call approval",
@@ -315,6 +347,7 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	}
 
 	slog.Debug("initialized", "component", "acp", "pid", pid, "result", string(result))
+	registerActiveACPAgent(a)
 	return nil
 }
 
@@ -361,6 +394,8 @@ func (a *ACPAgent) Stop() {
 	a.mu.Lock()
 	a.started = false
 	a.mu.Unlock()
+
+	unregisterActiveACPAgent(a)
 }
 
 // SetCwd changes the working directory for subsequent sessions.
@@ -534,16 +569,68 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
 
-	if a.fullAccess {
+	// The static a.fullAccess toggle covers operators who configured
+	// `full_access: true` + acknowledged it at startup. The dynamic
+	// grant source (Phase 2 OOB /full-access) covers TTL-bounded
+	// unlocks. Either one flips the session into full-access mode for
+	// THIS conversation; we record which source granted it so audit
+	// logs distinguish the two.
+	//
+	// Race note: we re-read isFullAccessGranted() a second time after
+	// the session has been registered in a.sessions. This closes the
+	// narrow window where /full-access revoke (or TTL expiry) fires
+	// AFTER our first check but BEFORE the new session became visible
+	// to the revoke hook — without this double-read the revoke hook's
+	// snapshot could miss the session, leaving it in full-access
+	// despite the operator seeing "revoked". A third post-call check
+	// handles the even narrower window where revoke fires mid-flight;
+	// we compensate by issuing an immediate demotion.
+	dynGrant := isFullAccessGranted()
+	if a.fullAccess || dynGrant {
+		// Post-registration re-read: if the dynamic grant has
+		// flipped off since the first check, skip set_mode entirely.
+		// a.fullAccess (static) cannot change at runtime so it is
+		// excluded from the re-check.
+		if !a.fullAccess && !isFullAccessGranted() {
+			return sessionResult.SessionID, true, nil
+		}
+		grantSource := "config:full_access"
+		if !a.fullAccess && dynGrant {
+			grantSource = "oob:/full-access"
+		} else if a.fullAccess && dynGrant {
+			grantSource = "config:full_access+oob"
+		}
 		if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
 			"sessionId": sessionResult.SessionID,
 			"modeId":    "full-access",
 		}); err != nil {
 			slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
-				"component", "acp", "session", sessionResult.SessionID, "error", err)
+				"component", "acp", "session", sessionResult.SessionID, "source", grantSource, "error", err)
 		} else {
 			slog.Warn("ACP session granted full-access (MCP guardrails disabled for this session)",
-				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "conversation", conversationID)
+				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "conversation", conversationID, "source", grantSource)
+			// Post-call re-check: if revoke landed while our
+			// set_mode was in flight, demote immediately so the
+			// session does not linger in full-access.
+			if !a.fullAccess && !isFullAccessGranted() {
+				if _, derr := a.call(ctx, "session/set_mode", map[string]interface{}{
+					"sessionId": sessionResult.SessionID,
+					"modeId":    "default",
+				}); derr != nil {
+					a.mu.Lock()
+					if cur, ok := a.sessions[conversationID]; ok && cur == sessionResult.SessionID {
+						delete(a.sessions, conversationID)
+					}
+					a.mu.Unlock()
+					slog.Warn("acp: post-grant revoke compensation failed, session dropped from map",
+						"component", "acp", "command", a.command,
+						"session", sessionResult.SessionID, "conversation", conversationID, "error", derr)
+				} else {
+					slog.Warn("acp: post-grant revoke compensation demoted session to default",
+						"component", "acp", "command", a.command,
+						"session", sessionResult.SessionID, "conversation", conversationID)
+				}
+			}
 		}
 	}
 
@@ -580,6 +667,101 @@ func extractChunkText(update *sessionUpdate) string {
 		}
 	}
 	return ""
+}
+
+// activeACPAgents tracks every ACPAgent whose Start() has completed
+// successfully and whose Stop() has not yet run. The OOB /full-access
+// revoke / TTL-expiry hook walks this set to demote live sessions
+// back to the default mode so a grant truly ends when the operator
+// (or the TTL) says so, not only on the next brand-new session.
+var activeACPAgents sync.Map // map[*ACPAgent]struct{}
+
+func registerActiveACPAgent(a *ACPAgent) {
+	if a == nil {
+		return
+	}
+	activeACPAgents.Store(a, struct{}{})
+}
+
+func unregisterActiveACPAgent(a *ACPAgent) {
+	if a == nil {
+		return
+	}
+	activeACPAgents.Delete(a)
+}
+
+// DemoteAllACPFullAccess walks every registered ACPAgent and
+// best-effort downgrades every live session back to the default ACP
+// mode. Intended to be wired from oob.Manager's revoke hook so
+// explicit /full-access revoke and TTL expiry both take effect on
+// sessions that were already unlocked, not just on brand-new ones
+// created after the revoke.
+//
+// The ctx is optional — pass context.Background() from a revoke hook
+// when no request-scoped context is available; each per-session RPC
+// gets its own short timeout internally.
+func DemoteAllACPFullAccess(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	activeACPAgents.Range(func(k, _ interface{}) bool {
+		a, ok := k.(*ACPAgent)
+		if !ok || a == nil {
+			return true
+		}
+		a.demoteFullAccessSessions(ctx)
+		return true
+	})
+}
+
+// acpDemoteRPCTimeout caps the per-session set_mode call issued by
+// demoteFullAccessSessions so a single stuck ACP subprocess cannot
+// block demotion of the remaining sessions.
+const acpDemoteRPCTimeout = 3 * time.Second
+
+// demoteFullAccessSessions iterates every live (conversationID ->
+// sessionID) pair and sends session/set_mode modeId="default". On
+// success the entry stays in a.sessions so conversation history is
+// preserved; on error the entry is dropped so the next prompt for
+// that conversation creates a fresh session (which will honor the
+// current grant state via getOrCreateSession).
+func (a *ACPAgent) demoteFullAccessSessions(ctx context.Context) {
+	a.mu.Lock()
+	if !a.started {
+		a.mu.Unlock()
+		return
+	}
+	snapshot := make(map[string]string, len(a.sessions))
+	for k, v := range a.sessions {
+		snapshot[k] = v
+	}
+	a.mu.Unlock()
+	if len(snapshot) == 0 {
+		return
+	}
+
+	for convID, sid := range snapshot {
+		callCtx, cancel := context.WithTimeout(ctx, acpDemoteRPCTimeout)
+		_, err := a.call(callCtx, "session/set_mode", map[string]interface{}{
+			"sessionId": sid,
+			"modeId":    "default",
+		})
+		cancel()
+		if err != nil {
+			a.mu.Lock()
+			if cur, ok := a.sessions[convID]; ok && cur == sid {
+				delete(a.sessions, convID)
+			}
+			a.mu.Unlock()
+			slog.Warn("acp demote: set_mode default failed, session dropped from map (next prompt will rebuild)",
+				"component", "acp", "command", a.command,
+				"session", sid, "conversation", convID, "error", err)
+			continue
+		}
+		slog.Info("acp demote: session returned to default mode",
+			"component", "acp", "command", a.command,
+			"session", sid, "conversation", convID)
+	}
 }
 
 func extractPromptResultText(result json.RawMessage) string {

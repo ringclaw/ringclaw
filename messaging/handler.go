@@ -12,6 +12,7 @@ import (
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/internal/util"
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -60,6 +61,16 @@ type Handler struct {
 	// only the bot's own posts and configured cron jobs may dispatch.
 	trustedSenders  map[string]bool
 	allowAllSenders bool
+
+	// oobManager and ownerDMChatID power the Phase 2b /approval flow.
+	// When oobManager is nil, /full-access is disabled and cross-chat
+	// actions skip the owner-DM notice (falling back to the Phase 1
+	// warn-log for cross-chat and env-only full-access
+	// acknowledgement). ownerDMChatID is the chat ID where /approval
+	// prompts and cross-chat notices are delivered; empty disables OOB
+	// even when the manager is configured.
+	oobManager     *oob.Manager
+	ownerDMChatID  string
 }
 
 // NewHandler creates a new message handler.
@@ -97,6 +108,37 @@ func (h *Handler) EnforceSenderAllowlist() {
 	h.mu.Lock()
 	h.allowAllSenders = false
 	h.mu.Unlock()
+}
+
+// SetOOBManager installs the Phase 2 out-of-band approval manager and the
+// chat ID that should receive approval cards (the Private App owner's bot
+// DM). Pass a nil manager to disable OOB and revert to Phase 1 semantics.
+//
+// ownerDMChatID is the bot's own DM chat with the trusted machine owner
+// (typically *ringcentral.Client.IsBotDM(...) returns true for it). When
+// empty, OOB call sites refuse to gate actions.
+func (h *Handler) SetOOBManager(mgr *oob.Manager, ownerDMChatID string) {
+	h.mu.Lock()
+	h.oobManager = mgr
+	h.ownerDMChatID = ownerDMChatID
+	h.mu.Unlock()
+}
+
+// OOBManager returns the configured manager (or nil). Used by callers
+// (e.g. the /full-access slash command, /info status card) that need to
+// inspect or drive OOB state.
+func (h *Handler) OOBManager() *oob.Manager {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.oobManager
+}
+
+// OwnerDMChatID returns the chat ID where OOB approval cards should be
+// posted; empty when OOB is not configured.
+func (h *Handler) OwnerDMChatID() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.ownerDMChatID
 }
 
 // isTrustedSender reports whether a given creator ID may drive the agent.
@@ -405,6 +447,16 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
+	// Phase 2b OOB approval interception. `/approval <id>` and
+	// `/approval deny <id>` replies are typed back into the bot DM (the
+	// same chat the prompt was posted to). When the message matches a
+	// recognized approval shape we route it to the OOB manager and
+	// short-circuit normal agent dispatch so the slash command is never
+	// forwarded to the AI agent.
+	if h.routeOOBApprovalReply(ctx, client, chatID, post.CreatorID, text) {
+		return
+	}
+
 	// In bot group chats (not bot DM), restrict privileged commands to the bot owner
 	isBotGroup := client.IsBot() && !client.IsBotDM(chatID)
 	if isBotGroup && isPrivilegedCommand(text) {
@@ -432,6 +484,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	} else if strings.HasPrefix(text, "/cwd") {
 		logSendError(SendTextReply(ctx, client, chatID, h.handleCwd(text)))
+		return
+	} else if IsFullAccessCommand(text) {
+		h.handleFullAccess(ctx, client, chatID, post.CreatorID, text)
 		return
 	} else if text == "/help" {
 		cardJSON := buildHelpCard()
@@ -510,6 +565,23 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		// Multi-agent broadcast: parallel dispatch
 		h.broadcastToAgents(ctx, client, readClient, post, knownNames, message)
 	}
+}
+
+// routeOOBApprovalReply is the Phase 2b hook that consumes `/approval`
+// replies in the owner's bot DM before they reach the agent. Returns
+// true when the message was handled (caller must short-circuit).
+// Restricted to bot DM so a teammate cannot cancel another user's
+// pending challenge by guessing IDs in group chat; replies in any
+// other chat fall through unchanged.
+func (h *Handler) routeOOBApprovalReply(ctx context.Context, client *ringcentral.Client, chatID, senderID, text string) bool {
+	mgr := h.OOBManager()
+	if mgr == nil {
+		return false
+	}
+	if !client.IsBotDM(chatID) {
+		return false
+	}
+	return mgr.HandleApprovalReply(ctx, newOOBClient(client), chatID, senderID, text)
 }
 
 // conversationIDForPost returns the session key used to address a single
@@ -632,6 +704,9 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		reply = cleanReply
 		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
 			OriginIsOwner: h.isTrustedSender(post.CreatorID),
+			OOB:           h.OOBManager(),
+			OwnerDMChat:   h.OwnerDMChatID(),
+			RequesterID:   post.CreatorID,
 		})
 		if len(results) > 0 {
 			defer func() {
