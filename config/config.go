@@ -34,27 +34,36 @@ func ParseLogLevel(s string) slog.Level {
 
 // Config holds the application configuration.
 type Config struct {
-	DefaultAgent   string                 `json:"default_agent"`
-	AgentWorkspace string                 `json:"agent_workspace,omitempty"`
+	DefaultAgent   string `json:"default_agent"`
+	AgentWorkspace string `json:"agent_workspace,omitempty"`
 	// AgentAllowWorkspaceList is the list of directory roots that /cwd
 	// and Agent.SetCwd are allowed to target. ~/.ringclaw/workspace and
 	// the legacy AgentWorkspace are always implicitly merged in by
 	// cmd/start so the agent's default cwd is admissible. See
 	// docs/security/index.md "Workspace Path Restrictions".
-	AgentAllowWorkspaceList []string `json:"agent_allow_workspace_list,omitempty"`
-	APIAddr        string                 `json:"api_addr,omitempty"`
-	LogLevel       string                 `json:"log_level,omitempty"`  // "debug", "info" (default), "warn", "error"
-	LogFormat      string                 `json:"log_format,omitempty"` // "text" (default), "json", "color"
-	Agents         map[string]AgentConfig `json:"agents"`
-	RC             RCConfig               `json:"ringcentral,omitempty"`
-	Heartbeat      HeartbeatConfig        `json:"heartbeat,omitempty"`
-	Cron           CronConfig             `json:"cron,omitempty"`
+	AgentAllowWorkspaceList []string               `json:"agent_allow_workspace_list,omitempty"`
+	APIAddr                 string                 `json:"api_addr,omitempty"`
+	LogLevel                string                 `json:"log_level,omitempty"`  // "debug", "info" (default), "warn", "error"
+	LogFormat               string                 `json:"log_format,omitempty"` // "text" (default), "json", "color"
+	Agents                  map[string]AgentConfig `json:"agents"`
+	RC                      RCConfig               `json:"ringcentral,omitempty"`
+	Heartbeat               HeartbeatConfig        `json:"heartbeat,omitempty"`
+	Cron                    CronConfig             `json:"cron,omitempty"`
+	OpenclawGateway         OpenclawGatewayConfig  `json:"openclaw_gateway,omitempty"`
 	// FullAccessAck acknowledges that ACP agents with `full_access: true`
-	// will execute MCP tool calls without per-call approval. When set
-	// (true or false), this value WINS over the RINGCLAW_FULL_ACCESS_ACK
-	// env var. When nil (omitted), the env var is consulted as a
-	// fallback. See docs/security/index.md "ACP Full-Access Mode".
+	// will execute MCP tool calls without per-call approval. When nil
+	// (omitted), this is treated as false. config.json is the sole
+	// source. See docs/security/index.md "ACP Full-Access Mode".
 	FullAccessAck *bool `json:"full_access_ack,omitempty"`
+}
+
+// OpenclawGatewayConfig holds the connection info for the external openclaw
+// gateway consumed by the auto-detected `openclaw` agent. When URL is empty,
+// ringclaw falls back to reading ~/.openclaw/openclaw.json.
+type OpenclawGatewayConfig struct {
+	URL      string `json:"url,omitempty"`
+	Token    string `json:"token,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 // HeartbeatConfig holds heartbeat runner configuration.
@@ -190,7 +199,8 @@ func ConfigPath() (string, error) {
 	return filepath.Join(home, ".ringclaw", "config.json"), nil
 }
 
-// Load loads configuration from disk and environment variables.
+// Load loads configuration from ~/.ringclaw/config.json. Environment
+// variables are no longer consulted; config.json is the sole source.
 func Load() (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -202,7 +212,6 @@ func Load() (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			loadEnv(cfg)
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read config: %w", err)
@@ -215,72 +224,7 @@ func Load() (*Config, error) {
 		cfg.Agents = make(map[string]AgentConfig)
 	}
 
-	loadEnv(cfg)
 	return cfg, nil
-}
-
-func loadEnv(cfg *Config) {
-	if v := os.Getenv("RINGCLAW_DEFAULT_AGENT"); v != "" {
-		cfg.DefaultAgent = v
-	}
-	if v := os.Getenv("RINGCLAW_AGENT_WORKSPACE"); v != "" {
-		cfg.AgentWorkspace = v
-	}
-	if v := os.Getenv("RINGCLAW_AGENT_ALLOW_WORKSPACE_LIST"); v != "" {
-		parts := strings.Split(v, ",")
-		list := make([]string, 0, len(parts))
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				list = append(list, part)
-			}
-		}
-		cfg.AgentAllowWorkspaceList = list
-	}
-	if v := os.Getenv("RINGCLAW_API_ADDR"); v != "" {
-		cfg.APIAddr = v
-	}
-	if v := os.Getenv("RC_CLIENT_ID"); v != "" {
-		cfg.RC.ClientID = v
-	}
-	if v := os.Getenv("RC_CLIENT_SECRET"); v != "" {
-		cfg.RC.ClientSecret = v
-	}
-	if v := os.Getenv("RC_JWT_TOKEN"); v != "" {
-		cfg.RC.JWTToken = v
-	}
-	if v := os.Getenv("RC_SERVER_URL"); v != "" {
-		cfg.RC.ServerURL = v
-	}
-	if v := os.Getenv("RC_CHAT_IDS"); v != "" {
-		parts := strings.Split(v, ",")
-		chatIDs := make([]string, 0, len(parts))
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				chatIDs = append(chatIDs, part)
-			}
-		}
-		cfg.RC.ChatIDs = chatIDs
-	}
-	if v := os.Getenv("RC_SOURCE_USER_IDS"); v != "" {
-		parts := strings.Split(v, ",")
-		userIDs := make([]string, 0, len(parts))
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				userIDs = append(userIDs, part)
-			}
-		}
-		cfg.RC.SourceUserIDs = userIDs
-	}
-	if v := os.Getenv("RC_BOT_TOKEN"); v != "" {
-		cfg.RC.BotToken = v
-	}
-	if v := os.Getenv("RC_BOT_MENTION_ONLY"); v != "" {
-		value := strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
-		cfg.RC.BotMentionOnly = &value
-	}
 }
 
 // Save saves the configuration to disk.

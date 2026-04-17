@@ -33,7 +33,7 @@ func newCLIClient() (*ringcentral.Client, error) {
 		return ringcentral.NewBotClient(cfg.RC.ServerURL, cfg.RC.BotToken), nil
 	}
 
-	return nil, fmt.Errorf("no credentials configured. Set RC_BOT_TOKEN or run 'ringclaw setup'")
+	return nil, fmt.Errorf("no credentials configured. Run 'ringclaw setup' or edit ~/.ringclaw/config.json")
 }
 
 // defaultChatID returns the first chat ID from config, or empty string.

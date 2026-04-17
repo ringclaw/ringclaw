@@ -66,7 +66,7 @@ var sendCmd = &cobra.Command{
 		} else if cfg.RC.BotToken != "" {
 			client = ringcentral.NewBotClient(cfg.RC.ServerURL, cfg.RC.BotToken)
 		} else {
-			return fmt.Errorf("no credentials configured. Set RC_BOT_TOKEN or run 'ringclaw setup'")
+			return fmt.Errorf("no credentials configured. Run 'ringclaw setup' or edit ~/.ringclaw/config.json")
 		}
 
 		if sendText != "" {

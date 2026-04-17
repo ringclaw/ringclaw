@@ -159,15 +159,9 @@ type permissionOption struct {
 	Kind     string `json:"kind"`
 }
 
-// fullAccessAckEnv must be set to "1" for the full_access config flag to be
-// honored when no explicit acknowledgement has been configured via
-// SetFullAccessAck. Without one of these, ACP sessions stay in the default
-// guarded mode where every MCP tool call requires explicit approval.
-const fullAccessAckEnv = "RINGCLAW_FULL_ACCESS_ACK"
-
 var (
 	fullAccessAckMu       sync.RWMutex
-	fullAccessAckOverride *bool // nil = fall back to env var
+	fullAccessAckOverride *bool // nil = not acknowledged (treated as false)
 
 	// fullAccessGrantSource, when non-nil, is consulted on every new
 	// ACP session to decide whether full-access mode should be enabled
@@ -183,9 +177,8 @@ var (
 )
 
 // SetFullAccessAck installs a configured acknowledgement for ACP
-// `full_access` mode. When non-nil, this WINS over the
-// RINGCLAW_FULL_ACCESS_ACK env var. Pass true to acknowledge, false to
-// explicitly refuse (which suppresses any env-var override).
+// `full_access` mode. config.json is the sole source; pass true to
+// acknowledge, false to explicitly refuse.
 //
 // Intended to be called once from cmd/start after config load. Pass a
 // fresh value (or call ResetFullAccessAck) in tests to avoid leakage.
@@ -195,8 +188,8 @@ func SetFullAccessAck(ack bool) {
 	fullAccessAckOverride = &ack
 }
 
-// ResetFullAccessAck clears any configured acknowledgement so the env
-// var becomes the source of truth again. Test-only helper.
+// ResetFullAccessAck clears any configured acknowledgement so that the
+// effective value falls back to its default (false). Test-only helper.
 func ResetFullAccessAck() {
 	fullAccessAckMu.Lock()
 	defer fullAccessAckMu.Unlock()
@@ -229,8 +222,9 @@ func isFullAccessGranted() bool {
 	return src()
 }
 
-// isFullAccessAcked resolves the effective acknowledgement. Config
-// (via SetFullAccessAck) wins over the RINGCLAW_FULL_ACCESS_ACK env var.
+// isFullAccessAcked resolves the effective acknowledgement. config.json
+// (via SetFullAccessAck) is the sole source; absent config is treated as
+// not acknowledged.
 func isFullAccessAcked() bool {
 	fullAccessAckMu.RLock()
 	override := fullAccessAckOverride
@@ -238,7 +232,7 @@ func isFullAccessAcked() bool {
 	if override != nil {
 		return *override
 	}
-	return os.Getenv(fullAccessAckEnv) == "1"
+	return false
 }
 
 // NewACPAgent creates a new ACP agent.
@@ -251,8 +245,8 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	}
 	fullAccess := cfg.FullAccess
 	if fullAccess && !isFullAccessAcked() {
-		slog.Warn("full_access requested but not acknowledged: refusing to disable MCP guardrails. Set full_access_ack=true in config.json (preferred) or export RINGCLAW_FULL_ACCESS_ACK=1.",
-			"component", "acp", "command", cfg.Command, "ack_env", fullAccessAckEnv, "ack_config", "full_access_ack")
+		slog.Warn("full_access requested but not acknowledged: refusing to disable MCP guardrails. Set full_access_ack: true in ~/.ringclaw/config.json.",
+			"component", "acp", "command", cfg.Command, "ack_config", "full_access_ack")
 		fullAccess = false
 	} else if fullAccess {
 		slog.Warn("full_access ENABLED: agent will execute MCP tool calls without per-call approval",
