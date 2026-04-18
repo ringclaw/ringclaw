@@ -16,4 +16,4 @@ Requirement plans inspired by [acpx](https://github.com/openclaw/acpx) architect
 ## References
 
 - acpx docs: https://github.com/openclaw/acpx/tree/main/docs
-- Chinese versions: [zh/](zh/)
+- Chinese versions: [zh/README.md](./zh/README.md)

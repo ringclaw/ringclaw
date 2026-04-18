@@ -16,4 +16,4 @@
 ## 参考
 
 - acpx 文档: https://github.com/openclaw/acpx/tree/main/docs
-- 英文版: [../](../)
+- 英文版: [../README.md](../README.md)
