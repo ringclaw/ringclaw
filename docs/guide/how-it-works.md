@@ -81,8 +81,8 @@ Messages from chats not in `chat_ids` are silently dropped by the monitor.
 
 ### Group Chat Behavior
 
-- **`bot_mention_only: true`** (default) — Bot only responds when @mentioned in group chats
-- **`bot_mention_only: false`** — Bot responds to all messages in allowed group chats
+- **`group_mention_only: true`** (default) — Bot only responds when @mentioned in group chats (bot DMs are unaffected)
+- **`group_mention_only: false`** — Bot responds to all messages in allowed group chats
 - **`group_summary_group_id: "..."`** — Only this exact group ID is allowed to use in-group summarize
 - **`group_summary_message_limit: 200`** (default) — When group summarize is enabled, pull this many recent messages before time filtering
 

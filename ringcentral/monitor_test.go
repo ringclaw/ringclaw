@@ -766,7 +766,7 @@ func TestMonitor_GroupChat_MentionOnlyDisabled(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if receivedClient != bot {
-		t.Error("with bot_mention_only=false, group message without mention should be processed by bot")
+		t.Error("with group_mention_only=false, group message without mention should be processed by bot")
 	}
 }
 

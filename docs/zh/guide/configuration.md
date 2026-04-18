@@ -28,7 +28,7 @@ title: 配置
     "client_secret": "",
     "jwt_token": "",
     "bot_token": "your_bot_token",
-    "bot_mention_only": true,
+    "group_mention_only": true,
     "chat_ids": ["chat_id_1", "chat_id_2"],
     "source_user_ids": ["alice@example.com"],
     "group_summary_group_id": "1234567",
@@ -102,7 +102,8 @@ title: 配置
 | `bot_token` | string | — | **必填。** RingCentral Public Bot 的访问 token。 |
 | `chat_ids` | string[] | `[]` | **必填。** Bot 允许接收消息的 chat ID 列表。 |
 | `source_user_ids` | string[] | `[]` | 受信任的发信人。可填数字 extension ID、邮箱、E.164 电话号码。空且已配置 Private App → 仅机主；空且未配置 Private App → 全部拒绝。 |
-| `bot_mention_only` | bool（可空） | `true` | `true` 群聊中必须 `@bot`；`false` 在允许的 chat 中对所有消息响应。 |
+| `group_mention_only` | bool（可空） | `true` | `true` 群聊中必须 `@bot`（Bot 私聊不受影响）；`false` 在允许的群聊中对所有消息响应。 |
+| `bot_mention_only` | bool（可空） | — | **已废弃**，`group_mention_only` 的旧名。仍会被读取（向后兼容），`Load()` 会把它迁移到新字段并打 `WARN`。未来版本将移除。 |
 | `server_url` | string | SDK 默认（`https://platform.ringcentral.com`） | RingCentral API 地址。 |
 | `client_id` | string | — | Private App Client ID。Private App 三个字段需一起填。 |
 | `client_secret` | string | — | Private App Client Secret。日志中会脱敏。 |

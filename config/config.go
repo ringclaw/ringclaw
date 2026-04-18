@@ -81,14 +81,25 @@ type CronConfig struct {
 
 // RCConfig holds RingCentral connection configuration.
 type RCConfig struct {
-	ClientID       string   `json:"client_id,omitempty"`
-	ClientSecret   string   `json:"client_secret,omitempty"`
-	JWTToken       string   `json:"jwt_token,omitempty"`
-	ChatIDs        []string `json:"chat_ids,omitempty"`
-	SourceUserIDs  []string `json:"source_user_ids,omitempty"`
-	ServerURL      string   `json:"server_url,omitempty"`
-	BotToken       string   `json:"bot_token,omitempty"`
-	BotMentionOnly *bool    `json:"bot_mention_only,omitempty"`
+	ClientID      string   `json:"client_id,omitempty"`
+	ClientSecret  string   `json:"client_secret,omitempty"`
+	JWTToken      string   `json:"jwt_token,omitempty"`
+	ChatIDs       []string `json:"chat_ids,omitempty"`
+	SourceUserIDs []string `json:"source_user_ids,omitempty"`
+	ServerURL     string   `json:"server_url,omitempty"`
+	BotToken      string   `json:"bot_token,omitempty"`
+
+	// GroupMentionOnly, when true (default), makes the bot only
+	// respond to messages where it is @mentioned in group chats. Bot
+	// DMs always respond regardless. Rename of the legacy
+	// bot_mention_only field; see the BotMentionOnly comment below.
+	GroupMentionOnly *bool `json:"group_mention_only,omitempty"`
+
+	// Deprecated: renamed to GroupMentionOnly. The bot_mention_only
+	// JSON field is still accepted for backward compatibility —
+	// Load() copies it into GroupMentionOnly and emits a WARN so
+	// operators know to rename it. Remove in a future release.
+	BotMentionOnly *bool `json:"bot_mention_only,omitempty"`
 
 	GroupSummaryGroupID      string `json:"group_summary_group_id,omitempty"`
 	GroupSummaryMessageLimit int    `json:"group_summary_message_limit,omitempty"`
@@ -118,13 +129,18 @@ func (rc RCConfig) HasPrivateApp() bool {
 	return rc.ClientID != "" && rc.ClientSecret != "" && rc.JWTToken != ""
 }
 
-// IsBotMentionOnly returns whether the bot requires @mention in group chats.
-// Defaults to true if not explicitly set.
-func (rc RCConfig) IsBotMentionOnly() bool {
-	if rc.BotMentionOnly == nil {
+// IsGroupMentionOnly returns whether the bot requires @mention in
+// group chats. Defaults to true if not explicitly set. Bot DMs are
+// not affected by this flag — DMs always receive every message.
+//
+// Load() normalizes the deprecated bot_mention_only field into
+// GroupMentionOnly, so callers reading the parsed config can always
+// rely on the new field.
+func (rc RCConfig) IsGroupMentionOnly() bool {
+	if rc.GroupMentionOnly == nil {
 		return true
 	}
-	return *rc.BotMentionOnly
+	return *rc.GroupMentionOnly
 }
 
 const defaultGroupSummaryMessageLimit = 200
@@ -223,8 +239,28 @@ func Load() (*Config, error) {
 	if cfg.Agents == nil {
 		cfg.Agents = make(map[string]AgentConfig)
 	}
+	normalizeDeprecatedFields(cfg)
 
 	return cfg, nil
+}
+
+// normalizeDeprecatedFields folds legacy JSON field names into their
+// current counterparts after a raw Unmarshal. Each branch emits a
+// single WARN so operators see the rename once per startup and can
+// migrate their config file; the next Save rewrites only the new
+// field because the old one is cleared here.
+func normalizeDeprecatedFields(cfg *Config) {
+	if cfg.RC.BotMentionOnly != nil {
+		if cfg.RC.GroupMentionOnly == nil {
+			cfg.RC.GroupMentionOnly = cfg.RC.BotMentionOnly
+			slog.Warn("config: `bot_mention_only` has been renamed to `group_mention_only`; migrated automatically (next save drops the old field)",
+				"component", "config")
+		} else {
+			slog.Warn("config: both `group_mention_only` and the deprecated `bot_mention_only` are set; keeping `group_mention_only` and discarding `bot_mention_only`",
+				"component", "config")
+		}
+		cfg.RC.BotMentionOnly = nil
+	}
 }
 
 // Save saves the configuration to disk.

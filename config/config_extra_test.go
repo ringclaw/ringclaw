@@ -176,8 +176,11 @@ func TestLoad_EnvVarsIgnored(t *testing.T) {
 	if cfg.RC.BotToken != "json-bot" {
 		t.Errorf("RC.BotToken: env must be ignored, got %q", cfg.RC.BotToken)
 	}
+	if cfg.RC.GroupMentionOnly != nil {
+		t.Errorf("RC.GroupMentionOnly: env must be ignored, got %#v", cfg.RC.GroupMentionOnly)
+	}
 	if cfg.RC.BotMentionOnly != nil {
-		t.Errorf("RC.BotMentionOnly: env must be ignored, got %#v", cfg.RC.BotMentionOnly)
+		t.Errorf("RC.BotMentionOnly: Load must normalize the deprecated field to nil, got %#v", cfg.RC.BotMentionOnly)
 	}
 }
 
@@ -281,26 +284,88 @@ func TestConfigPath(t *testing.T) {
 	}
 }
 
-func TestIsBotMentionOnly_Default(t *testing.T) {
+func TestIsGroupMentionOnly_Default(t *testing.T) {
 	rc := RCConfig{}
-	if !rc.IsBotMentionOnly() {
-		t.Error("expected default IsBotMentionOnly=true")
+	if !rc.IsGroupMentionOnly() {
+		t.Error("expected default IsGroupMentionOnly=true")
 	}
 }
 
-func TestIsBotMentionOnly_ExplicitTrue(t *testing.T) {
+func TestIsGroupMentionOnly_ExplicitTrue(t *testing.T) {
 	v := true
-	rc := RCConfig{BotMentionOnly: &v}
-	if !rc.IsBotMentionOnly() {
-		t.Error("expected IsBotMentionOnly=true")
+	rc := RCConfig{GroupMentionOnly: &v}
+	if !rc.IsGroupMentionOnly() {
+		t.Error("expected IsGroupMentionOnly=true")
 	}
 }
 
-func TestIsBotMentionOnly_ExplicitFalse(t *testing.T) {
+func TestIsGroupMentionOnly_ExplicitFalse(t *testing.T) {
 	v := false
-	rc := RCConfig{BotMentionOnly: &v}
-	if rc.IsBotMentionOnly() {
-		t.Error("expected IsBotMentionOnly=false")
+	rc := RCConfig{GroupMentionOnly: &v}
+	if rc.IsGroupMentionOnly() {
+		t.Error("expected IsGroupMentionOnly=false")
+	}
+}
+
+// TestLoad_DeprecatedBotMentionOnly_IsMigrated confirms that a
+// config.json written before the rename still boots and that Load
+// transparently migrates `bot_mention_only` into `group_mention_only`,
+// clearing the legacy field so the next Save writes only the new
+// name.
+func TestLoad_DeprecatedBotMentionOnly_IsMigrated(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	dir := tmpDir + "/.ringclaw"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `{"ringcentral": {"bot_token": "t", "chat_ids": ["c"], "bot_mention_only": false}}`
+	if err := os.WriteFile(dir+"/config.json", []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RC.BotMentionOnly != nil {
+		t.Errorf("Load must clear the deprecated BotMentionOnly after migration; got %#v", cfg.RC.BotMentionOnly)
+	}
+	if cfg.RC.GroupMentionOnly == nil || *cfg.RC.GroupMentionOnly {
+		t.Errorf("Load must copy bot_mention_only into GroupMentionOnly; got %#v", cfg.RC.GroupMentionOnly)
+	}
+	if cfg.RC.IsGroupMentionOnly() {
+		t.Error("IsGroupMentionOnly should be false (migrated from bot_mention_only=false)")
+	}
+}
+
+// TestLoad_NewFieldWinsOverDeprecated confirms that when both
+// `group_mention_only` and the legacy `bot_mention_only` are set,
+// Load keeps the new field and discards the old one.
+func TestLoad_NewFieldWinsOverDeprecated(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	dir := tmpDir + "/.ringclaw"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Legacy says false, new says true — new must win.
+	content := `{"ringcentral": {"bot_token": "t", "chat_ids": ["c"], "bot_mention_only": false, "group_mention_only": true}}`
+	if err := os.WriteFile(dir+"/config.json", []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RC.BotMentionOnly != nil {
+		t.Errorf("Load must clear the deprecated BotMentionOnly; got %#v", cfg.RC.BotMentionOnly)
+	}
+	if cfg.RC.GroupMentionOnly == nil || !*cfg.RC.GroupMentionOnly {
+		t.Errorf("GroupMentionOnly must remain true; got %#v", cfg.RC.GroupMentionOnly)
 	}
 }
 

@@ -77,13 +77,13 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	mentionOnly := cfg.RC.IsBotMentionOnly()
+	mentionOnly := cfg.RC.IsGroupMentionOnly()
 	if promptYesNo(reader, fmt.Sprintf("Require @mention in group chats? (current: %v)", mentionOnly)) {
 		t := true
-		cfg.RC.BotMentionOnly = &t
+		cfg.RC.GroupMentionOnly = &t
 	} else {
 		f := false
-		cfg.RC.BotMentionOnly = &f
+		cfg.RC.GroupMentionOnly = &f
 	}
 
 	// Step 2: Chat IDs
@@ -141,7 +141,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Printf("  Server URL:    %s\n", cfg.RC.ServerURL)
 	fmt.Printf("  Bot Token:     %s\n", maskSecret(cfg.RC.BotToken))
-	fmt.Printf("  Mention Only:  %v\n", cfg.RC.IsBotMentionOnly())
+	fmt.Printf("  Mention Only:  %v\n", cfg.RC.IsGroupMentionOnly())
 	fmt.Printf("  Chat IDs:      %v\n", cfg.RC.ChatIDs)
 	if cfg.RC.HasPrivateApp() {
 		fmt.Printf("  Client ID:     %s\n", maskSecret(cfg.RC.ClientID))

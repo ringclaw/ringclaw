@@ -114,8 +114,11 @@ func TestLoadIgnoresEnv(t *testing.T) {
 	if len(cfg.RC.ChatIDs) != 1 || cfg.RC.ChatIDs[0] != "json-chat-1" {
 		t.Errorf("RC.ChatIDs: env must be ignored, got %#v", cfg.RC.ChatIDs)
 	}
+	if cfg.RC.GroupMentionOnly != nil {
+		t.Errorf("RC.GroupMentionOnly: env must be ignored, got %#v", cfg.RC.GroupMentionOnly)
+	}
 	if cfg.RC.BotMentionOnly != nil {
-		t.Errorf("RC.BotMentionOnly: env must be ignored, got %#v", cfg.RC.BotMentionOnly)
+		t.Errorf("RC.BotMentionOnly: Load must normalize the deprecated field to nil, got %#v", cfg.RC.BotMentionOnly)
 	}
 	if cfg.AgentWorkspace != "" {
 		t.Errorf("AgentWorkspace: env must be ignored, got %q", cfg.AgentWorkspace)
