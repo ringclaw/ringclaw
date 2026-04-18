@@ -39,6 +39,14 @@ Connect Claude, Codex, Gemini, Kimi, Copilot, Droid, and more. Switch between ag
 
 <div class="feature">
 
+### 🔒 Security First
+
+Three-layer permission model: trusted-sender allowlist, chat-command authorization, and ACP session capability gating with `/full-access` two-step approval. Token-based API, DNS rebinding protection, workspace path restrictions built in.
+
+</div>
+
+<div class="feature">
+
 ### 💬 Chat Summarization
 
 Summarize conversations from any chat. Resolve targets by name, fetch messages, and get AI-powered summaries delivered to your current chat.
@@ -58,14 +66,6 @@ Agents automatically create notes, tasks, events, and adaptive cards during conv
 ### ⏰ Cron & Heartbeat
 
 Schedule recurring tasks with cron expressions or intervals. Heartbeat mode runs periodic agent check-ins driven by a user-authored checklist.
-
-</div>
-
-<div class="feature">
-
-### 🔒 Security First
-
-Token-based API authentication, DNS rebinding protection, ACP file permission control, and workspace path restrictions built in.
 
 </div>
 

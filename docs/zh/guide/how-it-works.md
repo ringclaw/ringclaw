@@ -26,15 +26,19 @@ RingClaw 通过 WebSocket 连接 RingCentral Team Messaging 实时接收消息�
 flowchart TD
     Msg[收到消息] --> Dedup{去重检查}
     Dedup -->|重复| Drop[丢弃]
-    Dedup -->|新消息| Strip[去除 Bot @mention]
-    Strip --> Priv{特权命令?}
+    Dedup -->|新消息| TS{可信发送者?<br/>Phase 1 allowlist}
+    TS -->|否| Drop2[丢弃]
+    TS -->|是| Approval{Bot 私聊里的 /approval 回复?}
+    Approval -->|是| OOB[交给 OOB manager 处理]
+    Approval -->|否| Strip[去除 @mention + 转发前缀]
+    Strip --> Priv{群聊 & 特权命令?}
     Priv -->|是, 非 owner| Block[拒绝]
-    Priv -->|是, owner 或 DM| Cmd[执行命令]
+    Priv -->|是, owner 或 DM| Cmd[执行内置命令]
     Priv -->|否| BuiltIn{内置命令?}
-    BuiltIn -->|/help /status /cron...| Cmd
-    BuiltIn -->|/task /note /event| CRUD[执行 CRUD]
+    BuiltIn -->|/help /info /new /cwd /cron /reload /full-access| Cmd
+    BuiltIn -->|/task /note /event /card| CRUD[执行 CRUD]
     BuiltIn -->|否| Intent{Intent 触发词?}
-    Intent -->|是| Classify[AI 分类]
+    Intent -->|是| Classify[AI 分类 → 路由]
     Intent -->|否| Parse[解析 /agent 前缀]
     Parse --> HasAgent{有 agent 前缀?}
     HasAgent -->|无| Default[发给默认 Agent]

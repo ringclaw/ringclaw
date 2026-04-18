@@ -14,6 +14,7 @@ When an agent's response contains ACTION blocks, RingClaw parses them, sends the
 sequenceDiagram
     participant AI as AI Agent
     participant R as RingClaw
+    participant O as Owner DM
     participant RC as RingCentral
 
     AI-->>R: Reply (with ACTION blocks)
@@ -21,11 +22,21 @@ sequenceDiagram
     R->>R: Separate text reply and ACTIONs
     R->>RC: Send text reply
     loop Each ACTION
-        R->>R: Parse type and params
+        R->>R: Parse type, params, chatid
+        alt chatid set & sender NOT on trusted allowlist
+            R->>R: Silently drop chatid, force origin chat (WARN log)
+        end
+        alt owner cross-chat (target ≠ origin & ≠ owner DM)
+            R->>O: Synchronous audit notice<br/>[notice] TYPE by requester at ts: origin=... target=...
+            O-->>R: ACK (within 5s) or timeout/error
+            alt notice delivery failed
+                R->>R: Refuse action (Refused cross-chat TYPE: ...)
+            end
+        end
         alt NOTE
             R->>RC: CreateNote + PublishNote
         else TASK
-            R->>RC: CreateTask
+            R->>RC: CreateTask (optionally resolve assignee via Private App)
         else EVENT
             R->>RC: CreateEvent
         else CARD
@@ -35,7 +46,7 @@ sequenceDiagram
             R->>RC: SendPost
         end
     end
-    R->>RC: Send ACTION execution results
+    R->>RC: Send ACTION execution results summary
 ```
 
 ## ACTION Block Format
@@ -52,7 +63,7 @@ ACTION:EVENT title=Sprint Review start=2026-04-01T14:00:00Z end=2026-04-01T15:00
 END_ACTION
 ```
 
-Actions can target a different chat via `chatid=<id>` parameter (disabled in bot context for security). No configuration needed — the action prompt is injected automatically.
+Actions may target a different chat via the `chatid=<id>` parameter. Non-owner senders silently lose the override (the action is forced back to the origin chat). Owner-initiated cross-chat dispatches pass a **synchronous fail-closed audit notice** through the owner DM — see [Security › Layer 2](../security/index.md#layer-2-ai-driven-action-dispatch) for the full gating rules. No configuration needed — the action prompt is injected automatically.
 
 ## Task Commands
 
