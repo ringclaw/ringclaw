@@ -26,19 +26,23 @@ Every incoming message goes through deduplication, permission checks, and a mult
 flowchart TD
     Msg[Incoming message] --> Dedup{Dedup check}
     Dedup -->|Duplicate| Drop[Drop]
-    Dedup -->|New| Strip[Strip bot @mention]
-    Strip --> Priv{Privileged command?}
+    Dedup -->|New| TS{Trusted sender?<br/>Phase 1 allowlist}
+    TS -->|No| Drop2[Drop]
+    TS -->|Yes| Approval{/approval reply in bot DM?}
+    Approval -->|Yes| OOB[Consume via OOB manager]
+    Approval -->|No| Strip[Strip @mention + forwarded prefix]
+    Strip --> Priv{Group chat & privileged command?}
     Priv -->|Yes, non-owner| Block[Denied]
-    Priv -->|Yes, owner or DM| Cmd[Execute command]
+    Priv -->|Yes, owner or DM| Cmd[Execute built-in command]
     Priv -->|No| BuiltIn{Built-in command?}
-    BuiltIn -->|/help /status /cron...| Cmd
-    BuiltIn -->|/task /note /event| CRUD[Execute CRUD]
-    BuiltIn -->|No| Intent{Intent trigger word?}
-    Intent -->|Yes| Classify[AI classification]
+    BuiltIn -->|/help /info /new /cwd /cron /reload /full-access| Cmd
+    BuiltIn -->|/task /note /event /card| CRUD[Execute CRUD]
+    BuiltIn -->|No| Intent{Intent trigger keyword?}
+    Intent -->|Yes| Classify[AI classify → route]
     Intent -->|No| Parse[Parse /agent prefix]
-    Parse --> HasAgent{Has agent prefix?}
-    HasAgent -->|None| Default[Send to default Agent]
-    HasAgent -->|1 agent| Named[Send to named Agent]
+    Parse --> HasAgent{Agent prefix?}
+    HasAgent -->|None| Default[Default Agent]
+    HasAgent -->|1| Named[Named Agent]
     HasAgent -->|Multiple| Broadcast[Parallel broadcast]
 ```
 

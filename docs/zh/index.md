@@ -34,6 +34,14 @@ RingCentral AI Agent 桥接器
 
 <div class="feature">
 
+### 🔒 安全优先
+
+三层权限模型：可信发送者 allowlist、聊天命令授权、ACP 会话能力门控（`/full-access` 两步审批）。内置 Token 认证、DNS 重绑定防护、工作目录路径限制。
+
+</div>
+
+<div class="feature">
+
 ### 💬 聊天总结
 
 总结任意聊天的对话内容。按名称解析目标，获取消息，AI 生成摘要发送到当前聊天。
@@ -53,14 +61,6 @@ Agent 在对话中自动创建笔记、任务、日历事件和 Adaptive Card。
 ### ⏰ 定时任务与心跳
 
 使用 Cron 表达式或固定间隔调度任务。心跳模式基于用户编写的检查清单定时执行 Agent 巡检。
-
-</div>
-
-<div class="feature">
-
-### 🔒 安全优先
-
-内置 Token 认证、DNS 重绑定防护、ACP 文件权限控制和工作目录路径限制。
 
 </div>
 
