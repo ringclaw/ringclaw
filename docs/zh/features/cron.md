@@ -37,3 +37,14 @@ title: 定时任务
 ## 持久化
 
 任务持久化到 `~/.ringclaw/cron/jobs.json`，重启不丢失。每个任务可选指定目标 Agent 或 Chat。
+
+## 安全注意事项
+
+- **`/cron add` 是特权命令**，与 `/cwd`、`/new` 适用同一套 owner 门控。
+  允许范围见 [安全 › 第一层](../security/index.md#第一层-聊天命令授权)。
+- **Cron 触发的 Agent 回复不会执行 `ACTION:` 块。** 调度器把回复原样
+  发回聊天——如果 Agent 输出含 `ACTION: NOTE/TASK/EVENT/CARD/MESSAGE`，
+  它会以纯文本形式进入聊天，不会调用 RC API 执行。这是刻意设计：定时
+  任务没有人类 sender，第二层的跨聊天门控无法判断是否为 owner。如果
+  希望定时任务真的创建 task/note，可以在 prompt 里让 Agent 返回 `/task
+  create ...` 这类可人工触发的命令，并在信任群聊中运行。

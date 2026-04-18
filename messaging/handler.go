@@ -457,14 +457,41 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
-	// In bot group chats (not bot DM), restrict privileged commands to the bot owner
+	// Privileged-command owner gate.
+	//
+	// Layer 1 of the permission matrix. Two cases:
+	//
+	//  1. Bot group chat: always enforce — non-owner cannot run
+	//     privileged commands (historical behavior).
+	//  2. Bot DM: enforce ONLY when a Private App is configured, so
+	//     `readClient != client`. In that case `readClient.OwnerID()`
+	//     names the true machine owner and non-owner trusted senders
+	//     (e.g. a teammate also listed in source_user_ids) are blocked.
+	//     Without a Private App, RingClaw has no reliable owner ID
+	//     (readClient == bot client, whose OwnerID is the bot itself),
+	//     so the DM path falls back to "every trusted sender is
+	//     trusted" — see the Permission Matrix "DM is the trust
+	//     boundary" warning in docs/security/index.md.
 	isBotGroup := client.IsBot() && !client.IsBotDM(chatID)
-	if isBotGroup && isPrivilegedCommand(text) {
-		if post.CreatorID != readClient.OwnerID() {
-			slog.Info("blocked privileged command from non-owner", "component", "handler", "creatorID", post.CreatorID, "command", util.Truncate(text, 30))
-			logSendError(SendTextReply(ctx, client, chatID, "Only the bot owner can use this command in group chats."))
-			return
+	hasPrivateApp := readClient != nil && readClient != client
+	if isPrivilegedCommand(text) {
+		switch {
+		case isBotGroup:
+			if post.CreatorID != readClient.OwnerID() {
+				slog.Info("blocked privileged command from non-owner (group)",
+					"component", "handler", "creatorID", post.CreatorID, "command", util.Truncate(text, 30))
+				logSendError(SendTextReply(ctx, client, chatID, "Only the bot owner can use this command in group chats."))
+				return
+			}
+		case hasPrivateApp:
+			if post.CreatorID != readClient.OwnerID() {
+				slog.Info("blocked privileged command from non-owner (DM + PrivateApp)",
+					"component", "handler", "creatorID", post.CreatorID, "command", util.Truncate(text, 30))
+				logSendError(SendTextReply(ctx, client, chatID, "Only the Private App owner can use this privileged command."))
+				return
+			}
 		}
+		// No Private App + DM: cannot identify an owner; fall through.
 	}
 
 	// Built-in commands (no typing needed)
@@ -570,18 +597,30 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 // routeOOBApprovalReply is the Phase 2b hook that consumes `/approval`
 // replies in the owner's bot DM before they reach the agent. Returns
 // true when the message was handled (caller must short-circuit).
-// Restricted to bot DM so a teammate cannot cancel another user's
-// pending challenge by guessing IDs in group chat; replies in any
-// other chat fall through unchanged.
+//
+// In the bot DM the reply is passed to the OOB manager. Outside the
+// bot DM (group chats, other DMs) a recognizable `/approval ...`
+// shape is NOT dispatched to the agent as text — instead we post a
+// short explanation so the operator gets a clear signal that they
+// used the command in the wrong place, rather than seeing the AI
+// answer a confused "what is /approval abc123?" prompt.
 func (h *Handler) routeOOBApprovalReply(ctx context.Context, client *ringcentral.Client, chatID, senderID, text string) bool {
 	mgr := h.OOBManager()
 	if mgr == nil {
 		return false
 	}
-	if !client.IsBotDM(chatID) {
-		return false
+	if client.IsBotDM(chatID) {
+		return mgr.HandleApprovalReply(ctx, newOOBClient(client), chatID, senderID, text)
 	}
-	return mgr.HandleApprovalReply(ctx, newOOBClient(client), chatID, senderID, text)
+	// Outside the owner DM, intercept recognizable /approval shapes
+	// with an explicit refusal so they neither reach the OOB manager
+	// nor leak into the default agent prompt.
+	if reply := oob.ParseApprovalReply(text); reply.Kind != oob.ReplyNone {
+		slog.Info("refused /approval outside bot DM", "component", "handler", "chatID", chatID, "senderID", senderID)
+		logSendError(SendTextReply(ctx, client, chatID, "`/approval` is only recognized in the bot DM with the owner."))
+		return true
+	}
+	return false
 }
 
 // conversationIDForPost returns the session key used to address a single

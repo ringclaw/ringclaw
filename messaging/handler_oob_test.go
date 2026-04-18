@@ -100,16 +100,32 @@ func TestRouteOOBApprovalReply_NoManagerFallsThrough(t *testing.T) {
 	}
 }
 
-// TestRouteOOBApprovalReply_NonDMFallsThrough confirms that approval
-// replies posted in any chat other than the bot DM are NOT consumed.
-// Keeping /approval scoped to the DM avoids a teammate in a group chat
-// poking at another user's pending challenge by guessing IDs.
-func TestRouteOOBApprovalReply_NonDMFallsThrough(t *testing.T) {
+// TestRouteOOBApprovalReply_NonDMRefusedWithMessage confirms that a
+// recognizable `/approval ...` shape posted outside the bot DM is
+// intercepted and refused with an explanatory message, rather than
+// silently falling through to the default agent (which would both
+// confuse the operator and leak the challenge syntax into an AI
+// prompt). The refusal neither consumes the challenge nor lets a
+// teammate poke at another user's pending ID.
+func TestRouteOOBApprovalReply_NonDMRefusedWithMessage(t *testing.T) {
 	h := newTestHandler()
 	h.SetOOBManager(oob.New(oob.Options{}), "dm-1")
 	bot := newDMBotClient("http://example.com")
-	if h.routeOOBApprovalReply(context.Background(), bot, "group-99", "user-1", "/approval aabbccdd") {
-		t.Fatalf("/approval in non-DM chats must not be consumed")
+	if !h.routeOOBApprovalReply(context.Background(), bot, "group-99", "user-1", "/approval aabbccdd") {
+		t.Fatalf("/approval in non-DM chats must be intercepted (returned true)")
+	}
+}
+
+// TestRouteOOBApprovalReply_NonApprovalOutsideDMFallsThrough confirms
+// that non-approval text in non-DM chats still falls through to the
+// normal agent pipeline — only recognizable `/approval ...` shapes
+// are refused outside the bot DM.
+func TestRouteOOBApprovalReply_NonApprovalOutsideDMFallsThrough(t *testing.T) {
+	h := newTestHandler()
+	h.SetOOBManager(oob.New(oob.Options{}), "dm-1")
+	bot := newDMBotClient("http://example.com")
+	if h.routeOOBApprovalReply(context.Background(), bot, "group-99", "user-1", "hello there") {
+		t.Fatalf("non-/approval text outside bot DM must fall through")
 	}
 }
 

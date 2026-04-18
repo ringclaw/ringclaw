@@ -39,7 +39,35 @@ curl -H "X-RingClaw-Token: $(cat ~/.ringclaw/api_token)" \
 
 ## 权限矩阵
 
-RingClaw 通过三层正交门控处理消息，消息必须逐层通过才能生效。
+### 读表前提 — RingClaw 有四个入口，不只 WebSocket 一条
+
+下面的三层模型只覆盖 **WebSocket 消息路径**；其他三条入口有各自的门控。
+别把"群聊非 owner 用不了 `/cwd`"等同于"非 owner 无法让 bot 做任何事"：
+
+| 入口 | 第零层 (sender) | 第一层 (命令) | 第二层 (ACTION 派发) | 第三层 (ACP 模式) | 实际门控 |
+|---|---|---|---|---|---|
+| WebSocket 消息 | ✅ | ✅ | ✅ | ✅ | Chat allowlist + Phase 1 sender allowlist + handler 检查 |
+| HTTP API（`/api/send`、`/api/tasks`、`/api/notes`、`/api/events`、`/api/cards`） | ❌ | ❌ | ❌ | n/a | **仅 API token + loopback Host**（`api/auth.go`） |
+| Cron 定时任务 | ❌ | 任务通过 `/cron add`（第一层）创建；执行时无人类 sender | ❌ **ACTION 块不执行** — 回复原样发出 | ✅ | 任务配置在 `~/.ringclaw/cron/jobs.json` |
+| 心跳（Heartbeat） | ❌ | n/a（配置驱动） | ❌ **ACTION 块不执行** | ✅ | `heartbeat.enabled` + `HEARTBEAT.md` |
+
+::: danger API token = 机器操作者
+任何能读到 `~/.ringclaw/api_token` 的人都会 **直接绕过第零至第二层**——
+可向任意聊天发送文本/媒体，也可通过 `/api/...` 创建/删除任意 task/note/
+event/card。请像对待 SSH 私钥一样对待 token 文件。默认的 loopback 绑定
+（`api_addr: 127.0.0.1:18011`）把影响面限制在本机同机进程。
+:::
+
+::: tip Chat allowlist 是最外层护栏
+**第 -1 层**：不在 `ringcentral.chat_ids` 中的聊天消息会被 WebSocket
+monitor 直接丢弃，连第零层都到不了（`ringcentral/monitor.go:380-383`）。
+如果发现消息被静默吞掉，优先检查 chat allowlist——日志会打印
+`ignoring message from non-allowed chat`。
+:::
+
+### WebSocket 路径的三层模型
+
+RingClaw 通过三层正交门控处理 WebSocket 消息，消息必须逐层通过才能生效。
 
 1. **第一层 — 聊天命令授权**：谁在哪种聊天中可以触发哪些斜杠命令。
 2. **第二层 — AI 驱动的 ACTION 派发**：AI 回复中嵌入的 `ACTION:` 块能否执行（尤其是跨聊天场景）。
@@ -49,35 +77,53 @@ RingClaw 通过三层正交门控处理消息，消息必须逐层通过才能�
 `/full-access` 授权（以及静态配置 `full_access: true`）只改变 ACP **会话模式**。它不会解锁任何聊天命令——非 owner 在群聊中仍然无法使用 `/cwd`，`/full-access` 本身也仍然只在私聊中可用。它同样不会放宽第二层的跨聊天 fail-closed 通知机制。
 :::
 
-**第零层提示** — 每条消息首先经过 Phase 1 trusted-sender allowlist（`messaging/handler.go:444-448`）。不在允许列表中的发送者消息会被直接丢弃，以下三层均不适用。
+**第零层提示** — 每条消息首先经过 **两重** Phase 1 trusted-sender allowlist
+（`ringcentral/monitor.go:395-403` 在 socket 层，`messaging/handler.go:444-448`
+在 handler 层，属于纵深防御）。不在允许列表中的发送者消息会被直接丢弃，
+以下三层均不适用。
+
+::: warning 私聊是信任边界，不是"仅 owner"
+第一层的"仅 owner"门控（`/cwd`、`/cron`、`/new`、`/reload`、总结自然语言
+触发）在 **群聊** 里始终生效。在 **Bot 私聊** 里，只有配置了 Private App
+才会生效——此时特权命令只允许 Private App owner 运行，即便是其他
+trusted sender 在自己的私聊里也不行。没有 Private App 时，RingClaw 无法
+区分"owner"和"另一个 trusted sender 的私聊"，所以每个 trusted sender 都
+拥有自己私聊中的特权命令权限。如果你在 `ringcentral.source_user_ids` 里
+列了多人又没配 Private App，就等于给所有人同等信任——包括 `/cron add`，
+它可以在发送者离开后长期运行任意 prompt。
+:::
 
 ### 第一层 — 聊天命令授权
 
 列说明：✅ 允许；❌ 拒绝（bot 回复明确拒绝消息或静默丢弃）；⚠️ 允许但有额外检查。
 
-| 命令 / 消息形式 | Bot 私聊 (owner) | Bot 群聊 (owner) | Bot 群聊 (非 owner) | 门控位置 |
-|---|---|---|---|---|
-| 无 `/` 前缀的纯文本（→ 默认 agent） | ✅ | ✅ | ✅ | `handler.go:528-530` |
-| `/help` | ✅ | ✅ | ✅ | `handler.go:491` |
-| `/info` / `/status` | ✅ | ✅ | ✅ | `handler.go:475` |
-| `/chatinfo [id]` | ✅ | ✅ | ✅ | `handler.go:505` |
-| `/task` / `/note` / `/event` / `/card` | ✅ | ✅ | ✅ | `actions_commands.go:30` |
-| `/<agent> <消息>`（发送 / 广播） | ✅ | ✅ | ✅ | `handler.go:562` |
-| `/<agent>`（切换默认 agent） | ✅ | ✅ | ❌ | `handler.go:537-539` |
-| `/new` / `/clear` | ✅ | ✅ | ❌ | `handler.go:462-468` + `handler_commands.go:248` |
-| `/cwd [路径]` | ✅ ⚠️ | ✅ ⚠️ | ❌ | `handler_commands.go:19`（allowlist + denylist） |
-| `/cron add\|list\|delete` | ✅ | ✅ | ❌ | `handler.go:498` + `handler_commands.go:254` |
-| `/reload` | ✅ | ✅ | ❌ | `handler.go:471` + `handler_commands.go:257` |
-| 总结（自然语言触发，如"总结"、"summarize"） | ✅（需 Private App） | ⚠️ 仅限配置的群组 | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
-| 总结（无 Private App） | ❌ 不可用 | ❌ 不可用 | ❌ 不可用 | `handler_summarize.go:76` |
-| `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌（仅私聊） | ❌（仅私聊） | `handler_fullaccess.go:62-67` |
-| `/approval <id>` / `/approval deny <id>` | ✅ ⚠️（仅发起者本人） | ⚠️ 不被识别，作为普通文本转发给 agent | ⚠️ 不被识别，作为普通文本转发给 agent | `handler.go:576-585` + `oob/authorize.go:126` |
+"Owner" 指配置了 Private App 时的 Private App owner（真正的机器操作者）。
+"Bot 私聊（其他 trusted sender）" 列只在 `ringcentral.source_user_ids`
+配了多人时有意义——参阅上面的"私聊是信任边界"提示。
+
+| 命令 / 消息形式 | Bot 私聊 (owner) | Bot 私聊（其他 trusted sender，有 Private App） | Bot 群聊 (owner) | Bot 群聊 (非 owner) | 门控位置 |
+|---|---|---|---|---|---|
+| 无 `/` 前缀的纯文本（→ 默认 agent） | ✅ | ✅ | ✅ | ✅ | `handler.go:528-530` |
+| `/help` | ✅ | ✅ | ✅ | ✅ | `handler.go:491` |
+| `/info` / `/status` | ✅ | ✅ | ✅ | ✅ | `handler.go:475` |
+| `/chatinfo [id]` | ✅ | ✅ | ✅ | ✅ | `handler.go:505` |
+| `/task` / `/note` / `/event` / `/card` | ✅ | ✅ | ✅ | ✅ | `actions_commands.go:30` |
+| `/<agent> <消息>`（发送 / 广播） | ✅ | ✅ | ✅ | ✅ | `handler.go:562` |
+| `/<agent>`（切换默认 agent） | ✅ | ✅ | ✅ | ❌ | `handler.go:537-539` |
+| `/new` / `/clear` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:248` |
+| `/cwd [路径]` | ✅ ⚠️ | ❌ | ✅ ⚠️ | ❌ | `handler_commands.go:19`（allowlist + denylist） |
+| `/cron add\|list\|delete` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:254` |
+| `/reload` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:257` |
+| 总结（自然语言触发，如"总结"、"summarize"） | ✅（需 Private App） | ❌ | ⚠️ 仅限配置的群组 | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
+| 总结（无 Private App） | ❌ 不可用 | n/a | ❌ 不可用 | ❌ 不可用 | `handler_summarize.go:76` |
+| `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌（owner-only、DM-only） | ❌（DM-only） | ❌（DM-only） | `handler_fullaccess.go:62-67` |
+| `/approval <id>` / `/approval deny <id>` | ✅ ⚠️（仅发起者本人） | ⚠️ 仅当发送者就是原发起者才会被消费 | ❌ 明确拒绝并给出提示 | ❌ 明确拒绝并给出提示 | `handler.go:603-628` + `oob/authorize.go:126` |
 
 额外检查说明：
 
 - `/cwd` — 绝对路径必须在 `agent_allow_workspace_list ∪ agent_workspace ∪ ~/.ringclaw/workspace` 范围内，且不含 denylist 目录（`.ssh`、`.gnupg`、`.ringclaw`、`.aws`、`.kube`、`.config/gcloud`）。两项检查与 full-access 状态无关。
 - `/full-access grant [时长]` — 仅在 owner 回复 `/approval <id>` 后才真正激活。challenge TTL 5 分钟，默认授权 24 小时，上限 30 天。
-- `/approval` — 仅原发起者可解析自己的 challenge（`oob/authorize.go:146-154`）。群聊中的 `/approval <id>` 消息不会被拦截，会作为普通文本转发给默认 agent。
+- `/approval` — 仅原发起者可解析自己的 challenge（`oob/authorize.go:146-154`）。群聊中看起来像 `/approval <id>` 的消息会被明确拒绝（回复 ``/approval`` 只在 bot 私聊中可用），不会转发给默认 agent。
 - 群聊总结 — 只允许 chatID 等于 `ringcentral.group_summary_group_id` 的群；跨群 / 跨人总结会被拒绝（`handler_summarize.go:84-115`）。
 
 ### 第二层 — AI 驱动的 ACTION 派发
