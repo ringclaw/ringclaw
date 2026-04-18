@@ -1792,6 +1792,77 @@ func TestHandleMessage_GroupPrivilegedBlocked(t *testing.T) {
 	}
 }
 
+// TestHandleMessage_DMPrivilegedBlockedForNonOwnerWithPrivateApp confirms
+// that Layer 1 now enforces the owner gate in bot DMs as well, whenever
+// a Private App is configured. This closes the gap where a teammate also
+// listed in source_user_ids could drive /cron add etc. from their own DM
+// with the bot.
+func TestHandleMessage_DMPrivilegedBlockedForNonOwnerWithPrivateApp(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-non-owner")
+	// Distinct Private App client — its OwnerID names the real operator
+	// (alice). Bob is a trusted teammate but not the owner.
+	privateApp := ringcentral.NewBotClient(srv.URL, "token")
+	privateApp.SetOwnerID("alice")
+
+	h.HandleMessage(context.Background(), bot, privateApp, ringcentral.Post{
+		ID:        "priv-dm-1",
+		GroupID:   "dm-non-owner",
+		CreatorID: "bob",
+		Text:      "/cron list",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a permission denial reply")
+	}
+	if !strings.Contains(got[0], "Private App owner") {
+		t.Errorf("expected 'Private App owner' reply, got %q", got[0])
+	}
+}
+
+// TestHandleMessage_DMPrivilegedFallsBackWithoutPrivateApp confirms the
+// inverse: without a Private App (readClient == bot client), the DM
+// path cannot identify an owner and falls back to the legacy "every
+// trusted sender is trusted in their own DM" behavior. Here /cron list
+// is executed (it replies with "Cron is not configured." because no
+// store is set, not with the privileged-command refusal).
+func TestHandleMessage_DMPrivilegedFallsBackWithoutPrivateApp(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	// readClient == bot client (no Private App); CreatorID is a trusted
+	// sender other than the bot itself. Expected: falls through the
+	// privileged gate and hits the /cron handler's "not configured"
+	// response.
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "priv-dm-2",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/cron list",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a reply")
+	}
+	for _, reply := range got {
+		if strings.Contains(reply, "Only the Private App owner") || strings.Contains(reply, "Only the bot owner") {
+			t.Errorf("did not expect a privileged-command refusal without Private App, got %q", reply)
+		}
+	}
+}
+
 // --- HandleMessage: multi-agent broadcast usage error ---
 
 func TestHandleMessage_MultiAgentNoMessage(t *testing.T) {

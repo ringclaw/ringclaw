@@ -371,9 +371,43 @@ directories `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
 
 ## Permission Matrix
 
-RingClaw gates incoming messages through three orthogonal layers. They
-compose bottom-up: a message must clear every applicable layer before
-it takes effect.
+### Before you read — four entry points, not one
+
+RingClaw can act on RingCentral via **four distinct entry points**. The
+three-layer model below only applies to the WebSocket message path;
+each of the other entries has its own gate and is listed here so
+operators do not mistake "non-owner cannot use `/cwd` in a group" for
+"non-owner cannot make the bot do anything":
+
+| Entry point | Layer 0 (sender) | Layer 1 (commands) | Layer 2 (ACTION fan-out) | Layer 3 (ACP mode) | What actually gates it |
+|---|---|---|---|---|---|
+| WebSocket message | ✅ | ✅ | ✅ | ✅ | Chat allowlist + Phase 1 sender allowlist + handler checks |
+| HTTP API (`/api/send`, `/api/tasks`, `/api/notes`, `/api/events`, `/api/cards`) | ❌ | ❌ | ❌ | n/a | **API token + loopback Host only** (`api/auth.go`) |
+| Cron job | ❌ | job is created via `/cron add` (Layer 1); execution has no human sender | ❌ **ACTION blocks are NOT executed** — reply is posted verbatim | ✅ | Job config in `~/.ringclaw/cron/jobs.json` |
+| Heartbeat | ❌ | n/a (config-driven) | ❌ **ACTION blocks are NOT executed** | ✅ | `heartbeat.enabled` + `HEARTBEAT.md` |
+
+::: danger API token equals machine operator
+Anyone with read access to `~/.ringclaw/api_token` **bypasses Layers
+0–2 entirely** — they can send arbitrary text/media to any chat and
+create/delete any task, note, event, or card through `/api/...`.
+Treat the token file like an SSH key. The default loopback-only bind
+(`api_addr: 127.0.0.1:18011`) limits the blast radius to local
+processes on the same host.
+:::
+
+::: tip Chat allowlist is the outermost ring
+**Layer -1**: messages from chats **not** in `ringcentral.chat_ids`
+are dropped by the WebSocket monitor before Layer 0 even applies
+(`ringcentral/monitor.go:380-383`). If a message silently disappears,
+check the chat allowlist first — the log line reads
+`ignoring message from non-allowed chat`.
+:::
+
+### The three WebSocket-path layers
+
+RingClaw gates incoming WebSocket messages through three orthogonal
+layers. They compose bottom-up: a message must clear every applicable
+layer before it takes effect.
 
 1. **Layer 1 — Chat command authorization**: who may trigger each slash command in each chat shape.
 2. **Layer 2 — AI-driven ACTION dispatch**: whether an AI-emitted `ACTION:` block may fan out (especially cross-chat).
@@ -388,38 +422,60 @@ fail-closed notice.
 :::
 
 **Layer 0 reminder** — every message first passes through the Phase 1
-trusted-sender allowlist ([`messaging/handler.go:444-448`](https://github.com/ringclaw/ringclaw/blob/main/messaging/handler.go#L444)).
-Senders outside the allowlist are dropped before any layer below
-applies.
+trusted-sender allowlist, enforced **twice**
+([`ringcentral/monitor.go:395-403`](https://github.com/ringclaw/ringclaw/blob/main/ringcentral/monitor.go#L395)
+on the socket and
+[`messaging/handler.go:444-448`](https://github.com/ringclaw/ringclaw/blob/main/messaging/handler.go#L444)
+on the handler). Senders outside the allowlist are dropped before any
+layer below applies.
+
+::: warning DM is the trust boundary, not "owner only"
+Layer 1's owner-only gate for privileged commands (`/cwd`, `/cron`,
+`/new`, `/reload`, summarize NL triggers) fires in **group chats**.
+In **bot DMs**, the gate applies only when a Private App is configured
+— in that case privileged commands are restricted to the Private App
+owner even in DM. Without a Private App, RingClaw has no way to tell
+"owner" from "another trusted sender in their own DM", so every
+trusted sender gets full privileged-command power in their own DM
+with the bot. If you list multiple people in
+`ringcentral.source_user_ids` without a Private App, you are trusting
+all of them equally — including with `/cron add`, which can keep
+running arbitrary prompts after the sender walks away.
+:::
 
 ### Layer 1 — Chat command authorization
 
 Column legend: ✅ allowed; ❌ blocked (bot replies with an explicit
 refusal or silently drops); ⚠️ allowed with an extra check.
 
-| Command / Message Shape | Bot DM (owner) | Bot Group (owner) | Bot Group (others) | Gate |
-|---|---|---|---|---|
-| Plain text with no `/` prefix (→ default agent) | ✅ | ✅ | ✅ | `handler.go:528-530` |
-| `/help` | ✅ | ✅ | ✅ | `handler.go:491` |
-| `/info` / `/status` | ✅ | ✅ | ✅ | `handler.go:475` |
-| `/chatinfo [id]` | ✅ | ✅ | ✅ | `handler.go:505` |
-| `/task` / `/note` / `/event` / `/card` | ✅ | ✅ | ✅ | `actions_commands.go:30` |
-| `/<agent> <msg>` (send / broadcast) | ✅ | ✅ | ✅ | `handler.go:562` |
-| `/<agent>` (switch default agent) | ✅ | ✅ | ❌ | `handler.go:537-539` |
-| `/new` / `/clear` | ✅ | ✅ | ❌ | `handler.go:462-468` + `handler_commands.go:248` |
-| `/cwd [path]` | ✅ ⚠️ | ✅ ⚠️ | ❌ | `handler_commands.go:19` (allowlist + denylist) |
-| `/cron add\|list\|delete` | ✅ | ✅ | ❌ | `handler.go:498` + `handler_commands.go:254` |
-| `/reload` | ✅ | ✅ | ❌ | `handler.go:471` + `handler_commands.go:257` |
-| Summarize (NL trigger, e.g. "总结", "summarize") | ✅ (needs Private App) | ⚠️ configured group only | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
-| Summarize without Private App | ❌ disabled | ❌ disabled | ❌ disabled | `handler_summarize.go:76` |
-| `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌ (DM-only) | ❌ (DM-only) | `handler_fullaccess.go:62-67` |
-| `/approval <id>` / `/approval deny <id>` | ✅ ⚠️ (requester only) | ⚠️ not parsed; forwarded to agent as text | ⚠️ not parsed; forwarded to agent as text | `handler.go:576-585` + `oob/authorize.go:126` |
+"Owner" means the Private App owner when one is configured (the true
+machine operator). The "Bot DM (non-owner trusted sender)" column only
+applies when `ringcentral.source_user_ids` lists more than one person;
+see the "DM is the trust boundary" warning above.
+
+| Command / Message Shape | Bot DM (owner) | Bot DM (other trusted sender, Private App configured) | Bot Group (owner) | Bot Group (others) | Gate |
+|---|---|---|---|---|---|
+| Plain text with no `/` prefix (→ default agent) | ✅ | ✅ | ✅ | ✅ | `handler.go:528-530` |
+| `/help` | ✅ | ✅ | ✅ | ✅ | `handler.go:491` |
+| `/info` / `/status` | ✅ | ✅ | ✅ | ✅ | `handler.go:475` |
+| `/chatinfo [id]` | ✅ | ✅ | ✅ | ✅ | `handler.go:505` |
+| `/task` / `/note` / `/event` / `/card` | ✅ | ✅ | ✅ | ✅ | `actions_commands.go:30` |
+| `/<agent> <msg>` (send / broadcast) | ✅ | ✅ | ✅ | ✅ | `handler.go:562` |
+| `/<agent>` (switch default agent) | ✅ | ✅ | ✅ | ❌ | `handler.go:537-539` |
+| `/new` / `/clear` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:248` |
+| `/cwd [path]` | ✅ ⚠️ | ❌ | ✅ ⚠️ | ❌ | `handler_commands.go:19` (allowlist + denylist) |
+| `/cron add\|list\|delete` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:254` |
+| `/reload` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:257` |
+| Summarize (NL trigger, e.g. "总结", "summarize") | ✅ (needs Private App) | ❌ | ⚠️ configured group only | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
+| Summarize without Private App | ❌ disabled | n/a | ❌ disabled | ❌ disabled | `handler_summarize.go:76` |
+| `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌ (owner-only, DM-only) | ❌ (DM-only) | ❌ (DM-only) | `handler_fullaccess.go:62-67` |
+| `/approval <id>` / `/approval deny <id>` | ✅ ⚠️ (requester only) | ⚠️ only consumed if the sender is the original requester | ❌ refused with explanatory message | ❌ refused with explanatory message | `handler.go:603-628` + `oob/authorize.go:126` |
 
 Extra checks:
 
 - `/cwd` — the absolute path must land inside `agent_allow_workspace_list ∪ agent_workspace ∪ ~/.ringclaw/workspace` AND must not contain any of the denylisted directories (`.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`). Both checks run regardless of full-access state.
 - `/full-access grant [duration]` — only activates after the owner replies `/approval <id>`. Challenge TTL 5 min, default grant 24 h, max 30 d.
-- `/approval` — only the original requester may resolve their own challenge (`oob/authorize.go:146-154`). Group-chat `/approval <id>` messages are not intercepted; they fall through to the default agent as ordinary text.
+- `/approval` — only the original requester may resolve their own challenge (`oob/authorize.go:146-154`). A `/approval ...` shape posted outside the bot DM is intercepted with an explicit refusal (`` `/approval` is only recognized in the bot DM with the owner.``) so the syntax never leaks into a default-agent prompt.
 - Summarize in group — only the group whose ID matches `ringcentral.group_summary_group_id`; cross-group / cross-person summarize refused (`handler_summarize.go:84-115`).
 
 ### Layer 2 — AI-driven ACTION dispatch
