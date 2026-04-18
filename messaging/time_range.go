@@ -10,14 +10,26 @@ import (
 )
 
 var (
-	reLastNDays  = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:天|days?)`)
-	reLastNHours = regexp.MustCompile(`(?:最近|过去|last)\s*(\d+)\s*(?:小时|个小时|hours?)`)
+	// Relative durations: "最近一周", "过去 7 天", "last 3 days", "past two weeks",
+	// "最近一个月", "last month" (handled by keyword), etc.
+	// Capture 1: count (digits or simple Chinese numerals, optional → defaults to 1)
+	// Capture 2: unit token (天/days/周/weeks/星期/个月/months)
+	// Capture 1: count (digits or simple Chinese numerals). Required so that
+	// bare phrases like "last week" / "上个月" stay with their calendar-aware
+	// keyword resolvers further down.
+	reLastDuration = regexp.MustCompile(`(?:最近|过去|last|past)\s*的?\s*(\d+|一|两|二|三|四|五|六|七|八|九|十)\s*(个月|天|周|星期|days?|weeks?|months?)`)
+	reLastHours    = regexp.MustCompile(`(?:最近|过去|last|past)\s*的?\s*(\d+|一|两|二|三|四|五|六|七|八|九|十)\s*(个小时|小时|hours?|hrs?)`)
 
 	reAbsDateZH    = regexp.MustCompile(`(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]`)
 	reAbsDateEN    = regexp.MustCompile(`(?i)(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?`)
 	reAbsDateSlash = regexp.MustCompile(`(\d{1,2})/(\d{1,2})`)
 	reAbsDateISO   = regexp.MustCompile(`(\d{4})-(\d{2})-(\d{2})`)
 )
+
+var cnSmallNum = map[string]int{
+	"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
+	"六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
 
 var monthNames = map[string]time.Month{
 	"jan": time.January, "january": time.January,
@@ -106,17 +118,14 @@ func parseTimeRange(text string) time.Time {
 		return t
 	}
 
-	if m := reLastNDays.FindStringSubmatch(lower); len(m) == 2 {
-		n, _ := strconv.Atoi(m[1])
-		if n > 0 {
-			return now.AddDate(0, 0, -n)
-		}
+	// "最近 N 天/周/星期/个月" / "last N days/weeks/months" — must run before
+	// the bare-keyword loop so "最近一周" doesn't get swallowed by the broad
+	// "最近 → -3d" rule below.
+	if t, ok := parseRelativeDuration(lower, now); ok {
+		return t
 	}
-	if m := reLastNHours.FindStringSubmatch(lower); len(m) == 2 {
-		n, _ := strconv.Atoi(m[1])
-		if n > 0 {
-			return now.Add(-time.Duration(n) * time.Hour)
-		}
+	if t, ok := parseRelativeHours(lower, now); ok {
+		return t
 	}
 
 	for _, r := range timeRules {
@@ -126,6 +135,67 @@ func parseTimeRange(text string) time.Time {
 	}
 
 	return todayStart()
+}
+
+// parseRelativeDuration matches "最近一周", "过去 7 天", "last 3 weeks",
+// "past month", "最近一个月" and returns the corresponding time offset.
+func parseRelativeDuration(lower string, now time.Time) (time.Time, bool) {
+	m := reLastDuration.FindStringSubmatch(lower)
+	if len(m) != 3 {
+		return time.Time{}, false
+	}
+	count := parseDurationCount(m[1])
+	if count <= 0 {
+		return time.Time{}, false
+	}
+	per := unitToDays(m[2])
+	if per <= 0 {
+		return time.Time{}, false
+	}
+	return now.AddDate(0, 0, -count*per), true
+}
+
+// parseRelativeHours matches "最近 2 小时", "last 5 hours", "过去三个小时".
+func parseRelativeHours(lower string, now time.Time) (time.Time, bool) {
+	m := reLastHours.FindStringSubmatch(lower)
+	if len(m) != 3 {
+		return time.Time{}, false
+	}
+	count := parseDurationCount(m[1])
+	if count <= 0 {
+		return time.Time{}, false
+	}
+	return now.Add(-time.Duration(count) * time.Hour), true
+}
+
+// parseDurationCount accepts an optional digit string ("3", "10"), a small
+// Chinese numeral ("一", "两", …, "十"), or empty (defaults to 1, e.g.
+// "past week").
+func parseDurationCount(s string) int {
+	if s == "" {
+		return 1
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	if n, ok := cnSmallNum[s]; ok {
+		return n
+	}
+	return 0
+}
+
+// unitToDays maps a duration unit token to days. "个月" / "month(s)" is
+// approximated as 30 days (good enough for chat-summary windows).
+func unitToDays(unit string) int {
+	switch unit {
+	case "天", "day", "days":
+		return 1
+	case "周", "星期", "week", "weeks":
+		return 7
+	case "个月", "month", "months":
+		return 30
+	}
+	return 0
 }
 
 func parseAbsoluteDate(lower string, now time.Time) (time.Time, bool) {

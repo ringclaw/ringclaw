@@ -97,3 +97,66 @@ func TestParseTimeRange_NoDate(t *testing.T) {
 		t.Errorf("parseTimeRange with no date = %v, want today %v", got.Format("2006-01-02"), today.Format("2006-01-02"))
 	}
 }
+
+// TestParseTimeRange_RelativeDuration covers the Chinese-numeral / 周 / 个月
+// durations that previously fell through to the broad "最近 → -3d" rule.
+// In particular, "最近一周" must resolve to ~7 days back, not 3.
+func TestParseTimeRange_RelativeDuration(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		input    string
+		wantDays int // expected (now - result) in whole days, ±1 day tolerance
+	}{
+		{"总结最近一周的聊天", 7},
+		{"总结一下![:Team](158994374662) 最近一周的聊天", 7},
+		{"过去一周的消息", 7},
+		{"最近两周的消息", 14},
+		{"过去 7 天的活动", 7},
+		{"最近30天", 30},
+		{"最近三天", 3},
+		{"最近一个月", 30},
+		{"过去两个月", 60},
+		{"last 3 days summary", 3},
+		{"past 2 weeks summary", 14},
+		{"最近的一周", 7}, // optional "的" between prefix and count
+	}
+	for _, tc := range cases {
+		got := parseTimeRange(tc.input)
+		diffDays := int(now.Sub(got).Hours()/24 + 0.5)
+		// Allow ±1 day slack: keyword rules snap to midnight, duration
+		// rules preserve time-of-day, and "last week" lands on a Monday.
+		if diffDays < tc.wantDays-1 || diffDays > tc.wantDays+1 {
+			t.Errorf("parseTimeRange(%q) → %s (≈%d days back), want ≈%d", tc.input, got.Format("2006-01-02 15:04"), diffDays, tc.wantDays)
+		}
+	}
+}
+
+func TestParseTimeRange_RelativeHours(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		input     string
+		wantHours int
+	}{
+		{"最近2小时", 2},
+		{"过去三个小时", 3},
+		{"last 5 hours", 5},
+	}
+	for _, tc := range cases {
+		got := parseTimeRange(tc.input)
+		diffHours := int(now.Sub(got).Hours() + 0.5)
+		if diffHours < tc.wantHours-1 || diffHours > tc.wantHours+1 {
+			t.Errorf("parseTimeRange(%q) → %s (≈%dh back), want ≈%dh", tc.input, got.Format("2006-01-02 15:04"), diffHours, tc.wantHours)
+		}
+	}
+}
+
+// TestParseTimeRange_ZuiJinAlone makes sure the bare "最近 / recently" keyword
+// still resolves to ~3 days back when no explicit duration follows.
+func TestParseTimeRange_ZuiJinAlone(t *testing.T) {
+	now := time.Now()
+	got := parseTimeRange("最近的群聊有什么")
+	diffDays := int(now.Sub(got).Hours()/24 + 0.5)
+	if diffDays < 2 || diffDays > 4 {
+		t.Errorf("parseTimeRange(最近的群聊有什么) → %d days back, want ≈3", diffDays)
+	}
+}
