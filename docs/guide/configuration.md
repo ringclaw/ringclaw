@@ -29,7 +29,7 @@ Config file: `~/.ringclaw/config.json`
     "client_secret": "",
     "jwt_token": "",
     "bot_token": "your_bot_token",
-    "bot_mention_only": true,
+    "group_mention_only": true,
     "chat_ids": ["chat_id_1", "chat_id_2"],
     "source_user_ids": ["alice@example.com"],
     "group_summary_group_id": "1234567",
@@ -103,7 +103,8 @@ Config file: `~/.ringclaw/config.json`
 | `bot_token` | string | — | **Required.** RingCentral Public Bot access token. |
 | `chat_ids` | string[] | `[]` | **Required.** Chat IDs the bot is allowed to receive messages from. |
 | `source_user_ids` | string[] | `[]` | Trusted senders. Accepts numeric extension IDs, emails, or E.164 phone numbers. Empty + Private App configured → owner-only. Empty + no Private App → deny all. |
-| `bot_mention_only` | bool (nullable) | `true` | `true` requires `@bot` in group chats; `false` answers every message in allowed chats. |
+| `group_mention_only` | bool (nullable) | `true` | `true` requires `@bot` in group chats (bot DMs are never affected); `false` answers every message in allowed group chats. |
+| `bot_mention_only` | bool (nullable) | — | **Deprecated alias** for `group_mention_only`. Still accepted for backward compatibility: `Load()` migrates it into the new field and logs a `WARN`. Will be removed in a future release. |
 | `server_url` | string | SDK default (`https://platform.ringcentral.com`) | RingCentral API server URL. |
 | `client_id` | string | — | Private App Client ID. All three Private App fields must be set together. |
 | `client_secret` | string | — | Private App Client Secret. Redacted in logs. |

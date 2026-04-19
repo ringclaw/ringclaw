@@ -167,7 +167,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		slog.Info("source_user_ids resolved", "count", len(resolvedUserIDs), "ids", resolvedUserIDs)
 	}
 
-	monitor := ringcentral.NewMonitor(c.bot, handler.HandleMessage, cfg.RC.ChatIDs, resolvedUserIDs, cfg.RC.IsBotMentionOnly())
+	monitor := ringcentral.NewMonitor(c.bot, handler.HandleMessage, cfg.RC.ChatIDs, resolvedUserIDs, cfg.RC.IsGroupMentionOnly())
 	if c.private != nil {
 		monitor.SetPrivateClient(c.private)
 		c.private.SetMonitor(monitor)

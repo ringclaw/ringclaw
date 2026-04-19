@@ -81,8 +81,8 @@ graph LR
 
 ### 群聊行为
 
-- **`bot_mention_only: true`**（默认）— Bot 在群聊中只有被 @mention 时才响应
-- **`bot_mention_only: false`** — Bot 响应允许群中的所有消息
+- **`group_mention_only: true`**（默认）— Bot 在群聊中只有被 @mention 时才响应（Bot 私聊不受影响）
+- **`group_mention_only: false`** — Bot 响应允许群中的所有消息
 - **`group_summary_group_id: "..."`** — 只有这个精确的群 ID 允许在群内触发总结
 - **`group_summary_message_limit: 200`**（默认）— 开启群内总结后，先拉取当前群最近这么多条消息，再按时间范围过滤
 
