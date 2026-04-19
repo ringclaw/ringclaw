@@ -262,12 +262,15 @@ func isPrivilegedCommand(text string) bool {
 	if IsFullAccessCommand(text) {
 		return true
 	}
-	// /remember and /forget mutate the persona/memory banner that
+	// /mem add and /mem del mutate the persona/memory banner that
 	// every subsequent prompt sees — treat them with the same gate
 	// as /cron (a poisoned memory affects every later conversation).
-	// /recall and /persona are read-only; they stay out of this list.
-	if strings.HasPrefix(text, "/remember") || strings.HasPrefix(text, "/forget") {
-		return true
+	// /mem show and /persona are read-only; they stay out of this
+	// list. /mem with no subcommand falls through so the user gets
+	// a usage hint instead of a permission denial.
+	if IsMemCommand(text) {
+		sub := memSubcommand(text)
+		return sub == "add" || sub == "del"
 	}
 	return false
 }

@@ -160,7 +160,7 @@ func (h *Handler) SetPersonaLoader(l *persona.Loader) {
 }
 
 // PersonaLoader returns the installed loader (or nil). Used by the
-// /remember, /recall, /forget and /persona slash commands.
+// /mem add|show|del and /persona slash commands.
 func (h *Handler) PersonaLoader() *persona.Loader {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -571,9 +571,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	} else if strings.HasPrefix(text, "/chatinfo") {
 		logSendError(SendTextReply(ctx, client, chatID, handleChatInfo(ctx, readClient, chatID, text)))
 		return
-	} else if IsPersonaCommand(text) {
+	} else if IsMemCommand(text) {
 		isDM := client != nil && client.IsBotDM(chatID)
-		logSendError(SendTextReply(ctx, client, chatID, h.handlePersonaCommand(text, chatID, post.CreatorID, isDM)))
+		logSendError(SendTextReply(ctx, client, chatID, h.handleMemCommand(text, chatID, post.CreatorID, isDM)))
+		return
+	} else if IsPersonaCommand(text) {
+		logSendError(SendTextReply(ctx, client, chatID, h.handlePersonaCommand()))
 		return
 	}
 

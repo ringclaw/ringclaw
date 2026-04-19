@@ -118,9 +118,9 @@ trusted sender 在自己的私聊里也不行。没有 Private App 时，RingCla
 | 总结（无 Private App） | ❌ 不可用 | n/a | ❌ 不可用 | ❌ 不可用 | `handler_summarize.go:76` |
 | `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌（owner-only、DM-only） | ❌（DM-only） | ❌（DM-only） | `handler_fullaccess.go:62-67` |
 | `/approval <id>` / `/approval deny <id>` | ✅ ⚠️（仅发起者本人） | ⚠️ 仅当发送者就是原发起者才会被消费 | ❌ 明确拒绝并给出提示 | ❌ 明确拒绝并给出提示 | `handler.go:603-628` + `oob/authorize.go:126` |
-| `/remember [user\|chat\|global] <文本>` | ✅ | ❌ | ✅ | ❌ | `handler_persona.go` + `handler_commands.go` 特权门控 |
-| `/forget [scope] [confirm]` | ✅ | ❌ | ✅ | ❌ | 同 `/remember`；需要二次 `confirm` |
-| `/recall [scope]` | ✅ | ✅ | ✅ | ✅ | 只读、非特权 |
+| `/mem add [user\|chat\|global] <文本>` | ✅ | ❌ | ✅ | ❌ | `handler_persona.go` + `handler_commands.go` 特权门控 |
+| `/mem del [scope] [confirm]` | ✅ | ❌ | ✅ | ❌ | 同 `/mem add`；需要二次 `confirm` |
+| `/mem show [scope]` | ✅ | ✅ | ✅ | ✅ | 只读、非特权 |
 | `/persona` | ✅ | ✅ | ✅ | ✅ | 只读、非特权 |
 
 额外检查说明：
@@ -129,8 +129,8 @@ trusted sender 在自己的私聊里也不行。没有 Private App 时，RingCla
 - `/full-access grant [时长]` — 仅在 owner 回复 `/approval <id>` 后才真正激活。challenge TTL 5 分钟，默认授权 24 小时，上限 30 天。
 - `/approval` — 仅原发起者可解析自己的 challenge（`oob/authorize.go:146-154`）。群聊中看起来像 `/approval <id>` 的消息会被明确拒绝（回复 ``/approval`` 只在 bot 私聊中可用），不会转发给默认 agent。
 - 群聊总结 — 只允许 chatID 等于 `ringcentral.group_summary_group_id` 的群；跨群 / 跨人总结会被拒绝（`handler_summarize.go:84-115`）。
-- `/remember` 与 `/forget` — 第一层特权命令（和 `/cron` 同一道门控）。所有 memory 文件写入严格落在 `persona.memory_dir` 之内；恶意 chat/user ID 会被 `SanitizeID` 转义成安全文件名，无法逃出 memory 树。scope 布局见 [配置 › persona](../guide/configuration.md#persona)。
-- `/forget` 不带 `confirm` 时不会真正清空——只打印二次确认提示，避免共享滚动条中的误操作。
+- `/mem add` 与 `/mem del` — 第一层特权命令（和 `/cron` 同一道门控）。所有 memory 文件写入严格落在 `persona.memory_dir` 之内；恶意 chat/user ID 会被 `SanitizeID` 转义成安全文件名，无法逃出 memory 树。scope 布局见 [配置 › persona](../guide/configuration.md#persona)。
+- `/mem del` 不带 `confirm` 时不会真正清空——只打印二次确认提示，避免共享滚动条中的误操作。
 - **Cron / Heartbeat / HTTP API 不会注入 persona banner。** 这些非交互入口没有真实的 chat / user 上下文；banner 仅拼接在 WebSocket 用户消息之前（`dispatchToAgent` 与 `broadcastToAgents`）。
 
 ### 第二层 — AI 驱动的 ACTION 派发

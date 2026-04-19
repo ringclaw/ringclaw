@@ -155,7 +155,7 @@ title: 配置
 （`/cc` → `/cx`）或重置 session（`/new`）都不会丢失 operator 精心
 维护的上下文。
 
-三层 memory scope（默认都为空，用 `/remember` 命令写入后才会出现）：
+三层 memory scope（默认都为空，用 `/mem add` 命令写入后才会出现）：
 
 | 范围 | 文件 | 适合放什么 |
 |------|------|------------|
@@ -179,18 +179,18 @@ SOUL.md 在首次启动时如不存在会自动写一份极简中立模板——
 通过聊天命令管理 banner：
 
 ```text
-/remember 项目采用 Go 1.25 和 TypeScript strict-mode   # → 当前 chat memory
-/remember user  偏好简洁中文回复                        # → user memory
-/remember global 工程团队一共 8 人                       # → 跨聊天 memory
-/recall                    # 查看当前 chat memory
-/recall user               # 查看 user memory
-/forget                    # 先给出确认提示
-/forget confirm            # 真正清空当前 chat memory
+/mem add 项目采用 Go 1.25 和 TypeScript strict-mode    # → 当前 chat memory
+/mem add user  偏好简洁中文回复                         # → user memory
+/mem add global 工程团队一共 8 人                        # → 跨聊天 memory
+/mem show                  # 查看当前 chat memory
+/mem show user             # 查看 user memory
+/mem del                   # 先给出确认提示
+/mem del confirm           # 真正清空当前 chat memory
 /persona                   # 查看 SOUL.md（此处只读；编辑请直接改文件）
 ```
 
-`/remember` 和 `/forget` 是特权命令（与 `/cron` 同一道 Layer 1 门
-控）；`/recall` 和 `/persona` 只读，任何 trusted sender 都可用。
+`/mem add` 和 `/mem del` 是特权命令（与 `/cron` 同一道 Layer 1 门
+控）；`/mem show` 和 `/persona` 只读，任何 trusted sender 都可用。
 Cron / heartbeat / HTTP API **不会** 被注入 banner——仅限 WebSocket
 用户消息路径。详见 [安全 › 权限矩阵](../security/index.md#权限矩阵)。
 

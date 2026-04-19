@@ -85,13 +85,11 @@ func TestBuildPersonaBanner_DMvsGroupAttribute(t *testing.T) {
 	bot.SetOwnerID("bot-1")
 	bot.SetDMChatID("dm-1")
 
-	// Post from the DM chat → DM.
 	dm := h.buildPersonaBanner(context.Background(), bot, ringcentral.Post{GroupID: "dm-1", CreatorID: "u1"})
 	if !strings.Contains(dm, `chat_type="DM"`) {
 		t.Errorf("DM banner missing chat_type DM:\n%s", dm)
 	}
 
-	// Post from a different chat → Group.
 	grp := h.buildPersonaBanner(context.Background(), bot, ringcentral.Post{GroupID: "group-1", CreatorID: "u1"})
 	if !strings.Contains(grp, `chat_type="Group"`) {
 		t.Errorf("group banner missing chat_type Group:\n%s", grp)
@@ -100,8 +98,7 @@ func TestBuildPersonaBanner_DMvsGroupAttribute(t *testing.T) {
 
 // TestBuildPersonaBanner_CrossChatNoLeak confirms a critical
 // invariant: chat A's memory must not show up in chat B's banner,
-// even when the handler is the same instance. This is what makes
-// per-chat memory safe in shared bot accounts.
+// even when the handler is the same instance.
 func TestBuildPersonaBanner_CrossChatNoLeak(t *testing.T) {
 	h, store, _ := newPersonaTestHandler(t)
 	if err := store.AppendMemory(persona.ScopeChat, "chat-A", "secret-fact-A"); err != nil {
@@ -123,12 +120,12 @@ func TestBuildPersonaBanner_CrossChatNoLeak(t *testing.T) {
 	}
 }
 
-// --- /remember, /recall, /forget, /persona slash-command tests ---
+// --- /mem add | show | del slash-command tests ---
 
-func TestHandleRemember_AppendsToChatByDefault(t *testing.T) {
+func TestHandleMemAdd_AppendsToChatByDefault(t *testing.T) {
 	h, store, _ := newPersonaTestHandler(t)
 
-	reply := h.handlePersonaCommand("/remember prefers TypeScript", "chat-1", "user-1", false)
+	reply := h.handleMemCommand("/mem add prefers TypeScript", "chat-1", "user-1", false)
 	if !strings.Contains(reply, "Remembered") {
 		t.Errorf("expected success reply, got %q", reply)
 	}
@@ -139,11 +136,11 @@ func TestHandleRemember_AppendsToChatByDefault(t *testing.T) {
 	}
 }
 
-func TestHandleRemember_ExplicitScope(t *testing.T) {
+func TestHandleMemAdd_ExplicitScope(t *testing.T) {
 	h, store, _ := newPersonaTestHandler(t)
 
-	h.handlePersonaCommand("/remember user uses terse Chinese", "chat-1", "user-42", false)
-	h.handlePersonaCommand("/remember global engineering team uses Go+TypeScript", "chat-1", "user-42", false)
+	h.handleMemCommand("/mem add user uses terse Chinese", "chat-1", "user-42", false)
+	h.handleMemCommand("/mem add global engineering team uses Go+TypeScript", "chat-1", "user-42", false)
 
 	userMem, _ := store.LoadMemory(persona.ScopeUser, "user-42")
 	if !strings.Contains(userMem, "terse Chinese") {
@@ -155,48 +152,51 @@ func TestHandleRemember_ExplicitScope(t *testing.T) {
 	}
 }
 
-func TestHandleRemember_UsageWhenNoArgs(t *testing.T) {
+func TestHandleMemAdd_UsageWhenNoArgs(t *testing.T) {
 	h, _, _ := newPersonaTestHandler(t)
-	reply := h.handlePersonaCommand("/remember", "c", "u", false)
+	reply := h.handleMemCommand("/mem add", "c", "u", false)
 	if !strings.Contains(reply, "Usage") {
 		t.Errorf("expected usage hint, got %q", reply)
 	}
 }
 
-func TestHandleRecall_ReturnsStoredMemory(t *testing.T) {
+func TestHandleMemShow_ReturnsStoredMemory(t *testing.T) {
 	h, store, _ := newPersonaTestHandler(t)
 	_ = store.AppendMemory(persona.ScopeChat, "c1", "remember this")
 
-	reply := h.handlePersonaCommand("/recall", "c1", "u", false)
+	reply := h.handleMemCommand("/mem show", "c1", "u", false)
 	if !strings.Contains(reply, "remember this") {
-		t.Errorf("recall missing stored memory: %q", reply)
+		t.Errorf("show missing stored memory: %q", reply)
 	}
 }
 
-func TestHandleRecall_EmptyScope(t *testing.T) {
+func TestHandleMemShow_EmptyScope(t *testing.T) {
 	h, _, _ := newPersonaTestHandler(t)
-	reply := h.handlePersonaCommand("/recall user", "c", "u", false)
+	reply := h.handleMemCommand("/mem show user", "c", "u", false)
 	if !strings.Contains(reply, "no user memory") {
 		t.Errorf("expected 'no user memory', got %q", reply)
 	}
 }
 
-func TestHandleForget_RequiresConfirmation(t *testing.T) {
+func TestHandleMemDel_RequiresConfirmation(t *testing.T) {
 	h, store, _ := newPersonaTestHandler(t)
 	_ = store.AppendMemory(persona.ScopeChat, "c1", "will be forgotten")
 
 	// First call: returns confirmation prompt, memory untouched.
-	reply := h.handlePersonaCommand("/forget", "c1", "u", false)
+	reply := h.handleMemCommand("/mem del", "c1", "u", false)
 	if !strings.Contains(reply, "Re-send") {
 		t.Errorf("expected confirmation prompt, got %q", reply)
 	}
+	if !strings.Contains(reply, "/mem del chat confirm") {
+		t.Errorf("confirmation prompt should suggest the new command, got %q", reply)
+	}
 	mem, _ := store.LoadMemory(persona.ScopeChat, "c1")
 	if !strings.Contains(mem, "will be forgotten") {
-		t.Errorf("first /forget should not clear, got %q", mem)
+		t.Errorf("first /mem del should not clear, got %q", mem)
 	}
 
 	// Second call with `confirm`: actually clears.
-	reply = h.handlePersonaCommand("/forget confirm", "c1", "u", false)
+	reply = h.handleMemCommand("/mem del confirm", "c1", "u", false)
 	if !strings.Contains(reply, "Forgot") {
 		t.Errorf("expected success, got %q", reply)
 	}
@@ -206,11 +206,37 @@ func TestHandleForget_RequiresConfirmation(t *testing.T) {
 	}
 }
 
+func TestHandleMem_UnknownSubcommand(t *testing.T) {
+	h, store, _ := newPersonaTestHandler(t)
+	_ = store.AppendMemory(persona.ScopeChat, "c1", "untouched")
+
+	reply := h.handleMemCommand("/mem foo", "c1", "u", false)
+	if !strings.Contains(reply, "Usage") {
+		t.Errorf("unknown subcommand should print usage, got %q", reply)
+	}
+
+	mem, _ := store.LoadMemory(persona.ScopeChat, "c1")
+	if !strings.Contains(mem, "untouched") {
+		t.Errorf("memory must not be mutated by unknown subcommand: %q", mem)
+	}
+}
+
+func TestHandleMem_BareUsage(t *testing.T) {
+	h, _, _ := newPersonaTestHandler(t)
+	reply := h.handleMemCommand("/mem", "c", "u", false)
+	if !strings.Contains(reply, "Usage") {
+		t.Errorf("/mem alone should print usage, got %q", reply)
+	}
+}
+
+// TestHandlePersona_ShowsSoulWhenPresent and _ShowsPathWhenEmpty are
+// the SOUL-side counterparts; /persona is independent of /mem and
+// must keep working unchanged.
 func TestHandlePersona_ShowsSoulWhenPresent(t *testing.T) {
 	h, store, _ := newPersonaTestHandler(t)
 	_ = store.EnsureSoulTemplate()
 
-	reply := h.handlePersonaCommand("/persona", "c", "u", false)
+	reply := h.handlePersonaCommand()
 	if !strings.Contains(reply, "SOUL.md") {
 		t.Errorf("expected SOUL.md reference, got %q", reply)
 	}
@@ -218,34 +244,58 @@ func TestHandlePersona_ShowsSoulWhenPresent(t *testing.T) {
 
 func TestHandlePersona_ShowsPathWhenEmpty(t *testing.T) {
 	h, _, _ := newPersonaTestHandler(t)
-	reply := h.handlePersonaCommand("/persona", "c", "u", false)
+	reply := h.handlePersonaCommand()
 	if !strings.Contains(reply, "No SOUL configured") {
 		t.Errorf("expected 'No SOUL configured' hint, got %q", reply)
 	}
 }
 
-func TestHandlePersonaCommand_DisabledReturnsDiagnostic(t *testing.T) {
+func TestHandleMemCommand_DisabledReturnsDiagnostic(t *testing.T) {
 	// A handler without a persona loader must return the
-	// feature-disabled message for every persona command, not panic.
+	// feature-disabled message for every /mem command and /persona,
+	// not panic.
 	h := newTestHandler()
-	for _, cmd := range []string{"/remember hello", "/recall", "/forget", "/persona"} {
-		reply := h.handlePersonaCommand(cmd, "c", "u", false)
+	for _, cmd := range []string{"/mem add hello", "/mem show", "/mem del"} {
+		reply := h.handleMemCommand(cmd, "c", "u", false)
 		if !strings.Contains(reply, "disabled") {
 			t.Errorf("cmd %q with nil loader should mention 'disabled', got %q", cmd, reply)
+		}
+	}
+	if reply := h.handlePersonaCommand(); !strings.Contains(reply, "disabled") {
+		t.Errorf("/persona with nil loader should mention 'disabled', got %q", reply)
+	}
+}
+
+func TestIsMemCommand(t *testing.T) {
+	cases := map[string]bool{
+		"/mem":             true,
+		"/mem add hi":      true,
+		"/mem show":        true,
+		"/mem del confirm": true,
+		"/MEM ADD x":       true, // case-insensitive prefix
+		"hello":            false,
+		"/memo":            false, // strict prefix word
+		"/memx":            false,
+		"/persona":         false,
+		"/cron list":       false,
+	}
+	for in, want := range cases {
+		if got := IsMemCommand(in); got != want {
+			t.Errorf("IsMemCommand(%q) = %v, want %v", in, got, want)
 		}
 	}
 }
 
 func TestIsPersonaCommand(t *testing.T) {
 	cases := map[string]bool{
-		"/remember hello":  true,
-		"/recall":          true,
-		"/recall user":     true,
-		"/forget confirm":  true,
-		"/persona":         true,
-		"hello":            false,
-		"/cron list":       false,
-		"/rememberxyz":     false, // strict prefix
+		"/persona":           true,
+		"/persona ":          true,
+		"/persona ignored":   true,
+		"/PERSONA":           true,
+		"/mem":               false,
+		"/mem add x":         false,
+		"hello":              false,
+		"/personax":          false,
 	}
 	for in, want := range cases {
 		if got := IsPersonaCommand(in); got != want {
@@ -254,20 +304,88 @@ func TestIsPersonaCommand(t *testing.T) {
 	}
 }
 
-// TestIsPrivilegedCommand_IncludesRememberForget confirms the Layer 1
-// gate now covers the two memory-mutating persona commands. Read-only
-// /recall and /persona must remain out of the set.
-func TestIsPrivilegedCommand_IncludesRememberForget(t *testing.T) {
-	privileged := []string{"/remember hello", "/remember user foo", "/forget", "/forget chat confirm"}
+// TestMemPrivilegedGate confirms the Layer 1 gate covers the two
+// memory-mutating /mem subcommands but leaves /mem show, /persona
+// and bare /mem out (so the user gets a usage hint instead of a
+// permission denial).
+func TestMemPrivilegedGate(t *testing.T) {
+	privileged := []string{
+		"/mem add hello",
+		"/mem add user foo",
+		"/mem del",
+		"/mem del chat confirm",
+	}
 	for _, cmd := range privileged {
 		if !isPrivilegedCommand(cmd) {
 			t.Errorf("isPrivilegedCommand(%q) = false, want true", cmd)
 		}
 	}
-	unprivileged := []string{"/recall", "/recall user", "/persona"}
+	unprivileged := []string{
+		"/mem",
+		"/mem show",
+		"/mem show user",
+		"/mem foo",
+		"/persona",
+	}
 	for _, cmd := range unprivileged {
 		if isPrivilegedCommand(cmd) {
 			t.Errorf("isPrivilegedCommand(%q) = true, want false", cmd)
+		}
+	}
+}
+
+// TestParseMemCommand exercises argument parsing in isolation so
+// future additions (extra flags, scopes) don't have to thread
+// through the full Handler stack to be tested.
+func TestParseMemCommand(t *testing.T) {
+	cases := []struct {
+		in        string
+		wantSub   string
+		wantScope persona.Scope
+		wantBody  string
+		wantConf  bool
+		wantUsage bool
+	}{
+		{"/mem", "", "", "", false, true},
+		{"/mem foo", "foo", persona.ScopeChat, "", false, true},
+		{"/mem add", "add", persona.ScopeChat, "", false, true},
+		{"/mem add hello", "add", persona.ScopeChat, "hello", false, false},
+		{"/mem add chat hello world", "add", persona.ScopeChat, "hello world", false, false},
+		{"/mem add user terse Chinese", "add", persona.ScopeUser, "terse Chinese", false, false},
+		{"/mem add global engineering uses Go", "add", persona.ScopeGlobal, "engineering uses Go", false, false},
+		// Single-token body that happens to look like a scope name → still treated as body.
+		// (The "scope only" arm requires len(rest) >= 2, so "user" alone falls through.)
+		{"/mem add user", "add", persona.ScopeChat, "user", false, false},
+		{"/mem show", "show", persona.ScopeChat, "", false, false},
+		{"/mem show chat", "show", persona.ScopeChat, "", false, false},
+		{"/mem show user", "show", persona.ScopeUser, "", false, false},
+		{"/mem show global", "show", persona.ScopeGlobal, "", false, false},
+		{"/mem show bogus", "show", persona.ScopeChat, "", false, true},
+		{"/mem del", "del", persona.ScopeChat, "", false, false},
+		{"/mem del confirm", "del", persona.ScopeChat, "", true, false},
+		{"/mem del global", "del", persona.ScopeGlobal, "", false, false},
+		{"/mem del global confirm", "del", persona.ScopeGlobal, "", true, false},
+		{"/mem del confirm global", "del", persona.ScopeGlobal, "", true, false},
+		{"/mem del bogus", "del", persona.ScopeChat, "", false, true},
+		// Mixed case for the subcommand verb.
+		{"/MEM Add hello", "add", persona.ScopeChat, "hello", false, false},
+	}
+	for _, c := range cases {
+		got := parseMemCommand(c.in)
+		if got.sub != c.wantSub {
+			t.Errorf("%q sub = %q, want %q", c.in, got.sub, c.wantSub)
+		}
+		if c.wantSub != "" && c.wantSub != "foo" && got.scope != c.wantScope {
+			t.Errorf("%q scope = %q, want %q", c.in, got.scope, c.wantScope)
+		}
+		if got.body != c.wantBody {
+			t.Errorf("%q body = %q, want %q", c.in, got.body, c.wantBody)
+		}
+		if got.confirmed != c.wantConf {
+			t.Errorf("%q confirmed = %v, want %v", c.in, got.confirmed, c.wantConf)
+		}
+		if (got.usage != "") != c.wantUsage {
+			t.Errorf("%q usage = %q, wantUsage = %v", c.in, got.usage, c.wantUsage)
 		}
 	}
 }

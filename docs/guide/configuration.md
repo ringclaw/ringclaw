@@ -158,7 +158,7 @@ resetting sessions (`/new`) never wipes the operator's curated
 context.
 
 Three memory scopes are layered in the banner (all off-by-default —
-new files only appear when you write them with `/remember`):
+new files only appear when you write them with `/mem add`):
 
 | Scope | File | What to put there |
 |-------|------|-------------------|
@@ -183,19 +183,19 @@ voice).
 Manage the banner from chat:
 
 ```text
-/remember project uses Go 1.25 and TypeScript strict-mode     # → current chat memory
-/remember user  prefers terse Chinese replies                  # → per-user memory
-/remember global engineering team is 8 people                  # → cross-chat memory
-/recall                    # show current chat memory
-/recall user               # show user memory
-/forget                    # prompts for confirmation
-/forget confirm            # actually clear current chat memory
+/mem add project uses Go 1.25 and TypeScript strict-mode      # → current chat memory
+/mem add user  prefers terse Chinese replies                  # → per-user memory
+/mem add global engineering team is 8 people                  # → cross-chat memory
+/mem show                  # show current chat memory
+/mem show user             # show user memory
+/mem del                   # prompts for confirmation
+/mem del confirm           # actually clear current chat memory
 /persona                   # show SOUL.md (read-only here; edit the file directly)
 ```
 
-`/remember` and `/forget` are privileged commands (same Layer 1 gate
-as `/cron`); `/recall` and `/persona` are read-only and available to
-any trusted sender. Cron / heartbeat / HTTP API do **not** receive
+`/mem add` and `/mem del` are privileged commands (same Layer 1 gate
+as `/cron`); `/mem show` and `/persona` are read-only and available
+to any trusted sender. Cron / heartbeat / HTTP API do **not** receive
 the banner — it only applies to WebSocket-path user messages. See
 [Security › Permission Matrix](../security/index.md#permission-matrix).
 

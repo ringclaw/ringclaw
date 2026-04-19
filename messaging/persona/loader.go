@@ -33,7 +33,7 @@ func (l *Loader) Enabled() bool {
 }
 
 // Store exposes the backing Store for callers that need to write
-// memory (e.g. the /remember slash command). Never returns nil when
+// memory (e.g. the /mem add slash command). Never returns nil when
 // the loader itself is non-nil; the handler only reaches for this
 // after a successful NewLoader.
 func (l *Loader) Store() *Store {

@@ -88,7 +88,7 @@ func TestStore_AppendAndLoadMemory_RoundTrip(t *testing.T) {
 
 func TestStore_AppendMemory_RejectsEmpty(t *testing.T) {
 	// Empty entries are almost certainly a bug at the call site
-	// (e.g. "/remember" with no text). Refuse them here so a
+	// (e.g. "/mem add" with no text). Refuse them here so a
 	// corrupted empty line never lands in memory.
 	s, _ := newTestStore(t, 500)
 	if err := s.AppendMemory(ScopeChat, "12345", ""); err == nil {
