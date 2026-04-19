@@ -262,5 +262,12 @@ func isPrivilegedCommand(text string) bool {
 	if IsFullAccessCommand(text) {
 		return true
 	}
+	// /remember and /forget mutate the persona/memory banner that
+	// every subsequent prompt sees — treat them with the same gate
+	// as /cron (a poisoned memory affects every later conversation).
+	// /recall and /persona are read-only; they stay out of this list.
+	if strings.HasPrefix(text, "/remember") || strings.HasPrefix(text, "/forget") {
+		return true
+	}
 	return false
 }

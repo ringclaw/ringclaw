@@ -10,6 +10,7 @@ import (
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/messaging"
 	"github.com/ringclaw/ringclaw/messaging/heartbeat"
+	"github.com/ringclaw/ringclaw/messaging/persona"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -115,6 +116,30 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 		checkAliasConflicts(cfg, customAliases)
 	}
 	handler.SetGroupSummaryConfig(cfg.RC.GroupSummaryGroup(), cfg.RC.GroupSummaryLimit())
+
+	// Persona + memory banner: a single Loader feeds every dispatch so
+	// switching agents or resetting sessions keeps the operator's
+	// SOUL.md and layered memory visible. Disabled by config? the
+	// loader's Enabled() reports false and the handler silently emits
+	// an empty banner.
+	personaCfg := cfg.Persona.Resolved()
+	if personaCfg.Enabled {
+		store := persona.NewStore(personaCfg)
+		// Best-effort template creation — never fatal; a missing soul
+		// just means no persona injection until the operator edits
+		// the file (or re-runs).
+		if err := store.EnsureSoulTemplate(); err != nil {
+			slog.Warn("persona: EnsureSoulTemplate failed", "component", "start", "error", err)
+		}
+		handler.SetPersonaLoader(persona.NewLoader(store))
+		slog.Info("persona loader installed",
+			"component", "start",
+			"soul", personaCfg.SoulFile,
+			"memoryDir", personaCfg.MemoryDir,
+		)
+	} else {
+		slog.Info("persona disabled via config", "component", "start")
+	}
 
 	// Set up reload callback for /reload command
 	handler.SetReloadAgents(func() ([]messaging.AgentMeta, map[string]string, []string) {

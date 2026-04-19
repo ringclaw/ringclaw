@@ -22,6 +22,10 @@ Send these as messages in your RingCentral chat:
 | `/chatinfo [chatId]` | Show chat details (name, type, members) |
 | `summarize my chat with John` | Summarize a conversation |
 | `/cron list\|add\|delete\|enable\|disable` | Manage scheduled tasks |
+| `/remember [user\|chat\|global] <text>` | Append to persona memory (default: current chat). See [Configuration › persona](./configuration.md#persona). |
+| `/recall [user\|chat\|global]` | Show stored memory for a scope |
+| `/forget [scope]` / `/forget [scope] confirm` | Clear a memory scope (needs the second `confirm` step) |
+| `/persona` | Show the current SOUL.md and where to edit it |
 | `/info` | Show current agent info (alias: `/status`) |
 | `/help` | Show help message |
 

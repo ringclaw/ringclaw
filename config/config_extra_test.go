@@ -369,6 +369,94 @@ func TestLoad_NewFieldWinsOverDeprecated(t *testing.T) {
 	}
 }
 
+// TestLoad_PersonaConfig_ParsesAllFields confirms every field under
+// the `persona` block in config.json is decoded into the expected
+// Go value. This is the regression net for the persona feature — if
+// the JSON tag on any field drifts, one of these assertions fails.
+func TestLoad_PersonaConfig_ParsesAllFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	dir := tmpDir + "/.ringclaw"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `{
+		"ringcentral": {"bot_token": "t", "chat_ids": ["c"]},
+		"persona": {
+			"enabled": false,
+			"soul_file": "/custom/SOUL.md",
+			"memory_dir": "/custom/memory",
+			"max_soul_chars": 1111,
+			"max_chat_memory_chars": 2222,
+			"max_user_memory_chars": 3333,
+			"max_global_memory_chars": 4444
+		}
+	}`
+	if err := os.WriteFile(dir+"/config.json", []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Persona.Enabled == nil || *cfg.Persona.Enabled {
+		t.Errorf("Persona.Enabled: want false, got %#v", cfg.Persona.Enabled)
+	}
+	if cfg.Persona.SoulFile != "/custom/SOUL.md" {
+		t.Errorf("Persona.SoulFile = %q", cfg.Persona.SoulFile)
+	}
+	if cfg.Persona.MemoryDir != "/custom/memory" {
+		t.Errorf("Persona.MemoryDir = %q", cfg.Persona.MemoryDir)
+	}
+	if cfg.Persona.MaxSoulChars != 1111 {
+		t.Errorf("Persona.MaxSoulChars = %d", cfg.Persona.MaxSoulChars)
+	}
+	if cfg.Persona.MaxChatMemoryChars != 2222 {
+		t.Errorf("Persona.MaxChatMemoryChars = %d", cfg.Persona.MaxChatMemoryChars)
+	}
+	if cfg.Persona.MaxUserMemoryChars != 3333 {
+		t.Errorf("Persona.MaxUserMemoryChars = %d", cfg.Persona.MaxUserMemoryChars)
+	}
+	if cfg.Persona.MaxGlobalMemoryChars != 4444 {
+		t.Errorf("Persona.MaxGlobalMemoryChars = %d", cfg.Persona.MaxGlobalMemoryChars)
+	}
+}
+
+// TestLoad_PersonaConfig_DefaultsWhenAbsent confirms that an absent
+// `persona` block yields the zero value — Config.Persona.IsEnabled()
+// still returns true (feature-on-by-default), and Resolved() fills
+// paths with stock locations.
+func TestLoad_PersonaConfig_DefaultsWhenAbsent(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	dir := tmpDir + "/.ringclaw"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `{"ringcentral": {"bot_token": "t", "chat_ids": ["c"]}}`
+	if err := os.WriteFile(dir+"/config.json", []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Persona.IsEnabled() {
+		t.Error("Persona.IsEnabled should default to true when block absent")
+	}
+	resolved := cfg.Persona.Resolved()
+	if resolved.MaxSoulChars == 0 || resolved.MaxChatMemoryChars == 0 {
+		t.Errorf("Resolved must populate caps from defaults: %#v", resolved)
+	}
+	if resolved.SoulFile == "" || resolved.MemoryDir == "" {
+		t.Errorf("Resolved must populate paths: %#v", resolved)
+	}
+}
+
 func TestGroupSummaryGroup_Whitespace(t *testing.T) {
 	rc := RCConfig{GroupSummaryGroupID: "  g1  "}
 	if got := rc.GroupSummaryGroup(); got != "g1" {

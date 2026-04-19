@@ -51,6 +51,16 @@ Config file: `~/.ringclaw/config.json`
     "password": ""
   },
 
+  "persona": {
+    "enabled": true,
+    "soul_file": "~/.ringclaw/SOUL.md",
+    "memory_dir": "~/.ringclaw/memory",
+    "max_soul_chars": 2000,
+    "max_chat_memory_chars": 4000,
+    "max_user_memory_chars": 2000,
+    "max_global_memory_chars": 2000
+  },
+
   "agents": {
     "claude": {
       "type": "acp",
@@ -95,6 +105,7 @@ Config file: `~/.ringclaw/config.json`
 | `heartbeat` | object | — | See [`heartbeat`](#heartbeat). |
 | `cron` | object | — | See [`cron`](#cron). |
 | `openclaw_gateway` | object | — | See [`openclaw_gateway`](#openclaw_gateway). |
+| `persona` | object | — | Optional SOUL + layered MEMORY banner injected before every user message. See [`persona`](#persona). |
 
 ## `ringcentral`
 
@@ -137,6 +148,56 @@ empty, ringclaw falls back to reading `~/.openclaw/openclaw.json`.
 | `url` | string | — | `ws://`, `wss://`, `http://`, or `https://` URL. |
 | `token` | string | — | Bearer token. Used when the gateway expects token auth. |
 | `password` | string | — | Password. Used when the gateway expects password auth. |
+
+## `persona`
+
+Optional. When enabled, RingClaw prepends a fixed **persona + memory
+banner** to every WebSocket-path user message. The banner is
+assembled from local files, so switching agents (`/cc` → `/cx`) or
+resetting sessions (`/new`) never wipes the operator's curated
+context.
+
+Three memory scopes are layered in the banner (all off-by-default —
+new files only appear when you write them with `/remember`):
+
+| Scope | File | What to put there |
+|-------|------|-------------------|
+| `global` | `<memory_dir>/global.md` | Facts shared across every chat (team conventions, codebase-wide rules) |
+| `user` | `<memory_dir>/user/<userID>.md` | Per-user preferences that should follow the user across chats |
+| `chat` | `<memory_dir>/chat/<chatID>.md` | Facts specific to one chat (sprint goal, project context) |
+
+SOUL.md is created automatically on first boot if the file does not
+exist (minimal neutral template — edit it to shape the assistant's
+voice).
+
+| Field | Type | Default | Allowed values / Notes |
+|-------|------|---------|------------------------|
+| `enabled` | bool (nullable) | `true` | Set to `false` to disable banner injection entirely (persona/memory slash commands then return a "feature disabled" diagnostic). |
+| `soul_file` | string | `~/.ringclaw/SOUL.md` | Path to the shared persona file. `~/` is expanded. |
+| `memory_dir` | string | `~/.ringclaw/memory` | Root of the memory tree. `<memory_dir>/global.md`, `<memory_dir>/user/*.md`, `<memory_dir>/chat/*.md`. |
+| `max_soul_chars` | int | `2000` | Truncate SOUL.md before injection. `≤ 0` disables truncation. |
+| `max_chat_memory_chars` | int | `4000` | Per-chat memory cap. Tail-keep on overflow. |
+| `max_user_memory_chars` | int | `2000` | Per-user memory cap. Tail-keep. |
+| `max_global_memory_chars` | int | `2000` | Global memory cap. Tail-keep. |
+
+Manage the banner from chat:
+
+```text
+/remember project uses Go 1.25 and TypeScript strict-mode     # → current chat memory
+/remember user  prefers terse Chinese replies                  # → per-user memory
+/remember global engineering team is 8 people                  # → cross-chat memory
+/recall                    # show current chat memory
+/recall user               # show user memory
+/forget                    # prompts for confirmation
+/forget confirm            # actually clear current chat memory
+/persona                   # show SOUL.md (read-only here; edit the file directly)
+```
+
+`/remember` and `/forget` are privileged commands (same Layer 1 gate
+as `/cron`); `/recall` and `/persona` are read-only and available to
+any trusted sender. Cron / heartbeat / HTTP API do **not** receive
+the banner — it only applies to WebSocket-path user messages. See
+[Security › Permission Matrix](../security/index.md#permission-matrix).
 
 ## Agents
 
