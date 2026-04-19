@@ -19,7 +19,7 @@ John Lin
 2. **Natural language → RC actions** — "help me create a task", "summarize my chat with Maxwell" → AI auto-creates Tasks, Notes, Events, sends messages
 3. **Multi-agent in one chat** — broadcast to Claude + Codex simultaneously, compare answers, switch default agent in one command
 4. **Send screenshots for AI analysis** — paste images in chat, AI reads and responds with analysis
-5. **Cross-agent shared memory** — `/remember` saves preferences, every agent picks them up next session
+5. **Cross-agent shared memory** — `/mem add` saves preferences, every agent picks them up next session
 6. **Built with coding agents** — how AI agents helped build RingClaw itself, and the lessons learned along the way
 
 All demos run inside the RingCentral chat window you use every day.

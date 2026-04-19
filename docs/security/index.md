@@ -470,6 +470,10 @@ see the "DM is the trust boundary" warning above.
 | Summarize without Private App | ❌ disabled | n/a | ❌ disabled | ❌ disabled | `handler_summarize.go:76` |
 | `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌ (owner-only, DM-only) | ❌ (DM-only) | ❌ (DM-only) | `handler_fullaccess.go:62-67` |
 | `/approval <id>` / `/approval deny <id>` | ✅ ⚠️ (requester only) | ⚠️ only consumed if the sender is the original requester | ❌ refused with explanatory message | ❌ refused with explanatory message | `handler.go:603-628` + `oob/authorize.go:126` |
+| `/mem add [user\|chat\|global] <text>` | ✅ | ❌ | ✅ | ❌ | `handler_persona.go` + `handler_commands.go` privileged gate |
+| `/mem del [scope] [confirm]` | ✅ | ❌ | ✅ | ❌ | same as `/mem add`; two-phase confirmation |
+| `/mem show [scope]` | ✅ | ✅ | ✅ | ✅ | read-only, unprivileged |
+| `/persona` | ✅ | ✅ | ✅ | ✅ | read-only, unprivileged |
 
 Extra checks:
 
@@ -477,6 +481,9 @@ Extra checks:
 - `/full-access grant [duration]` — only activates after the owner replies `/approval <id>`. Challenge TTL 5 min, default grant 24 h, max 30 d.
 - `/approval` — only the original requester may resolve their own challenge (`oob/authorize.go:146-154`). A `/approval ...` shape posted outside the bot DM is intercepted with an explicit refusal (`` `/approval` is only recognized in the bot DM with the owner.``) so the syntax never leaks into a default-agent prompt.
 - Summarize in group — only the group whose ID matches `ringcentral.group_summary_group_id`; cross-group / cross-person summarize refused (`handler_summarize.go:84-115`).
+- `/mem add` and `/mem del` — Layer 1 privileged (same gate as `/cron`). All memory file writes land strictly under `persona.memory_dir`; hostile chat/user IDs cannot escape the tree because IDs go through `SanitizeID` before being used as filenames. See [Configuration › persona](../guide/configuration.md#persona) for the scope layout.
+- `/mem del` without the trailing `confirm` token never clears memory; the first call prints the resolved file path, current size and a tail preview so the operator can verify they are targeting the right scope before re-sending with `confirm`. `/mem del confirm` does **not** reset agent sessions — the persona banner is rebuilt from disk on the next message, but in-flight sessions still hold the old memory in their context. Run `/new` after a clear if you want the live agent to drop the old context too.
+- **Cron / Heartbeat / HTTP API do NOT inject the persona banner.** These non-interactive entry points have no real chat or user context; the banner is only prepended to WebSocket user messages (`dispatchToAgent` and `broadcastToAgents`).
 
 ### Layer 2 — AI-driven ACTION dispatch
 

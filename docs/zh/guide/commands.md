@@ -22,6 +22,10 @@ title: 聊天命令
 | `/chatinfo [chatId]` | 查看聊天详情（名称、类型、成员数） |
 | `总结我和 John 的聊天` | 总结某个对话 |
 | `/cron list\|add\|delete\|enable\|disable` | 管理定时任务 |
+| `/mem add [user\|chat\|global] <文本>` | 追加到 persona memory（默认当前 chat）。见 [配置 › persona](./configuration.md#persona)。 |
+| `/mem show [user\|chat\|global]` | 查看对应 scope 的 memory |
+| `/mem del [scope]` / `/mem del [scope] confirm` | 清空指定 scope memory（需要再发一次带 `confirm` 的命令） |
+| `/persona` | 显示当前 SOUL.md 及其编辑路径 |
 | `/info` | 查看当前 Agent 信息（别名：`/status`） |
 | `/help` | 查看帮助信息 |
 

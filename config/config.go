@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"github.com/ringclaw/ringclaw/messaging/persona"
 )
 
 var debugMode atomic.Bool
@@ -55,6 +57,11 @@ type Config struct {
 	// (omitted), this is treated as false. config.json is the sole
 	// source. See docs/security/index.md "ACP Full-Access Mode".
 	FullAccessAck *bool `json:"full_access_ack,omitempty"`
+
+	// Persona holds the SOUL + layered MEMORY configuration. Zero
+	// value is valid (the feature defaults to enabled with stock
+	// paths); see messaging/persona for the full resolution logic.
+	Persona persona.Config `json:"persona,omitempty"`
 }
 
 // OpenclawGatewayConfig holds the connection info for the external openclaw

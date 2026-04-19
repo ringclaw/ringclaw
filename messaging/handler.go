@@ -13,6 +13,7 @@ import (
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/internal/util"
 	"github.com/ringclaw/ringclaw/messaging/oob"
+	"github.com/ringclaw/ringclaw/messaging/persona"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -69,8 +70,16 @@ type Handler struct {
 	// acknowledgement). ownerDMChatID is the chat ID where /approval
 	// prompts and cross-chat notices are delivered; empty disables OOB
 	// even when the manager is configured.
-	oobManager     *oob.Manager
-	ownerDMChatID  string
+	oobManager    *oob.Manager
+	ownerDMChatID string
+
+	// persona is the optional SOUL + layered MEMORY loader. When
+	// non-nil and Enabled, its Build() output is prepended to every
+	// prompt dispatched through the WebSocket message path so
+	// switching agents or resetting sessions does not wipe the
+	// operator's persona / memory context. A nil loader is safe to
+	// carry (Enabled reports false).
+	personaLoader *persona.Loader
 }
 
 // NewHandler creates a new message handler.
@@ -139,6 +148,36 @@ func (h *Handler) OwnerDMChatID() string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.ownerDMChatID
+}
+
+// SetPersonaLoader installs the persona + memory banner loader. Pass
+// nil to disable persona injection. See messaging/persona for the
+// loader's construction from config.
+func (h *Handler) SetPersonaLoader(l *persona.Loader) {
+	h.mu.Lock()
+	h.personaLoader = l
+	h.mu.Unlock()
+}
+
+// PersonaLoader returns the installed loader (or nil). Used by the
+// /mem add|show|del and /persona slash commands.
+func (h *Handler) PersonaLoader() *persona.Loader {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.personaLoader
+}
+
+// buildPersonaBanner returns the context banner to prepend to a
+// prompt, or the empty string when persona is disabled. Centralized
+// here so both dispatchToAgent and broadcastToAgents share exactly
+// the same injection logic.
+func (h *Handler) buildPersonaBanner(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) string {
+	loader := h.PersonaLoader()
+	if !loader.Enabled() {
+		return ""
+	}
+	isDM := client != nil && client.IsBotDM(post.GroupID)
+	return loader.Build(ctx, post.GroupID, post.CreatorID, isDM)
 }
 
 // isTrustedSender reports whether a given creator ID may drive the agent.
@@ -532,6 +571,13 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	} else if strings.HasPrefix(text, "/chatinfo") {
 		logSendError(SendTextReply(ctx, client, chatID, handleChatInfo(ctx, readClient, chatID, text)))
 		return
+	} else if IsMemCommand(text) {
+		isDM := client != nil && client.IsBotDM(chatID)
+		logSendError(SendTextReply(ctx, client, chatID, h.handleMemCommand(text, chatID, post.CreatorID, isDM)))
+		return
+	} else if IsPersonaCommand(text) {
+		logSendError(SendTextReply(ctx, client, chatID, h.handlePersonaCommand()))
+		return
 	}
 
 	// Explicit action commands: /task, /note, /event (use readClient for API access)
@@ -652,8 +698,13 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 	conversationID := conversationIDForPost(client, post)
 	images := extractImageAttachments(ctx, client, post)
 
+	// Prepend the persona + memory banner (empty string when persona
+	// is disabled or all sources are blank). This keeps the operator's
+	// SOUL and layered memory visible to every agent regardless of
+	// which one is currently default.
+	prompt := h.buildPersonaBanner(ctx, client, post) + message + ActionPrompt()
 
-	reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
+	reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, prompt, images)
 	if err != nil {
 		reply = agent.UserMessage(err)
 	}
@@ -701,6 +752,11 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 	conversationID := conversationIDForPost(client, post)
 	images := extractImageAttachments(ctx, client, post)
 
+	// Compute the persona banner once outside the fan-out so all
+	// broadcast targets see identical context. Empty when persona is
+	// disabled.
+	prompt := h.buildPersonaBanner(ctx, client, post) + message + ActionPrompt()
+
 	type result struct {
 		name  string
 		reply string
@@ -714,7 +770,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
 			}
-			reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
+			reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, prompt, images)
 			if err != nil {
 				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return

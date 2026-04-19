@@ -50,6 +50,16 @@ title: 配置
     "password": ""
   },
 
+  "persona": {
+    "enabled": true,
+    "soul_file": "~/.ringclaw/SOUL.md",
+    "memory_dir": "~/.ringclaw/memory",
+    "max_soul_chars": 2000,
+    "max_chat_memory_chars": 4000,
+    "max_user_memory_chars": 2000,
+    "max_global_memory_chars": 2000
+  },
+
   "agents": {
     "claude": {
       "type": "acp",
@@ -94,6 +104,7 @@ title: 配置
 | `heartbeat` | object | — | 见 [`heartbeat`](#heartbeat)。 |
 | `cron` | object | — | 见 [`cron`](#cron)。 |
 | `openclaw_gateway` | object | — | 见 [`openclaw_gateway`](#openclaw_gateway)。 |
+| `persona` | object | — | 可选。在每条用户消息前注入 SOUL + 分层 MEMORY banner。见 [`persona`](#persona)。 |
 
 ## `ringcentral`
 
@@ -136,6 +147,55 @@ title: 配置
 | `url` | string | — | `ws://`、`wss://`、`http://`、`https://` 任一。 |
 | `token` | string | — | Bearer token，用于 token 鉴权模式。 |
 | `password` | string | — | 密码，用于 password 鉴权模式。 |
+
+## `persona`
+
+可选功能。启用后 RingClaw 会在每条 WebSocket 用户消息之前注入一段
+**persona + memory banner**。banner 由本地文件拼装，切换 agent
+（`/cc` → `/cx`）或重置 session（`/new`）都不会丢失 operator 精心
+维护的上下文。
+
+三层 memory scope（默认都为空，用 `/mem add` 命令写入后才会出现）：
+
+| 范围 | 文件 | 适合放什么 |
+|------|------|------------|
+| `global` | `<memory_dir>/global.md` | 所有聊天共享的事实（团队约定、代码库规则） |
+| `user` | `<memory_dir>/user/<userID>.md` | 跟随某个用户跨聊天的偏好 |
+| `chat` | `<memory_dir>/chat/<chatID>.md` | 特定聊天的事实（冲刺目标、项目上下文） |
+
+SOUL.md 在首次启动时如不存在会自动写一份极简中立模板——编辑它来
+定义 assistant 的人格。
+
+| 字段 | 类型 | 默认值 | 可选值 / 说明 |
+|------|------|--------|---------------|
+| `enabled` | bool（可空） | `true` | 设为 `false` 彻底关闭 banner 注入（slash 命令会回"功能已禁用"的提示）。 |
+| `soul_file` | string | `~/.ringclaw/SOUL.md` | SOUL 文件路径。支持 `~/` 展开。 |
+| `memory_dir` | string | `~/.ringclaw/memory` | memory 树根目录，子项 `global.md`、`user/*.md`、`chat/*.md`。 |
+| `max_soul_chars` | int | `2000` | SOUL 截断上限。`≤ 0` 表示不截断。 |
+| `max_chat_memory_chars` | int | `4000` | 每个 chat memory 上限。超出保留最新（tail）。 |
+| `max_user_memory_chars` | int | `2000` | 每个 user memory 上限。 |
+| `max_global_memory_chars` | int | `2000` | global memory 上限。 |
+
+通过聊天命令管理 banner：
+
+```text
+/mem add 项目采用 Go 1.25 和 TypeScript strict-mode    # → 当前 chat memory
+/mem add user  偏好简洁中文回复                         # → user memory
+/mem add global 工程团队一共 8 人                        # → 跨聊天 memory
+/mem show                  # 查看当前 chat memory
+/mem show user             # 查看 user memory
+/mem del                   # 给出文件路径、大小、最后几行预览 + /new 提示
+/mem del confirm           # 真正清空（不可撤销；不会自动重置 agent session）
+/persona                   # 查看 SOUL.md（此处只读；编辑请直接改文件）
+```
+
+`/mem add` 和 `/mem del` 是特权命令（与 `/cron` 同一道 Layer 1 门
+控）；`/mem show` 和 `/persona` 只读，任何 trusted sender 都可用。
+`/mem del` **不会** 自动重置 agent session——下次消息时 banner 会从
+磁盘重新拼装，但当前正在运行的 session 仍然带着旧 memory 上下文。
+如果想让在线 agent 也立刻"忘掉"，清空后再发一条 `/new`。
+Cron / heartbeat / HTTP API **不会** 被注入 banner——仅限 WebSocket
+用户消息路径。详见 [安全 › 权限矩阵](../security/index.md#权限矩阵)。
 
 ## Agents
 
