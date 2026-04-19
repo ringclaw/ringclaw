@@ -229,21 +229,97 @@ func handleMemShow(st *persona.Store, args memArgs, chatID, userID string, isDM 
 }
 
 // handleMemDel clears a scope's memory. Two-phase confirm: the first
-// invocation returns a confirmation prompt; the caller must re-send
+// invocation returns a structured warning (file path, size, tail
+// preview, irreversibility note, /new hint); the caller must re-send
 // with the explicit "confirm" token to actually clear. This prevents
 // accidental clears (especially in group chats where the command
-// would land in a shared scrollback).
+// would land in a shared scrollback) and gives the operator enough
+// information to verify they are targeting the right scope.
 func handleMemDel(st *persona.Store, args memArgs, chatID, userID string) string {
-	if !args.confirmed {
-		return fmt.Sprintf(
-			"This will erase **%s memory**. Re-send `/mem del %s confirm` within this chat to proceed.",
-			args.scope, args.scope)
-	}
 	id := memoryIDForScope(args.scope, chatID, userID)
-	if err := st.ClearMemory(args.scope, id); err != nil {
-		return fmt.Sprintf("Failed to forget %s memory: %v", args.scope, err)
+
+	if args.confirmed {
+		if err := st.ClearMemory(args.scope, id); err != nil {
+			return fmt.Sprintf("Failed to forget %s memory: %v", args.scope, err)
+		}
+		return fmt.Sprintf("Forgot %s memory.", args.scope)
 	}
-	return fmt.Sprintf("Forgot %s memory.", args.scope)
+
+	content, err := st.LoadMemory(args.scope, id)
+	if err != nil {
+		return fmt.Sprintf("Failed to inspect %s memory: %v", args.scope, err)
+	}
+	if strings.TrimSpace(content) == "" {
+		return fmt.Sprintf("(no %s memory stored yet — nothing to delete)", args.scope)
+	}
+
+	path, err := st.MemoryFilePath(args.scope, id)
+	if err != nil {
+		// Path resolution failed (e.g. unknown scope). Fall back to a
+		// path-less warning rather than crashing — the confirm step
+		// would have failed too.
+		path = "(unresolved)"
+	}
+	return confirmDelMessage(args.scope, path, content)
+}
+
+// confirmDelMessage builds the structured first-phase warning. The
+// format is intentionally plain ASCII (no markdown tables) so it
+// renders identically in RC chat, the CLI client, and any future
+// transport. content is the *current* memory body; callers must not
+// pass an empty string (handleMemDel handles that case separately).
+func confirmDelMessage(scope persona.Scope, path, content string) string {
+	chars := utf8.RuneCountInString(content)
+	lines := strings.Count(content, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		lines++
+	}
+
+	tail := tailLines(content, 2)
+	var preview strings.Builder
+	for i, line := range tail {
+		// Truncate each line so a single huge entry can't blow up
+		// the warning (and bury the action line below the fold).
+		line = truncateForReply(line, 120)
+		if i == 0 {
+			preview.WriteString("  Last 2:  " + line + "\n")
+		} else {
+			preview.WriteString("           " + line + "\n")
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "WARNING: this will permanently erase %s memory.\n\n", scope)
+	fmt.Fprintf(&b, "  File:    %s\n", path)
+	fmt.Fprintf(&b, "  Size:    %d chars (%d lines)\n", chars, lines)
+	b.WriteString(preview.String())
+	b.WriteString("\nThis cannot be undone. The current agent session will keep the\n")
+	b.WriteString("old memory in its context until you start a fresh one with `/new`.\n\n")
+	fmt.Fprintf(&b, "Re-send `/mem del %s confirm` within this chat to proceed.", scope)
+	return b.String()
+}
+
+// tailLines returns up to n trailing non-empty lines from content,
+// in original (top-to-bottom) order. Used by confirmDelMessage to
+// preview which entries are about to be erased.
+func tailLines(content string, n int) []string {
+	if n <= 0 {
+		return nil
+	}
+	all := strings.Split(content, "\n")
+	out := make([]string, 0, n)
+	for i := len(all) - 1; i >= 0 && len(out) < n; i-- {
+		line := strings.TrimSpace(all[i])
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	// Reverse so the oldest of the kept tail prints first.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
 }
 
 // memoryIDForScope picks the right ID for the given scope. Global

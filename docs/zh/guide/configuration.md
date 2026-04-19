@@ -184,13 +184,16 @@ SOUL.md 在首次启动时如不存在会自动写一份极简中立模板——
 /mem add global 工程团队一共 8 人                        # → 跨聊天 memory
 /mem show                  # 查看当前 chat memory
 /mem show user             # 查看 user memory
-/mem del                   # 先给出确认提示
-/mem del confirm           # 真正清空当前 chat memory
+/mem del                   # 给出文件路径、大小、最后几行预览 + /new 提示
+/mem del confirm           # 真正清空（不可撤销；不会自动重置 agent session）
 /persona                   # 查看 SOUL.md（此处只读；编辑请直接改文件）
 ```
 
 `/mem add` 和 `/mem del` 是特权命令（与 `/cron` 同一道 Layer 1 门
 控）；`/mem show` 和 `/persona` 只读，任何 trusted sender 都可用。
+`/mem del` **不会** 自动重置 agent session——下次消息时 banner 会从
+磁盘重新拼装，但当前正在运行的 session 仍然带着旧 memory 上下文。
+如果想让在线 agent 也立刻"忘掉"，清空后再发一条 `/new`。
 Cron / heartbeat / HTTP API **不会** 被注入 banner——仅限 WebSocket
 用户消息路径。详见 [安全 › 权限矩阵](../security/index.md#权限矩阵)。
 

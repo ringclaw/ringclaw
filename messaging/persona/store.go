@@ -64,6 +64,15 @@ func (s *Store) memoryFilePath(scope Scope, id string) (string, error) {
 	}
 }
 
+// MemoryFilePath returns the on-disk path that AppendMemory /
+// ClearMemory operate on for (scope, id), after SanitizeID. Useful
+// for surfacing the path in confirmation prompts so operators can
+// verify they're targeting the right scope before destructive
+// actions.
+func (s *Store) MemoryFilePath(scope Scope, id string) (string, error) {
+	return s.memoryFilePath(scope, id)
+}
+
 // cap returns the character budget for the given scope from the
 // resolved config.
 func (s *Store) cap(scope Scope) int {

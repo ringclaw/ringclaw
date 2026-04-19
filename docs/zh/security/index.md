@@ -130,7 +130,7 @@ trusted sender 在自己的私聊里也不行。没有 Private App 时，RingCla
 - `/approval` — 仅原发起者可解析自己的 challenge（`oob/authorize.go:146-154`）。群聊中看起来像 `/approval <id>` 的消息会被明确拒绝（回复 ``/approval`` 只在 bot 私聊中可用），不会转发给默认 agent。
 - 群聊总结 — 只允许 chatID 等于 `ringcentral.group_summary_group_id` 的群；跨群 / 跨人总结会被拒绝（`handler_summarize.go:84-115`）。
 - `/mem add` 与 `/mem del` — 第一层特权命令（和 `/cron` 同一道门控）。所有 memory 文件写入严格落在 `persona.memory_dir` 之内；恶意 chat/user ID 会被 `SanitizeID` 转义成安全文件名，无法逃出 memory 树。scope 布局见 [配置 › persona](../guide/configuration.md#persona)。
-- `/mem del` 不带 `confirm` 时不会真正清空——只打印二次确认提示，避免共享滚动条中的误操作。
+- `/mem del` 不带 `confirm` 时不会真正清空——第一次调用会打印解析出的文件路径、当前大小以及最后几行预览，方便 operator 在再次发送 `confirm` 之前确认自己要删的就是这个 scope。`/mem del confirm` **不会** 重置 agent session：下次消息时 banner 会从磁盘重新拼装，但当前正在运行的 session 依然带着旧 memory 上下文。如果想让在线 agent 也立刻"忘掉"旧上下文，清空后再发一条 `/new`。
 - **Cron / Heartbeat / HTTP API 不会注入 persona banner。** 这些非交互入口没有真实的 chat / user 上下文；banner 仅拼接在 WebSocket 用户消息之前（`dispatchToAgent` 与 `broadcastToAgents`）。
 
 ### 第二层 — AI 驱动的 ACTION 派发

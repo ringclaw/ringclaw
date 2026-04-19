@@ -184,18 +184,34 @@ func TestHandleMemDel_RequiresConfirmation(t *testing.T) {
 
 	// First call: returns confirmation prompt, memory untouched.
 	reply := h.handleMemCommand("/mem del", "c1", "u", false)
-	if !strings.Contains(reply, "Re-send") {
-		t.Errorf("expected confirmation prompt, got %q", reply)
+
+	// The first-phase warning must surface the irreversibility, the
+	// resolved path, the /new hint, the tail preview, and the exact
+	// command to re-send. Each assertion encodes one operator-facing
+	// guarantee — losing any of them silently would defeat the whole
+	// point of the two-phase confirm.
+	checks := map[string]string{
+		"WARNING header":         "WARNING",
+		"irreversibility note":   "cannot be undone",
+		"/new hint":              "/new",
+		"explicit re-send line":  "/mem del chat confirm",
+		"tail preview of entry":  "will be forgotten",
+		"resolved memory dir":    store.Config().MemoryDir,
 	}
-	if !strings.Contains(reply, "/mem del chat confirm") {
-		t.Errorf("confirmation prompt should suggest the new command, got %q", reply)
+	for label, needle := range checks {
+		if !strings.Contains(reply, needle) {
+			t.Errorf("first-phase reply missing %s (%q):\n%s", label, needle, reply)
+		}
 	}
+
 	mem, _ := store.LoadMemory(persona.ScopeChat, "c1")
 	if !strings.Contains(mem, "will be forgotten") {
 		t.Errorf("first /mem del should not clear, got %q", mem)
 	}
 
-	// Second call with `confirm`: actually clears.
+	// Second call with `confirm`: actually clears. Success message
+	// stays the simple one-liner (no path / preview noise on the
+	// destructive path itself).
 	reply = h.handleMemCommand("/mem del confirm", "c1", "u", false)
 	if !strings.Contains(reply, "Forgot") {
 		t.Errorf("expected success, got %q", reply)
@@ -203,6 +219,25 @@ func TestHandleMemDel_RequiresConfirmation(t *testing.T) {
 	mem, _ = store.LoadMemory(persona.ScopeChat, "c1")
 	if mem != "" {
 		t.Errorf("memory should be empty after confirm, got %q", mem)
+	}
+}
+
+// TestHandleMemDel_EmptyScope_NoWarning confirms the empty case
+// short-circuits to a one-liner instead of printing a multi-line
+// "WARNING ... 0 chars" wall — there is nothing to warn about, and
+// the confirm step would no-op anyway.
+func TestHandleMemDel_EmptyScope_NoWarning(t *testing.T) {
+	h, _, _ := newPersonaTestHandler(t)
+
+	reply := h.handleMemCommand("/mem del", "c1", "u", false)
+	if !strings.Contains(reply, "nothing to delete") {
+		t.Errorf("empty-scope first phase should be a one-liner, got %q", reply)
+	}
+	if strings.Contains(reply, "WARNING") {
+		t.Errorf("empty-scope first phase must not emit the WARNING wall, got %q", reply)
+	}
+	if strings.Contains(reply, "/new") {
+		t.Errorf("empty-scope first phase should not nudge /new, got %q", reply)
 	}
 }
 

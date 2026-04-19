@@ -188,15 +188,19 @@ Manage the banner from chat:
 /mem add global engineering team is 8 people                  # → cross-chat memory
 /mem show                  # show current chat memory
 /mem show user             # show user memory
-/mem del                   # prompts for confirmation
-/mem del confirm           # actually clear current chat memory
+/mem del                   # shows file path, size, tail preview + /new hint
+/mem del confirm           # actually clear (irreversible; agent session not reset)
 /persona                   # show SOUL.md (read-only here; edit the file directly)
 ```
 
 `/mem add` and `/mem del` are privileged commands (same Layer 1 gate
 as `/cron`); `/mem show` and `/persona` are read-only and available
-to any trusted sender. Cron / heartbeat / HTTP API do **not** receive
-the banner — it only applies to WebSocket-path user messages. See
+to any trusted sender. `/mem del` does **not** automatically reset
+agent sessions — the persona banner is rebuilt from disk on the next
+message, but in-flight sessions still carry the old memory in their
+context. Run `/new` after a clear if you want the live agent to
+forget too. Cron / heartbeat / HTTP API do **not** receive the
+banner — it only applies to WebSocket-path user messages. See
 [Security › Permission Matrix](../security/index.md#permission-matrix).
 
 ## Agents
