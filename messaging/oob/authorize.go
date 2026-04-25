@@ -143,12 +143,13 @@ func (m *Manager) handleApproveReply(ctx context.Context, client Client, dmChatI
 		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", reply.ChallengeID))
 		return true
 	}
-	if c.RequesterID != senderID {
-		slog.Warn("oob: approval refused for non-requester",
+	if c.RequesterID != senderID && c.OwnerID != senderID {
+		slog.Warn("oob: approval refused for non-requester, non-owner",
 			"component", "oob",
 			"challengeID", reply.ChallengeID,
 			"senderID", senderID,
 			"requesterID", c.RequesterID,
+			"ownerID", c.OwnerID,
 		)
 		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` was issued for a different user.", reply.ChallengeID))
 		return true
@@ -174,12 +175,13 @@ func (m *Manager) handleDenyReply(ctx context.Context, client Client, dmChatID, 
 		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", reply.ChallengeID))
 		return true
 	}
-	if c.RequesterID != senderID {
-		slog.Warn("oob: deny refused for non-requester",
+	if c.RequesterID != senderID && c.OwnerID != senderID {
+		slog.Warn("oob: deny refused for non-requester, non-owner",
 			"component", "oob",
 			"challengeID", reply.ChallengeID,
 			"senderID", senderID,
 			"requesterID", c.RequesterID,
+			"ownerID", c.OwnerID,
 		)
 		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` was issued for a different user.", reply.ChallengeID))
 		return true

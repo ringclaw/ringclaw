@@ -371,3 +371,92 @@ func TestSplitFirstField(t *testing.T) {
 }
 
 var _ = waitPendingSink // keep helper referenced so future edits can't silently drop it
+
+// TestOwnerCanApproveNonRequesterChallenge verifies that the OwnerID
+// field on a challenge lets the machine owner approve even when they
+// are not the requester (cross-chat OOB flow).
+func TestOwnerCanApproveNonRequesterChallenge(t *testing.T) {
+	m := New(Options{})
+	client := &fakeClient{}
+	ctx := context.Background()
+	c, err := m.Issue("user-bob", "cross-chat MESSAGE", "group-a", "bot-dm", IssueOptions{
+		TTL:     time.Second,
+		OwnerID: "owner-alice",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	handled := m.HandleApprovalReply(ctx, client, "bot-dm", "owner-alice", "/approval "+c.ID)
+	if !handled {
+		t.Fatalf("expected /approval to be consumed by owner")
+	}
+	// Resolved challenge is buffered in resultCh; Wait drains it and
+	// removes the challenge from the manager.
+	waitCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	approved, waitErr := c.Wait(waitCtx, m)
+	if waitErr != nil || !approved {
+		t.Fatalf("expected Wait to return approved, got approved=%v err=%v", approved, waitErr)
+	}
+	if _, ok := m.lookupChallenge(c.ID); ok {
+		t.Fatalf("challenge should be removed after Wait returns")
+	}
+}
+
+// TestOwnerCanDenyNonRequesterChallenge verifies the OwnerID can also
+// deny a challenge on behalf of a non-owner requester.
+func TestOwnerCanDenyNonRequesterChallenge(t *testing.T) {
+	m := New(Options{})
+	client := &fakeClient{}
+	ctx := context.Background()
+	c, err := m.Issue("user-bob", "cross-chat MESSAGE", "group-a", "bot-dm", IssueOptions{
+		TTL:     time.Second,
+		OwnerID: "owner-alice",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	handled := m.HandleApprovalReply(ctx, client, "bot-dm", "owner-alice", "/approval deny "+c.ID)
+	if !handled {
+		t.Fatalf("expected /approval deny to be consumed by owner")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	approved, waitErr := c.Wait(waitCtx, m)
+	if waitErr != nil || approved {
+		t.Fatalf("expected Wait to return denied, got approved=%v err=%v", approved, waitErr)
+	}
+	if _, ok := m.lookupChallenge(c.ID); ok {
+		t.Fatalf("challenge should be removed after Wait returns")
+	}
+	got := client.snapshot()
+	if len(got) < 1 || !strings.Contains(got[len(got)-1], "denied") {
+		t.Fatalf("expected 'denied' confirmation text, got %v", got)
+	}
+}
+
+// TestIntruderStillRejectedEvenWithOwnerID verifies a third party
+// who is neither requester nor owner still cannot approve.
+func TestIntruderStillRejectedEvenWithOwnerID(t *testing.T) {
+	m := New(Options{})
+	client := &fakeClient{}
+	ctx := context.Background()
+	c, err := m.Issue("user-bob", "cross-chat MESSAGE", "group-a", "bot-dm", IssueOptions{
+		TTL:     time.Second,
+		OwnerID: "owner-alice",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	handled := m.HandleApprovalReply(ctx, client, "bot-dm", "user-charlie", "/approval "+c.ID)
+	if !handled {
+		t.Fatalf("expected /approval reply to be consumed (and rejected)")
+	}
+	if _, ok := m.lookupChallenge(c.ID); !ok {
+		t.Fatalf("challenge should not be removed by intruder approval")
+	}
+	got := client.snapshot()
+	if len(got) < 1 || !strings.Contains(got[len(got)-1], "different user") {
+		t.Fatalf("expected 'different user' rejection text, got %v", got)
+	}
+}
