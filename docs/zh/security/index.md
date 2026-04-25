@@ -117,7 +117,7 @@ trusted sender 在自己的私聊里也不行。没有 Private App 时，RingCla
 | 总结（自然语言触发，如"总结"、"summarize"） | ✅（需 Private App） | ❌ | ⚠️ 仅限配置的群组 | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
 | 总结（无 Private App） | ❌ 不可用 | n/a | ❌ 不可用 | ❌ 不可用 | `handler_summarize.go:76` |
 | `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌（owner-only、DM-only） | ❌（DM-only） | ❌（DM-only） | `handler_fullaccess.go:62-67` |
-| `/approval <id>` / `/approval deny <id>` | ✅ ⚠️（仅发起者本人） | ⚠️ 仅当发送者就是原发起者才会被消费 | ❌ 明确拒绝并给出提示 | ❌ 明确拒绝并给出提示 | `handler.go:603-628` + `oob/authorize.go:126` |
+| `/approval <id>` / `/approval deny <id>` | ✅ 已消费；重定向到终端（`ringclaw approval <id>`） | ✅ 已消费；重定向到终端 | ❌ 明确拒绝并给出提示 | ❌ 明确拒绝并给出提示 | `handler.go:603-628` + `oob/authorize.go:118-132` |
 | `/mem add [user\|chat\|global] <文本>` | ✅ | ❌ | ✅ | ❌ | `handler_persona.go` + `handler_commands.go` 特权门控 |
 | `/mem del [scope] [confirm]` | ✅ | ❌ | ✅ | ❌ | 同 `/mem add`；需要二次 `confirm` |
 | `/mem show [scope]` | ✅ | ✅ | ✅ | ✅ | 只读、非特权 |
@@ -126,8 +126,8 @@ trusted sender 在自己的私聊里也不行。没有 Private App 时，RingCla
 额外检查说明：
 
 - `/cwd` — 绝对路径必须在 `agent_allow_workspace_list ∪ agent_workspace ∪ ~/.ringclaw/workspace` 范围内，且不含 denylist 目录（`.ssh`、`.gnupg`、`.ringclaw`、`.aws`、`.kube`、`.config/gcloud`）。两项检查与 full-access 状态无关。
-- `/full-access grant [时长]` — 仅在 owner 回复 `/approval <id>` 后才真正激活。challenge TTL 5 分钟，默认授权 24 小时，上限 30 天。
-- `/approval` — 仅原发起者可解析自己的 challenge（`oob/authorize.go:146-154`）。群聊中看起来像 `/approval <id>` 的消息会被明确拒绝（回复 ``/approval`` 只在 bot 私聊中可用），不会转发给默认 agent。
+- `/full-access grant [时长]` — 仅在 owner 在主机执行 `ringclaw approval <id>` 后才真正激活。challenge TTL 5 分钟，默认授权 24 小时，上限 30 天。
+- `/approval` — Bot 私聊中任何 `/approval ...` 消息都会被消费并重定向到终端 CLI（`oob/authorize.go:118-132`）。审批需要在主机上执行 `ringclaw approval <id>`。在 Bot 私聊之外发送的 `/approval ...` 格式消息会被明确拒绝，不会转发给默认 agent。
 - 群聊总结 — 只允许 chatID 等于 `ringcentral.group_summary_group_id` 的群；跨群 / 跨人总结会被拒绝（`handler_summarize.go:84-115`）。
 - `/mem add` 与 `/mem del` — 第一层特权命令（和 `/cron` 同一道门控）。所有 memory 文件写入严格落在 `persona.memory_dir` 之内；恶意 chat/user ID 会被 `SanitizeID` 转义成安全文件名，无法逃出 memory 树。scope 布局见 [配置 › persona](../guide/configuration.md#persona)。
 - `/mem del` 不带 `confirm` 时不会真正清空——第一次调用会打印解析出的文件路径、当前大小以及最后几行预览，方便 operator 在再次发送 `confirm` 之前确认自己要删的就是这个 scope。`/mem del confirm` **不会** 重置 agent session：下次消息时 banner 会从磁盘重新拼装，但当前正在运行的 session 依然带着旧 memory 上下文。如果想让在线 agent 也立刻"忘掉"旧上下文，清空后再发一条 `/new`。
@@ -165,7 +165,7 @@ trusted sender 在自己的私聊里也不行。没有 Private App 时，RingCla
 | 场景 | 行为 | 门控位置 |
 |---|---|---|
 | ACTION 在 origin chat（任意发送者） | ✅ 始终允许 | `actions.go:166-310` |
-| `chatid=` 覆盖，发起者**不在** trusted-sender allowlist | ⚠️ `chatid` 被静默忽略，强制回 origin chat（日志：`WARN action: ignoring chatid override from non-owner sender`） | `actions.go:172-184` |
+| `chatid=` 覆盖，发起者**不在** trusted-sender allowlist | ⚠️ **OOB 已配置时发起 challenge**（Private App + owner 私聊已解析）：向 owner 私聊发送 challenge 提示；owner 在主机执行 `ringclaw approval <id>` 批准；批准后 action 异步在目标聊天执行。OOB 未配置时回退为静默丢弃（强制回到 origin chat）。 | `actions.go:177-193`；`crossChatOOBChallenge` 在 `actions.go:401` |
 | `chatid=` 覆盖（owner 发起，target = origin） | ✅ 允许（同第 1 行） | — |
 | `chatid=` 覆盖（owner 发起，target = owner 自己的私聊） | ✅ 允许，无需 audit notice | `actions.go:195`（guard） |
 | `chatid=` 覆盖（owner 发起，target ≠ origin 且 ≠ owner 私聊） | 🔒 **fail-closed**：先同步向 owner 私聊发 `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>`；在 `crossChatNoticeTimeout`（5 秒）内送达则派发 action，否则**拒绝**（`Refused cross-chat <TYPE>: …`） | `actions.go:195-203`；`announceCrossChatOrRefuse` 在 `actions.go:329-357` |
@@ -191,7 +191,7 @@ trusted sender 在自己的私聊里也不行。没有 Private App 时，RingCla
 - **`allow_write: false` 并非完整沙箱。** 它只拦截 ACP 协议层的 `fs/write_text_file`。它**不能**阻止 agent 通过 `terminal/create` 执行 `echo … > file`、`sed -i`、`git commit` 等 shell 命令来写文件。请将 `allow_write` 视为提示而非沙箱。
 - **RingClaw 不做逐次工具调用审批。** `handlePermissionRequest` 自动选择第一个 `allow` 选项。更严格的门控在 ACP agent 自身（例如 Claude 的工具审批逻辑），而不在 RingClaw。从 default → full-access 并不是翻转 RingClaw 侧的某个开关，而是改变 RingClaw 请求 agent 采用的 `session/set_mode` 参数。
 - **`/cwd` allowlist ≠ 文件访问沙箱。** allowlist 只约束 `/cwd` 命令可以将 agent 的起始工作目录切换到哪里。ACP agent 仍然可以读写任何它有 OS 权限访问的文件，也可以在任意目录中打开终端。
-- **Full-access 有两种激活方式。** 静态方式：`config.json` 中 agent 的 `full_access: true` + 顶层 `full_access_ack: true`（`acp_agent.go:246-252`），重启后仍生效，需修改配置才能撤销。动态方式：在 owner 私聊中执行 `/full-access grant [时长]` → 回复 `/approval <id>` 激活，TTL 到期或 `/full-access revoke` 即失效，全内存状态，重启清空（`handler_fullaccess.go`、`oob/manager.go`）。撤销或 TTL 到期时，`DemoteAllACPFullAccess` 会向每个 live ACP session 发送 `session/set_mode "default"`；降级失败的 session 会从 session map 中移除，下次调用时重建（`acp_agent.go:703-728`）。
+- **Full-access 有两种激活方式。** 静态方式：`config.json` 中 agent 的 `full_access: true` + 顶层 `full_access_ack: true`（`acp_agent.go:246-252`），重启后仍生效，需修改配置才能撤销。动态方式：在 owner 私聊中执行 `/full-access grant [时长]` → 在主机执行 `ringclaw approval <id>` 激活，TTL 到期或 `/full-access revoke` 即失效，全内存状态，重启清空（`handler_fullaccess.go`、`oob/manager.go`）。撤销或 TTL 到期时，`DemoteAllACPFullAccess` 会向每个 live ACP session 发送 `session/set_mode "default"`；降级失败的 session 会从 session map 中移除，下次调用时重建（`acp_agent.go:703-728`）。
 :::
 
 ## 客户端职责

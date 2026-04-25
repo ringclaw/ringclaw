@@ -20,7 +20,10 @@ import (
 //     the default mode the moment /full-access revoke runs or the TTL
 //     expires, so existing sessions cannot linger in full-access after
 //     the grant is gone.
-func initOOBManager(handler *messaging.Handler, c *clients) error {
+//
+// onReady, if non-nil, is called with the constructed manager so the
+// caller can pass it to other subsystems (e.g. the API server).
+func initOOBManager(handler *messaging.Handler, c *clients, onReady func(*oob.Manager)) error {
 	mgr := oob.New(oob.Options{})
 
 	dmChat := ""
@@ -32,6 +35,9 @@ func initOOBManager(handler *messaging.Handler, c *clients) error {
 	mgr.SetFullAccessRevokeHook(func() {
 		agent.DemoteAllACPFullAccess(context.Background())
 	})
+	if onReady != nil {
+		onReady(mgr)
+	}
 	if dmChat == "" {
 		slog.Warn("bot DM chat with owner not resolved; /full-access and cross-chat notifications will be disabled until it is",
 			"component", "start")
@@ -39,7 +45,7 @@ func initOOBManager(handler *messaging.Handler, c *clients) error {
 		slog.Info("OOB approval flow active",
 			"component", "start",
 			"ownerDMChatID", dmChat,
-			"mode", "phase2:/approval",
+			"mode", "terminal:/approval",
 		)
 	}
 	return nil

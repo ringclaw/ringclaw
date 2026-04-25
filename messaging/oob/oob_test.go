@@ -70,8 +70,9 @@ func TestIssueApproveFlow(t *testing.T) {
 	if err := PostChallengePrompt(ctx, client, c, "24h"); err != nil {
 		t.Fatalf("PostChallengePrompt: %v", err)
 	}
-	if got := client.snapshot(); len(got) != 1 || !strings.Contains(got[0], c.ID) {
-		t.Fatalf("expected challenge prompt with challenge ID, got %v", got)
+	// Prompt should now instruct terminal usage, not /approval reply.
+	if got := client.snapshot(); len(got) != 1 || !strings.Contains(got[0], "ringclaw approval") {
+		t.Fatalf("expected terminal approval prompt, got %v", got)
 	}
 
 	type res struct {
@@ -84,8 +85,9 @@ func TestIssueApproveFlow(t *testing.T) {
 		ch <- res{ok, werr}
 	}()
 
-	if !m.HandleApprovalReply(ctx, client, "dm-1", "user-1", "/approval "+c.ID) {
-		t.Fatalf("HandleApprovalReply did not consume the approval")
+	// Approve via Manager directly (simulating terminal CLI).
+	if _, err := m.Approve(c.ID); err != nil {
+		t.Fatalf("Approve: %v", err)
 	}
 	select {
 	case r := <-ch:
@@ -96,7 +98,7 @@ func TestIssueApproveFlow(t *testing.T) {
 			t.Fatalf("expected approval")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("challenge did not resolve after /approval reply")
+		t.Fatalf("challenge did not resolve after Approve()")
 	}
 }
 
@@ -115,8 +117,9 @@ func TestIssueDenyFlow(t *testing.T) {
 		approved, _ := c.Wait(ctx, m)
 		ch <- approved
 	}()
-	if !m.HandleApprovalReply(ctx, client, "dm", "user-1", "/approval deny "+c.ID) {
-		t.Fatalf("HandleApprovalReply did not consume the deny")
+	// Deny via Manager directly (simulating terminal CLI).
+	if !m.Deny(c.ID) {
+		t.Fatalf("Deny returned false")
 	}
 	select {
 	case ok := <-ch:
@@ -126,6 +129,7 @@ func TestIssueDenyFlow(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("deny did not resolve challenge")
 	}
+	_ = client // client not used; kept for symmetry with other tests
 }
 
 func TestChallengeExpiry(t *testing.T) {
@@ -153,7 +157,9 @@ func TestChallengeExpiry(t *testing.T) {
 	}
 }
 
-func TestApproveRefusedForNonRequester(t *testing.T) {
+// TestChatApprovalDisabled verifies that /approval replies in chat are
+// intercepted and redirected to the terminal CLI, not executed.
+func TestChatApprovalDisabled(t *testing.T) {
 	m := New(Options{})
 	client := &fakeClient{}
 	ctx := context.Background()
@@ -161,16 +167,18 @@ func TestApproveRefusedForNonRequester(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	handled := m.HandleApprovalReply(ctx, client, "dm", "intruder", "/approval "+c.ID)
+	// Any /approval reply (regardless of sender) should be consumed but
+	// not resolve the challenge.
+	handled := m.HandleApprovalReply(ctx, client, "dm", "owner", "/approval "+c.ID)
 	if !handled {
-		t.Fatalf("expected /approval reply to be consumed (and rejected)")
+		t.Fatalf("expected /approval reply to be consumed")
 	}
 	if _, ok := m.lookupChallenge(c.ID); !ok {
-		t.Fatalf("challenge should not be removed by non-requester approval")
+		t.Fatalf("challenge should not be resolved by chat reply")
 	}
 	got := client.snapshot()
-	if len(got) != 1 || !strings.Contains(got[0], "different user") {
-		t.Fatalf("expected 'different user' rejection text, got %v", got)
+	if len(got) != 1 || !strings.Contains(got[0], "ringclaw approval") {
+		t.Fatalf("expected terminal redirect message, got %v", got)
 	}
 }
 
@@ -182,12 +190,13 @@ func TestDenyRefusedForNonRequester(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
+	// Chat deny is also disabled; challenge must remain pending.
 	handled := m.HandleApprovalReply(ctx, client, "dm", "intruder", "/approval deny "+c.ID)
 	if !handled {
-		t.Fatalf("expected /approval deny to be consumed (and rejected)")
+		t.Fatalf("expected /approval deny to be consumed")
 	}
 	if _, ok := m.lookupChallenge(c.ID); !ok {
-		t.Fatalf("challenge should not be removed by non-requester /approval deny")
+		t.Fatalf("challenge should not be removed by chat /approval deny")
 	}
 }
 
@@ -371,3 +380,89 @@ func TestSplitFirstField(t *testing.T) {
 }
 
 var _ = waitPendingSink // keep helper referenced so future edits can't silently drop it
+
+// TestOwnerCanApproveNonRequesterChallenge verifies that the owner can
+// approve a cross-chat challenge via Manager.Approve (terminal path).
+func TestOwnerCanApproveNonRequesterChallenge(t *testing.T) {
+	m := New(Options{})
+	c, err := m.Issue("user-bob", "cross-chat MESSAGE", "group-a", "bot-dm", IssueOptions{
+		TTL:     time.Second,
+		OwnerID: "owner-alice",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	ch := make(chan struct{ approved bool; err error }, 1)
+	go func() {
+		ok, werr := c.Wait(waitCtx, m)
+		ch <- struct{ approved bool; err error }{ok, werr}
+	}()
+	if _, err := m.Approve(c.ID); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	r := <-ch
+	if r.err != nil || !r.approved {
+		t.Fatalf("expected approved, got approved=%v err=%v", r.approved, r.err)
+	}
+	if _, ok := m.lookupChallenge(c.ID); ok {
+		t.Fatalf("challenge should be removed after Wait returns")
+	}
+}
+
+// TestOwnerCanDenyNonRequesterChallenge verifies the owner can deny a
+// cross-chat challenge via Manager.Deny (terminal path).
+func TestOwnerCanDenyNonRequesterChallenge(t *testing.T) {
+	m := New(Options{})
+	c, err := m.Issue("user-bob", "cross-chat MESSAGE", "group-a", "bot-dm", IssueOptions{
+		TTL:     time.Second,
+		OwnerID: "owner-alice",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	ch := make(chan struct{ approved bool; err error }, 1)
+	go func() {
+		ok, werr := c.Wait(waitCtx, m)
+		ch <- struct{ approved bool; err error }{ok, werr}
+	}()
+	if !m.Deny(c.ID) {
+		t.Fatalf("Deny returned false")
+	}
+	r := <-ch
+	if r.err != nil || r.approved {
+		t.Fatalf("expected denied, got approved=%v err=%v", r.approved, r.err)
+	}
+	if _, ok := m.lookupChallenge(c.ID); ok {
+		t.Fatalf("challenge should be removed after Wait returns")
+	}
+}
+
+// TestChatApprovalDisabledForCrossChat verifies that even with OwnerID set,
+// chat-based /approval is redirected to terminal and does not resolve the challenge.
+func TestChatApprovalDisabledForCrossChat(t *testing.T) {
+	m := New(Options{})
+	client := &fakeClient{}
+	ctx := context.Background()
+	c, err := m.Issue("user-bob", "cross-chat MESSAGE", "group-a", "bot-dm", IssueOptions{
+		TTL:     time.Second,
+		OwnerID: "owner-alice",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	handled := m.HandleApprovalReply(ctx, client, "bot-dm", "owner-alice", "/approval "+c.ID)
+	if !handled {
+		t.Fatalf("expected /approval reply to be consumed")
+	}
+	if _, ok := m.lookupChallenge(c.ID); !ok {
+		t.Fatalf("challenge should not be resolved by chat reply")
+	}
+	got := client.snapshot()
+	if len(got) < 1 || !strings.Contains(got[len(got)-1], "ringclaw approval") {
+		t.Fatalf("expected terminal redirect message, got %v", got)
+	}
+}

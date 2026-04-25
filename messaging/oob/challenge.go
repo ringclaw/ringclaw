@@ -41,6 +41,13 @@ type Challenge struct {
 	IssuedAt     time.Time
 	ExpiresAt    time.Time
 
+	// OwnerID, when non-empty, names a user who may approve this
+	// challenge even when they are not the RequesterID. Set to the
+	// machine owner's ID for challenges issued on behalf of non-owner
+	// senders (e.g. cross-chat ACTION flows). Empty means only the
+	// requester can approve (the /full-access self-approval path).
+	OwnerID string
+
 	resultCh chan challengeResult
 	once     sync.Once
 }
@@ -53,7 +60,8 @@ type challengeResult struct {
 // IssueOptions tunes the lifetime of a single challenge. The zero
 // value uses DefaultChallengeTTL.
 type IssueOptions struct {
-	TTL time.Duration
+	TTL     time.Duration
+	OwnerID string // optional: a user who can approve besides the requester
 }
 
 // Issue creates a new pending challenge in the manager and returns
@@ -82,6 +90,7 @@ func (m *Manager) Issue(requesterID, intent, originChatID, ownerDMChat string, o
 		RequesterID:  requesterID,
 		OriginChatID: originChatID,
 		OwnerDMChat:  ownerDMChat,
+		OwnerID:      opts.OwnerID,
 		IssuedAt:     now,
 		ExpiresAt:    now.Add(ttl),
 		resultCh:     make(chan challengeResult, 1),
@@ -181,6 +190,21 @@ func (m *Manager) PendingFor(requesterID string) []*Challenge {
 		if c.RequesterID != requesterID {
 			continue
 		}
+		if now.After(c.ExpiresAt) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// Pending returns all non-expired challenges regardless of requester.
+func (m *Manager) Pending() []*Challenge {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	var out []*Challenge
+	for _, c := range m.challenges {
 		if now.After(c.ExpiresAt) {
 			continue
 		}

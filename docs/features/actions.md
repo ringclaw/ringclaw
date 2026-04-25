@@ -23,7 +23,17 @@ sequenceDiagram
     R->>RC: Send text reply
     loop Each ACTION
         R->>R: Parse type, params, chatid
-        alt chatid set & sender NOT on trusted allowlist
+        alt chatid set & sender NOT on trusted allowlist & OOB configured
+            R->>O: Challenge prompt<br/>"Pending approval (challenge id).<br/>Run: ringclaw approval id"
+            Note over O,R: Owner runs `ringclaw approval id` on host
+            R->>R: Await terminal approval (async goroutine)
+            alt Approved
+                R->>RC: Execute action in target chat
+                R->>RC: Notify origin chat
+            else Denied / expired
+                R->>RC: Notify origin chat
+            end
+        else chatid set & sender NOT on trusted allowlist & OOB not configured
             R->>R: Silently drop chatid, force origin chat (WARN log)
         end
         alt owner cross-chat (target ≠ origin & ≠ owner DM)
@@ -63,7 +73,12 @@ ACTION:EVENT title=Sprint Review start=2026-04-01T14:00:00Z end=2026-04-01T15:00
 END_ACTION
 ```
 
-Actions may target a different chat via the `chatid=<id>` parameter. Non-owner senders silently lose the override (the action is forced back to the origin chat). Owner-initiated cross-chat dispatches pass a **synchronous fail-closed audit notice** through the owner DM — see [Security › Layer 2](../security/index.md#layer-2-ai-driven-action-dispatch) for the full gating rules. No configuration needed — the action prompt is injected automatically.
+Actions may target a different chat via the `chatid=<id>` parameter.
+
+- **Non-owner senders**: when OOB is configured (Private App + owner DM resolved), a challenge prompt is posted to the owner DM and the owner must run `ringclaw approval <id>` on the host machine to approve. On approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured.
+- **Owner-initiated cross-chat**: passes a **synchronous fail-closed audit notice** through the owner DM before dispatching — see [Security › Layer 2](../security/index.md#layer-2-ai-driven-action-dispatch) for the full gating rules.
+
+No configuration needed — the action prompt is injected automatically.
 
 ## Task Commands
 

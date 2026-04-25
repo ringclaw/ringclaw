@@ -14,6 +14,7 @@ import (
 	"github.com/lmittmann/tint"
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
 )
@@ -143,16 +144,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	handler := initHandler(ctx, cfg)
-	initServices(ctx, cfg, c, handler)
 
-	// Phase 2b OOB approval manager bootstrap. Loaded after clients so
-	// the bot DM chat ID is available; loaded before the monitor starts
-	// so the very first incoming /approval reply finds a configured
-	// handler.
-	if err := initOOBManager(handler, c); err != nil {
+	// OOB manager must be initialized before initServices so the API
+	// server can expose the approval endpoints.
+	var oobMgr *oob.Manager
+	if err := initOOBManager(handler, c, func(m *oob.Manager) { oobMgr = m }); err != nil {
 		slog.Error("failed to initialize OOB approval manager; /full-access and cross-chat notices will be disabled",
 			"component", "start", "error", err)
 	}
+	initServices(ctx, cfg, c, handler, oobMgr)
 
 	// Start WebSocket monitor
 	slog.Info("starting message bridge", "chatIDs", cfg.RC.ChatIDs)

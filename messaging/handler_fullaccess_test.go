@@ -178,9 +178,9 @@ func TestHandleFullAccess_StatusAndRevoke(t *testing.T) {
 }
 
 // TestHandleFullAccess_GrantPathActivatesOnApproval drives the two-step
-// /approval flow: handleFullAccess posts the challenge prompt; the test
-// replies with `/approval <id>` via routeOOBApprovalReply and verifies
-// that the manager flips to FullAccessActive.
+// /full-access flow: handleFullAccess posts the challenge prompt; the test
+// approves via Manager.Approve (terminal path) and verifies that the
+// manager flips to FullAccessActive.
 func TestHandleFullAccess_GrantPathActivatesOnApproval(t *testing.T) {
 	srv, bodies, mu := newDMRoutingServer(t)
 	bot := ringcentral.NewBotClient(srv.URL, "bot-token")
@@ -197,8 +197,9 @@ func TestHandleFullAccess_GrantPathActivatesOnApproval(t *testing.T) {
 	h.handleFullAccess(ctx, bot, "dm-1", "user-1", "/full-access grant 30s")
 
 	pending := waitForPending(t, mgr, "user-1", 1, 2*time.Second)
-	if !h.routeOOBApprovalReply(ctx, bot, "dm-1", "user-1", "/approval "+pending[0].ID) {
-		t.Fatalf("/approval reply was not consumed")
+	// Approve via terminal path (Manager.Approve directly).
+	if _, err := mgr.Approve(pending[0].ID); err != nil {
+		t.Fatalf("Approve: %v", err)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
