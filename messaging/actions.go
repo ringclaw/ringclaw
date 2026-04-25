@@ -539,7 +539,7 @@ func awaitCrossChatOOB(actionClient *ringcentral.Client, challenge *oob.Challeng
 				fmt.Sprintf("Cross-chat %s failed: invalid card JSON.", a.Type)))
 			return
 		}
-		cardClient := selectCardClient(actionClient, actionClient, targetChat)
+		cardClient := selectCardClient(actionClient, actionClient, targetChat) // OOB path has no separate replyClient; use actionClient for both roles.
 		card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
 		if err != nil {
 			logSendError(SendTextReply(ctx, actionClient, originChat,

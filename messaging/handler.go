@@ -797,16 +797,16 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
 		reply = cleanReply
-			ownerID := ""
-			if actionClient != nil {
-				ownerID = actionClient.OwnerID()
-			}
+		ownerID := ""
+		if actionClient != nil {
+			ownerID = actionClient.OwnerID()
+		}
 		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
 			OriginIsOwner: h.isTrustedSender(post.CreatorID),
 			OOB:           h.OOBManager(),
 			OwnerDMChat:   h.OwnerDMChatID(),
 			RequesterID:   post.CreatorID,
-				OwnerID:       ownerID,
+			OwnerID:       ownerID,
 		})
 		if len(results) > 0 {
 			defer func() {
