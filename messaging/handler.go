@@ -445,8 +445,12 @@ func stripForwardedPrefix(text string) string {
 func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
 	text := strings.TrimSpace(post.Text)
 	if text == "" {
-		slog.Debug("received empty message, skipping", "component", "handler", "creatorID", post.CreatorID)
-		return
+		// Voice messages arrive as posts with empty text and an audio attachment.
+		// Proceed with dispatch; dispatchToAgent will pass the audio to the agent.
+		if !hasAudioAttachments(post) {
+			slog.Debug("received empty message, skipping", "component", "handler", "creatorID", post.CreatorID)
+			return
+		}
 	}
 
 	// Strip bot mention prefix (e.g. "![:Person](12345) /help" -> "/help")
@@ -693,10 +697,9 @@ func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) st
 	return fmt.Sprintf("rc:chat:%s:user:%s", chatID, creatorID)
 }
 
-// dispatchToAgent handles the common pattern: placeholder → extract images → chat → reply with actions.
+// dispatchToAgent handles the common pattern: placeholder → extract attachments → chat → reply with actions.
 func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, ag agent.Agent, message, placeholderID string) {
 	conversationID := conversationIDForPost(client, post)
-	images := extractImageAttachments(ctx, client, post)
 
 	// Prepend the persona + memory banner (empty string when persona
 	// is disabled or all sources are blank). This keeps the operator's
@@ -704,7 +707,12 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 	// which one is currently default.
 	prompt := h.buildPersonaBanner(ctx, client, post) + message + ActionPrompt()
 
-	reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, prompt, images)
+	audio := extractAudioAttachments(ctx, client, post)
+	var images []agent.ImageAttachment
+	if len(audio) == 0 {
+		images = extractImageAttachments(ctx, client, post)
+	}
+	reply, err := h.chatWithAttachments(ctx, ag, conversationID, prompt, images, audio)
 	if err != nil {
 		reply = agent.UserMessage(err)
 	}
@@ -750,7 +758,13 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 // broadcastToAgents sends the message to multiple agents in parallel.
 func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, names []string, message string) {
 	conversationID := conversationIDForPost(client, post)
-	images := extractImageAttachments(ctx, client, post)
+
+	// Extract attachments once; audio takes priority over images (same as dispatchToAgent).
+	audio := extractAudioAttachments(ctx, client, post)
+	var images []agent.ImageAttachment
+	if len(audio) == 0 {
+		images = extractImageAttachments(ctx, client, post)
+	}
 
 	// Compute the persona banner once outside the fan-out so all
 	// broadcast targets see identical context. Empty when persona is
@@ -770,7 +784,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
 			}
-			reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, prompt, images)
+			reply, err := h.chatWithAttachments(ctx, ag, conversationID, prompt, images, audio)
 			if err != nil {
 				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
@@ -875,87 +889,43 @@ func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, mes
 	return reply, nil
 }
 
-// chatWithAgentOrImages dispatches to ChatWithImages if agent supports it, otherwise text-only.
-func (h *Handler) chatWithAgentOrImages(ctx context.Context, ag agent.Agent, conversationID, message string, images []agent.ImageAttachment) (string, error) {
+// dispatchTypedMedia calls fn with timing/logging, returning its result.
+// mediaKind is used in log messages (e.g. "images", "audio").
+func dispatchTypedMedia(ag agent.Agent, conversationID, mediaKind string, count int, fn func() (string, error)) (string, error) {
+	info := ag.Info()
+	slog.Info("dispatching to agent with "+mediaKind, "component", "handler", "agent", info.Name, "conversationID", conversationID, mediaKind, count)
+	start := time.Now()
+	reply, err := fn()
+	elapsed := time.Since(start)
+	if err != nil {
+		slog.Error("agent error", "component", "handler", "agent", info.Name, "elapsed", elapsed, "error", err)
+		return "", err
+	}
+	slog.Info("agent replied", "component", "handler", "agent", info.Name, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
+	return reply, nil
+}
+
+// chatWithAttachments dispatches to the appropriate multimedia-capable interface
+// on the agent (audio first, then images), or falls back to text-only with an
+// informational note appended to the message.
+func (h *Handler) chatWithAttachments(ctx context.Context, ag agent.Agent, conversationID, message string, images []agent.ImageAttachment, audio []agent.AudioAttachment) (string, error) {
+	if len(audio) > 0 {
+		if as, ok := ag.(agent.AudioSupporter); ok {
+			return dispatchTypedMedia(ag, conversationID, "audio", len(audio), func() (string, error) {
+				return as.ChatWithAudio(ctx, conversationID, message, audio)
+			})
+		}
+		message += fmt.Sprintf("\n\n[Note: %d voice message(s) were attached but this agent does not support audio input.]", len(audio))
+	}
 	if len(images) > 0 {
 		if is, ok := ag.(agent.ImageSupporter); ok {
-			info := ag.Info()
-			slog.Info("dispatching to agent with images", "component", "handler", "agent", info.Name, "conversationID", conversationID, "images", len(images))
-			start := time.Now()
-			reply, err := is.ChatWithImages(ctx, conversationID, message, images)
-			elapsed := time.Since(start)
-			if err != nil {
-				slog.Error("agent error", "component", "handler", "agent", info.Name, "elapsed", elapsed, "error", err)
-				return "", err
-			}
-			slog.Info("agent replied", "component", "handler", "agent", info.Name, "elapsed", elapsed, "reply", util.Truncate(reply, 100))
-			return reply, nil
+			return dispatchTypedMedia(ag, conversationID, "images", len(images), func() (string, error) {
+				return is.ChatWithImages(ctx, conversationID, message, images)
+			})
 		}
 		message += fmt.Sprintf("\n\n[Note: %d image(s) were attached but this agent does not support image input.]", len(images))
 	}
 	return h.chatWithAgent(ctx, ag, conversationID, message)
-}
-
-const maxImages = 5
-
-var imageMediaTypes = map[string]bool{
-	"image/png":  true,
-	"image/jpeg": true,
-	"image/gif":  true,
-	"image/webp": true,
-	"image/jpg":  true,
-}
-
-func extractImageAttachments(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) []agent.ImageAttachment {
-	var images []agent.ImageAttachment
-	for _, att := range post.Attachments {
-		if len(images) >= maxImages {
-			break
-		}
-		if att.ContentURI == "" {
-			continue
-		}
-		mt := att.MediaType
-		if mt == "" {
-			mt = inferMediaType(att.Name)
-		}
-		if !imageMediaTypes[mt] {
-			continue
-		}
-		data, detectedMT, err := client.DownloadAttachment(ctx, att.ContentURI)
-		if err != nil {
-			slog.Error("failed to download attachment", "component", "handler", "id", att.ID, "error", err)
-			continue
-		}
-		if detectedMT != "" && !imageMediaTypes[detectedMT] {
-			continue
-		}
-		if detectedMT != "" {
-			mt = detectedMT
-		}
-		images = append(images, agent.ImageAttachment{
-			Data:      data,
-			MediaType: mt,
-			Name:      att.Name,
-		})
-		slog.Info("downloaded image attachment", "component", "handler", "id", att.ID, "name", att.Name, "size", len(data))
-	}
-	return images
-}
-
-func inferMediaType(name string) string {
-	lower := strings.ToLower(name)
-	switch {
-	case strings.HasSuffix(lower, ".png"):
-		return "image/png"
-	case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"):
-		return "image/jpeg"
-	case strings.HasSuffix(lower, ".gif"):
-		return "image/gif"
-	case strings.HasSuffix(lower, ".webp"):
-		return "image/webp"
-	}
-	return ""
 }
 
 func (h *Handler) configuredGroupSummaryGroupID() string {

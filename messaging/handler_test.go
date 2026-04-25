@@ -555,7 +555,7 @@ func TestExtractImageAttachments_MaxLimit(t *testing.T) {
 	}
 }
 
-// mockAgent for testing chatWithAgentOrImages
+// mockImageAgent implements Agent + ImageSupporter for testing chatWithAttachments.
 type mockImageAgent struct {
 	lastImages int
 }
@@ -573,6 +573,24 @@ func (m *mockImageAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "mock", Type: "test"}
 }
 
+// mockAudioAgent implements Agent + AudioSupporter for testing chatWithAttachments.
+type mockAudioAgent struct {
+	lastAudio int
+}
+
+func (m *mockAudioAgent) Chat(_ context.Context, _, msg string) (string, error) {
+	return "text-only: " + msg, nil
+}
+func (m *mockAudioAgent) ChatWithAudio(_ context.Context, _, msg string, audio []agent.AudioAttachment) (string, error) {
+	m.lastAudio = len(audio)
+	return "with-audio: " + msg, nil
+}
+func (m *mockAudioAgent) ResetSession(_ context.Context, _ string) (string, error) { return "", nil }
+func (m *mockAudioAgent) SetCwd(_ string)                                          {}
+func (m *mockAudioAgent) Info() agent.AgentInfo {
+	return agent.AgentInfo{Name: "mock-audio", Type: "test"}
+}
+
 type mockTextOnlyAgent struct{}
 
 func (m *mockTextOnlyAgent) Chat(_ context.Context, _, msg string) (string, error) {
@@ -581,16 +599,16 @@ func (m *mockTextOnlyAgent) Chat(_ context.Context, _, msg string) (string, erro
 func (m *mockTextOnlyAgent) ResetSession(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (m *mockTextOnlyAgent) SetCwd(_ string)               {}
+func (m *mockTextOnlyAgent) SetCwd(_ string)    {}
 func (m *mockTextOnlyAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "text-only", Type: "test"}
 }
 
-func TestChatWithAgentOrImages_ImageSupporter(t *testing.T) {
+func TestChatWithAttachments_Images(t *testing.T) {
 	h := &Handler{}
 	ag := &mockImageAgent{}
 	imgs := []agent.ImageAttachment{{Data: []byte("x"), MediaType: "image/png", Name: "a.png"}}
-	reply, err := h.chatWithAgentOrImages(context.Background(), ag, "conv1", "hello", imgs)
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", imgs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,11 +620,11 @@ func TestChatWithAgentOrImages_ImageSupporter(t *testing.T) {
 	}
 }
 
-func TestChatWithAgentOrImages_TextFallback(t *testing.T) {
+func TestChatWithAttachments_ImageFallback(t *testing.T) {
 	h := &Handler{}
 	ag := &mockTextOnlyAgent{}
 	imgs := []agent.ImageAttachment{{Data: []byte("x"), MediaType: "image/png", Name: "a.png"}}
-	reply, err := h.chatWithAgentOrImages(context.Background(), ag, "conv1", "hello", imgs)
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", imgs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,15 +636,62 @@ func TestChatWithAgentOrImages_TextFallback(t *testing.T) {
 	}
 }
 
-func TestChatWithAgentOrImages_NoImages(t *testing.T) {
+func TestChatWithAttachments_NoAttachments(t *testing.T) {
 	h := &Handler{}
 	ag := &mockImageAgent{}
-	reply, err := h.chatWithAgentOrImages(context.Background(), ag, "conv1", "hello", nil)
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(reply, "text-only:") {
-		t.Errorf("expected Chat path (no images), got %q", reply)
+		t.Errorf("expected Chat path (no attachments), got %q", reply)
+	}
+}
+
+func TestChatWithAttachments_Audio(t *testing.T) {
+	h := &Handler{}
+	ag := &mockAudioAgent{}
+	audio := []agent.AudioAttachment{{Data: []byte("x"), MediaType: "audio/m4a", Name: "voice.m4a"}}
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", nil, audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "with-audio:") {
+		t.Errorf("expected ChatWithAudio path, got %q", reply)
+	}
+	if ag.lastAudio != 1 {
+		t.Errorf("expected 1 audio passed, got %d", ag.lastAudio)
+	}
+}
+
+func TestChatWithAttachments_AudioFallback(t *testing.T) {
+	h := &Handler{}
+	ag := &mockTextOnlyAgent{}
+	audio := []agent.AudioAttachment{{Data: []byte("x"), MediaType: "audio/m4a", Name: "voice.m4a"}}
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", nil, audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "text:") {
+		t.Errorf("expected text-only path, got %q", reply)
+	}
+	if !strings.Contains(reply, "1 voice message(s) were attached") {
+		t.Errorf("expected audio fallback note, got %q", reply)
+	}
+}
+
+func TestChatWithAttachments_AudioPriorityOverImages(t *testing.T) {
+	h := &Handler{}
+	ag := &mockAudioAgent{}
+	imgs := []agent.ImageAttachment{{Data: []byte("x"), MediaType: "image/png", Name: "a.png"}}
+	audio := []agent.AudioAttachment{{Data: []byte("y"), MediaType: "audio/m4a", Name: "voice.m4a"}}
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", imgs, audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Audio should take priority over images when both are present.
+	if !strings.HasPrefix(reply, "with-audio:") {
+		t.Errorf("expected audio path to take priority, got %q", reply)
 	}
 }
 

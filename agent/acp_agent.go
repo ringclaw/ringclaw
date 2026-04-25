@@ -439,15 +439,30 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 	return a.chatWithEntries(ctx, conversationID, []promptEntry{{Type: "text", Text: message}})
 }
 
+// appendMediaEntry appends a base64-encoded media prompt entry to a slice.
+// entryType is the ACP prompt entry type (e.g. "image", "audio").
+func appendMediaEntry(entries []promptEntry, entryType string, data []byte, mimeType string) []promptEntry {
+	return append(entries, promptEntry{
+		Type:     entryType,
+		Data:     base64.StdEncoding.EncodeToString(data),
+		MimeType: mimeType,
+	})
+}
+
 // ChatWithImages sends a message with image attachments to the agent.
 func (a *ACPAgent) ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error) {
 	entries := []promptEntry{{Type: "text", Text: message}}
 	for _, img := range images {
-		entries = append(entries, promptEntry{
-			Type:     "image",
-			Data:     base64.StdEncoding.EncodeToString(img.Data),
-			MimeType: img.MediaType,
-		})
+		entries = appendMediaEntry(entries, "image", img.Data, img.MediaType)
+	}
+	return a.chatWithEntries(ctx, conversationID, entries)
+}
+
+// ChatWithAudio sends a message with audio attachments to the agent.
+func (a *ACPAgent) ChatWithAudio(ctx context.Context, conversationID string, message string, audio []AudioAttachment) (string, error) {
+	entries := []promptEntry{{Type: "text", Text: message}}
+	for _, aud := range audio {
+		entries = appendMediaEntry(entries, "audio", aud.Data, aud.MediaType)
 	}
 	return a.chatWithEntries(ctx, conversationID, entries)
 }
