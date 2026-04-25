@@ -3,7 +3,6 @@ package oob
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 )
@@ -21,8 +20,8 @@ type Client interface {
 // describing the pending challenge. Phase 2b intentionally avoids
 // Adaptive Cards here: RingCentral's WebSocket subscription does not
 // deliver Action.Submit events, so an interactive card would be a
-// one-way display only. The text contains the challenge ID and the
-// two recognised reply shapes.
+// one-way display only. The text instructs the operator to use the
+// terminal CLI for approval.
 //
 // requestedTTL is a human-readable label (e.g. "24h") shown so the
 // operator knows what they are approving; it is not interpreted here.
@@ -42,8 +41,8 @@ func PostChallengePrompt(ctx context.Context, client Client, c *Challenge, reque
 		expiresIn = 0
 	}
 	msg := fmt.Sprintf(
-		"Pending approval: reply `/approval %s` to confirm or `/approval deny %s` to reject. Expires in %s. Requested TTL: %s.",
-		c.ID, c.ID, expiresIn, ttlLabel,
+		"Pending approval (challenge `%s`). Run on the host machine:\n  ringclaw approval %s\n  ringclaw approval deny %s\nExpires in %s. Requested TTL: %s.",
+		c.ID, c.ID, c.ID, expiresIn, ttlLabel,
 	)
 	if err := client.SendText(ctx, c.OwnerDMChat, msg); err != nil {
 		return fmt.Errorf("oob: deliver challenge prompt: %w", err)
@@ -115,82 +114,19 @@ func ParseApprovalReply(text string) ApprovalReply {
 	return ApprovalReply{Kind: ReplyApprove, ChallengeID: strings.ToLower(sub)}
 }
 
-// HandleApprovalReply tries to interpret a DM message as an approval
-// reply and, if recognised, resolves the matching pending challenge.
-// Returns true when the message was consumed (callers must then
-// short-circuit normal agent dispatch so the slash command does not
-// reach the AI).
-//
-// senderID scopes `/approval deny` so a teammate sharing the bot DM
-// cannot cancel another user's pending challenge.
+// HandleApprovalReply intercepts `/approval` messages in the bot DM.
+// Chat-based approval is disabled; the function informs the sender to
+// use the terminal CLI instead and returns true to consume the message.
 func (m *Manager) HandleApprovalReply(ctx context.Context, client Client, dmChatID, senderID, text string) bool {
 	reply := ParseApprovalReply(text)
 	if reply.Kind == ReplyNone {
 		return false
 	}
-	switch reply.Kind {
-	case ReplyApprove:
-		return m.handleApproveReply(ctx, client, dmChatID, senderID, reply)
-	case ReplyDeny:
-		return m.handleDenyReply(ctx, client, dmChatID, senderID, reply)
-	}
-	return false
-}
-
-func (m *Manager) handleApproveReply(ctx context.Context, client Client, dmChatID, senderID string, reply ApprovalReply) bool {
-	c, ok := m.lookupChallenge(reply.ChallengeID)
-	if !ok {
-		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", reply.ChallengeID))
-		return true
-	}
-	if c.RequesterID != senderID && c.OwnerID != senderID {
-		slog.Warn("oob: approval refused for non-requester, non-owner",
-			"component", "oob",
-			"challengeID", reply.ChallengeID,
-			"senderID", senderID,
-			"requesterID", c.RequesterID,
-			"ownerID", c.OwnerID,
-		)
-		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` was issued for a different user.", reply.ChallengeID))
-		return true
-	}
-	if _, err := m.Approve(reply.ChallengeID); err != nil {
-		switch err {
-		case ErrChallengeNotFound:
-			_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", reply.ChallengeID))
-		case ErrChallengeExpired:
-			_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` expired.", reply.ChallengeID))
-		default:
-			slog.Error("oob: approve failed", "component", "oob", "error", err)
-			_ = client.SendText(ctx, dmChatID, "Approval failed: "+err.Error())
-		}
-		return true
-	}
-	return true
-}
-
-func (m *Manager) handleDenyReply(ctx context.Context, client Client, dmChatID, senderID string, reply ApprovalReply) bool {
-	c, ok := m.lookupChallenge(reply.ChallengeID)
-	if !ok {
-		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", reply.ChallengeID))
-		return true
-	}
-	if c.RequesterID != senderID && c.OwnerID != senderID {
-		slog.Warn("oob: deny refused for non-requester, non-owner",
-			"component", "oob",
-			"challengeID", reply.ChallengeID,
-			"senderID", senderID,
-			"requesterID", c.RequesterID,
-			"ownerID", c.OwnerID,
-		)
-		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` was issued for a different user.", reply.ChallengeID))
-		return true
-	}
-	if !m.Deny(reply.ChallengeID) {
-		_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` is not pending.", reply.ChallengeID))
-		return true
-	}
-	_ = client.SendText(ctx, dmChatID, fmt.Sprintf("Challenge `%s` denied.", reply.ChallengeID))
+	_ = client.SendText(ctx, dmChatID,
+		"Approval via chat is disabled for security. Run on the host machine:\n"+
+			"  ringclaw approval <id>       (approve)\n"+
+			"  ringclaw approval deny <id>  (deny)\n"+
+			"  ringclaw approval list       (list pending)")
 	return true
 }
 

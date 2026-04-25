@@ -198,6 +198,21 @@ func (m *Manager) PendingFor(requesterID string) []*Challenge {
 	return out
 }
 
+// Pending returns all non-expired challenges regardless of requester.
+func (m *Manager) Pending() []*Challenge {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	var out []*Challenge
+	for _, c := range m.challenges {
+		if now.After(c.ExpiresAt) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func (m *Manager) lookupChallenge(id string) (*Challenge, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

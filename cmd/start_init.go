@@ -10,6 +10,7 @@ import (
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/messaging"
 	"github.com/ringclaw/ringclaw/messaging/heartbeat"
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/messaging/persona"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
@@ -191,7 +192,7 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 }
 
 // initServices starts the API server, cron scheduler, and heartbeat runner.
-func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *messaging.Handler) {
+func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *messaging.Handler, oobMgr *oob.Manager) {
 	defaultChatID := ""
 	if len(cfg.RC.ChatIDs) > 0 {
 		defaultChatID = cfg.RC.ChatIDs[0]
@@ -210,7 +211,7 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 	if err != nil {
 		slog.Warn("failed to load API token, API will be unauthenticated", "component", "api", "error", err)
 	}
-	apiServer, err := api.NewServer(apiClient, apiAddr, defaultChatID, apiToken)
+	apiServer, err := api.NewServer(apiClient, apiAddr, defaultChatID, apiToken, oobMgr)
 	if err != nil {
 		slog.Error("failed to create API server", "error", err)
 		return

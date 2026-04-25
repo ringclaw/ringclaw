@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ringclaw/ringclaw/messaging"
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -24,6 +25,7 @@ type Server struct {
 	addr          string
 	token         string
 	limiter       *rateLimiter
+	oob           *oob.Manager
 }
 
 // rateLimiter is a simple token bucket per-IP rate limiter.
@@ -75,7 +77,7 @@ func (rl *rateLimiter) allow(ip string) bool {
 }
 
 // NewServer creates an API server.
-func NewServer(client *ringcentral.Client, addr, defaultChatID, token string) (*Server, error) {
+func NewServer(client *ringcentral.Client, addr, defaultChatID, token string, oobMgr *oob.Manager) (*Server, error) {
 	if addr == "" {
 		addr = "127.0.0.1:18011"
 	}
@@ -92,6 +94,7 @@ func NewServer(client *ringcentral.Client, addr, defaultChatID, token string) (*
 		addr:          addr,
 		token:         token,
 		limiter:       newRateLimiter(60, 1*time.Minute),
+		oob:           oobMgr,
 	}, nil
 }
 
@@ -181,6 +184,10 @@ func (s *Server) Run(ctx context.Context) error {
 	// Adaptive Card endpoints
 	mux.HandleFunc("/api/cards", s.middleware(s.handleCards))
 	mux.HandleFunc("/api/cards/", s.middleware(s.handleCardByID))
+
+	// Approval endpoints (terminal-only OOB challenge management)
+	mux.HandleFunc("/api/approvals", s.middleware(s.handleApprovals))
+	mux.HandleFunc("/api/approvals/", s.middleware(s.handleApprovalByID))
 
 	// /health is exempt from auth and rate limiting but still checks host
 	mux.HandleFunc("/health", hostGuard(func(w http.ResponseWriter, r *http.Request) {
@@ -558,3 +565,83 @@ func (s *Server) handleCardByID(w http.ResponseWriter, r *http.Request) {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
+
+// PendingChallenge is the JSON shape returned by GET /api/approvals.
+type PendingChallenge struct {
+	ID          string `json:"id"`
+	Intent      string `json:"intent"`
+	RequesterID string `json:"requester_id"`
+	ExpiresIn   string `json:"expires_in"`
+}
+
+// handleApprovals handles GET /api/approvals — list pending challenges.
+func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.oob == nil {
+		s.jsonReply(w, []PendingChallenge{})
+		return
+	}
+	pending := s.oob.Pending()
+	out := make([]PendingChallenge, 0, len(pending))
+	for _, c := range pending {
+		out = append(out, PendingChallenge{
+			ID:          c.ID,
+			Intent:      c.Intent,
+			RequesterID: c.RequesterID,
+			ExpiresIn:   c.ExpiresAt.Sub(timeNow()).Round(time.Second).String(),
+		})
+	}
+	s.jsonReply(w, out)
+}
+
+// handleApprovalByID handles POST /api/approvals/{id} and POST /api/approvals/{id}/deny.
+func (s *Server) handleApprovalByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.oob == nil {
+		s.jsonError(w, "OOB manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// Path: /api/approvals/{id} or /api/approvals/{id}/deny
+	path := strings.TrimPrefix(r.URL.Path, "/api/approvals/")
+	parts := strings.SplitN(path, "/", 2)
+	id := parts[0]
+	action := ""
+	if len(parts) == 2 {
+		action = parts[1]
+	}
+
+	switch action {
+	case "", "approve":
+		if _, err := s.oob.Approve(id); err != nil {
+			switch err {
+			case oob.ErrChallengeNotFound:
+				s.jsonError(w, "challenge not found or already resolved", http.StatusNotFound)
+			case oob.ErrChallengeExpired:
+				s.jsonError(w, "challenge expired", http.StatusGone)
+			default:
+				s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+		slog.Info("oob: challenge approved via terminal", "challengeID", id)
+		s.jsonReply(w, map[string]string{"status": "approved", "id": id})
+	case "deny":
+		if !s.oob.Deny(id) {
+			s.jsonError(w, "challenge not found or already resolved", http.StatusNotFound)
+			return
+		}
+		slog.Info("oob: challenge denied via terminal", "challengeID", id)
+		s.jsonReply(w, map[string]string{"status": "denied", "id": id})
+	default:
+		s.jsonError(w, "unknown action; use /api/approvals/{id} or /api/approvals/{id}/deny", http.StatusBadRequest)
+	}
+}
+
+// timeNow is a variable so tests can override it.
+var timeNow = time.Now

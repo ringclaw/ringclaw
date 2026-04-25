@@ -129,12 +129,10 @@ func TestRouteOOBApprovalReply_NonApprovalOutsideDMFallsThrough(t *testing.T) {
 	}
 }
 
-// TestRouteOOBApprovalReply_DMApprovesPendingChallenge drives the full
-// Phase 2b path: the manager has a pending challenge, the owner replies
-// `/approval <id>` in the bot DM, and the helper consumes the message
-// and resolves the challenge.
+// TestRouteOOBApprovalReply_DMApprovesPendingChallenge verifies that
+// /approval in chat is consumed but redirected to terminal (not resolved).
 func TestRouteOOBApprovalReply_DMApprovesPendingChallenge(t *testing.T) {
-	srv, bodies, mu := newDMRoutingServer(t)
+	srv, _, _ := newDMRoutingServer(t)
 	bot := ringcentral.NewBotClient(srv.URL, "bot-token")
 	bot.SetDMChatID("dm-1")
 	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
@@ -147,26 +145,29 @@ func TestRouteOOBApprovalReply_DMApprovesPendingChallenge(t *testing.T) {
 	if issueErr != nil {
 		t.Fatalf("Issue: %v", issueErr)
 	}
+
+	// Chat /approval is consumed but does NOT resolve the challenge.
+	if !h.routeOOBApprovalReply(context.Background(), bot, "dm-1", "user-1", "/approval "+c.ID) {
+		t.Fatalf("routeOOBApprovalReply did not consume the /approval message")
+	}
+
+	// Approve via terminal path (Manager.Approve directly).
 	doneCh := make(chan bool, 1)
 	go func() {
 		approved, _ := c.Wait(context.Background(), mgr)
 		doneCh <- approved
 	}()
-
-	if !h.routeOOBApprovalReply(context.Background(), bot, "dm-1", "user-1", "/approval "+c.ID) {
-		t.Fatalf("routeOOBApprovalReply did not consume the /approval message")
+	if _, err := mgr.Approve(c.ID); err != nil {
+		t.Fatalf("Approve: %v", err)
 	}
 	select {
 	case approved := <-doneCh:
 		if !approved {
-			t.Fatalf("expected challenge to be approved")
+			t.Fatalf("expected challenge to be approved via terminal path")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("challenge did not resolve after /approval reply")
+		t.Fatalf("challenge did not resolve after Approve()")
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	_ = bodies
 }
 
 // TestRouteOOBApprovalReply_NonApprovalPassesThrough confirms that
