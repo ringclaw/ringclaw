@@ -23,7 +23,17 @@ sequenceDiagram
     R->>RC: 发送文本回复
     loop 每个 ACTION
         R->>R: 解析类型、参数、chatid
-        alt 指定了 chatid 且发送者不在可信列表
+        alt 指定了 chatid 且发送者不在可信列表 且 OOB 已配置
+            R->>O: Challenge 提示<br/>"待审批 (challenge id).<br/>在主机运行: ringclaw approval id"
+            Note over O,R: Owner 在主机执行 `ringclaw approval id`
+            R->>R: 异步等待终端审批
+            alt 批准
+                R->>RC: 在目标聊天执行 action
+                R->>RC: 通知原聊天
+            else 拒绝 / 超时
+                R->>RC: 通知原聊天
+            end
+        else 指定了 chatid 且发送者不在可信列表 且 OOB 未配置
             R->>R: 静默丢弃 chatid，强制回到 origin chat (WARN 日志)
         end
         alt owner 跨聊天 (target ≠ origin 且 ≠ owner DM)
@@ -63,7 +73,12 @@ ACTION:EVENT title=Sprint 评审 start=2026-04-01T14:00:00Z end=2026-04-01T15:00
 END_ACTION
 ```
 
-ACTION 可通过 `chatid=<id>` 参数定向到其他聊天。非 owner 发送者会静默丢失该覆盖（action 强制回到 origin chat）。owner 发起的跨聊天派发会经过 **同步 fail-closed audit notice**（通过 owner 私聊确认）——完整门控规则见 [安全 › 第二层](../security/index.md#第二层-ai-驱动的-action-派发)。无需额外配置 — ACTION 提示词会自动注入。
+ACTION 可通过 `chatid=<id>` 参数定向到其他聊天。
+
+- **非 owner 发送者**：OOB 已配置时（Private App + owner 私聊已解析），系统向 owner 私聊发送 challenge 提示，owner 需在主机上执行 `ringclaw approval <id>` 批准。批准后 action 异步在目标聊天执行。OOB 未配置时回退为静默丢弃（强制回到 origin chat）。
+- **owner 发起的跨聊天**：派发前经过**同步 fail-closed audit notice**（通过 owner 私聊确认）——完整门控规则见 [安全 › 第二层](../security/index.md#第二层-ai-驱动的-action-派发)。
+
+无需额外配置 — ACTION 提示词会自动注入。
 
 ## 任务命令
 

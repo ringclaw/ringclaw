@@ -36,9 +36,12 @@ acceptable failure mode.
 Trust assumption: an attacker with a foothold inside RingCentral
 (account compromise, prompt injection in a bot DM, malicious
 teammate impersonating the owner) does **not** simultaneously have
-shell access to the host running RingClaw. The owner's DM with the
-bot — reachable only by the Phase 1 trusted-sender allowlist — is
-treated as the secured channel for confirmations and audit.
+shell access to the host running RingClaw. All OOB approvals
+(`/full-access grant` and non-owner cross-chat ACTIONs) require
+running `ringclaw approval <id>` on the host machine — approval
+authority is decoupled from the RC account. A compromised RC account
+can see the challenge ID in the DM notification but cannot execute
+the approval without host machine access.
 
 ### Phase 2 surfaces — added
 
@@ -51,7 +54,7 @@ explicitly re-grants.
 |---|---|---|---|---|---|
 | Owner cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` | runtime behavior | `messaging/actions.go` | Honored unconditionally; `WARN action: owner cross-chat dispatch` audit log only | **Synchronous fail-closed pre-dispatch notice.** Before the action is dispatched, a metadata-only heads-up is posted to the owner DM when the target chat differs from the origin AND from the owner's own DM. The notice carries `TYPE`, `requesterID`, RFC3339 timestamp, `originChatID`, `targetChatID` — no body, title, or content preview. If the owner DM is not configured or the notice send fails, **the cross-chat action is refused** (caller receives `Refused cross-chat <TYPE>: …`). | Tune `crossChatNoticeTimeout` in `messaging/actions.go` (currently 5 s). The notice target (`OwnerDMChat`) is derived from the bot DM; it cannot be pointed elsewhere. |
 | `/full-access` slash command | runtime command | bot DM with the owner | _did not exist_ | **New.** `status` / `grant [duration]` / `revoke`. `grant` is a two-step confirmation: the bot issues a short-lived challenge ID, posts a plain-text `/approval` prompt to the owner DM, and only activates the grant after the owner replies `/approval <id>`. While a grant is active, each newly-created ACP session is flipped into `session/set_mode "full-access"`. When the grant is revoked (explicitly or by TTL expiry), **every live ACP session is also demoted back to `set_mode "default"`** via a revoke hook — sessions whose demote call fails are dropped from the session map so the next prompt rebuilds them in the locked-down mode. | **Default grant 1 day**, hard cap **30 days**. Oversized inputs are silently clamped. Durations are parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`). Restricted to the owner DM; group-chat invocations are refused. |
-| `/approval <id>` / `/approval deny <id>` | slash command | bot DM with the owner | _did not exist_ | **New.** Canonical reply shape for pending challenges. 8-char hex `<id>`; `/approval deny <id>` explicitly rejects. Non-requester replies are refused with a plain-text message so a teammate sharing the DM cannot cancel another user's pending challenge. Replies never reach the AI agent. | n/a |
+| `/approval <id>` / `/approval deny <id>` | slash command | bot DM with the owner | _did not exist_ | **New, terminal-only.** Any `/approval ...` message in the bot DM is consumed and the sender is redirected to the terminal CLI: `ringclaw approval <id>` (approve) or `ringclaw approval deny <id>` (deny). Chat-based approval is **disabled for security** — approval requires running the CLI on the host machine, decoupling the approval authority from the RC account. Replies never reach the AI agent. | n/a |
 | `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` honored at startup when the top-level `full_access_ack: true` is also set in `config.json`; otherwise downgraded with a `WARN` | **Unchanged** for the static path. In addition, an active `/full-access` grant overlays it dynamically — new ACP sessions read the TTL state on every creation, so a grant takes effect without restarting and naturally drops back to guarded mode when it expires. The per-session log line now carries a `source` field (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`) for audit. | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
 
 ### Before / after impact for operators
@@ -82,7 +85,8 @@ small amount of in-memory conversation context may be lost).
 |---|---|---|
 | Owner asks AI for a cross-chat MESSAGE / CARD / TASK / NOTE | Action runs immediately; `WARN action: owner cross-chat dispatch` audit log only | Bot first posts `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` to the owner DM (when target ≠ origin and target ≠ owner DM). Only if that pre-notice succeeds does the action run on the target chat. |
 | Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | Refused (unchanged). |
-| Operator wants ACP full-access for one task | Must ship `full_access: true` + `full_access_ack: true` in `config.json` and restart, then remember to revert | Leave `full_access: false`. In the bot DM, run `/full-access grant 30m` — bot replies `Full-access grant requested. Confirm via /approval in owner DM.` and posts `Pending approval: reply /approval <id> to confirm or /approval deny <id> to reject. Expires in 5 min. Requested TTL: 30m.`. Owner replies `/approval <id>`. Bot confirms `Full-access granted until <RFC3339 expiry>.` and the ACP agent runs unlocked for 30 min. |
+| Operator wants ACP full-access for one task | Must ship `full_access: true` + `full_access_ack: true` in `config.json` and restart, then remember to revert | Leave `full_access: false`. In the bot DM, run `/full-access grant 30m` — bot replies `Full-access grant requested. Confirm via terminal.` and posts `Pending approval (challenge <id>). Run on the host machine: ringclaw approval <id>`. Owner runs `ringclaw approval <id>` on the host. Bot confirms `Full-access granted until <RFC3339 expiry>.` and the ACP agent runs unlocked for 30 min. |
+| Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | **OOB challenge issued** (when OOB configured): bot posts challenge prompt to owner DM; owner runs `ringclaw approval <id>` on host; on approval action executes in target chat. Falls back to silent drop when OOB not configured. |
 | Operator wants default-length full-access | n/a | `/full-access grant` → **24 h** (1 day). Cap is 30 days. |
 | Operator wants to revoke | n/a | `/full-access revoke` — clears the grant AND immediately demotes every live session back to `set_mode "default"`. |
 | OOB not configured (owner DM cannot be resolved) | n/a | `/full-access` returns "OOB approval is not configured". **Owner cross-chat actions are refused** with `Refused cross-chat <TYPE>: no owner DM audit channel configured` (logged as `WARN action: cross-chat ACTION refused (fail-closed on pre-notice)`). |
@@ -92,11 +96,11 @@ small amount of in-memory conversation context may be lost).
 
 | Event | Log line | Purpose |
 |---|---|---|
-| Challenge issued (e.g. `/full-access grant`) | `INFO oob: challenge issued` (`challengeID`, `requesterID`, `intent`, `ttl`) | Track every `/approval` prompt, including ones that timed out unanswered. |
-| Challenge approved | `INFO oob: challenge approved` | Audit who approved what and when. |
-| Challenge denied | `INFO oob: challenge denied` | Counterpart to approval log line. |
-| Approval refused (non-requester) | `WARN oob: approval refused for non-requester` | Defense-in-depth — only the original requester can confirm their own challenge. |
-| `/approval deny` refused (non-requester) | `WARN oob: deny refused for non-requester` | Same invariant for denials. |
+| Challenge issued (e.g. `/full-access grant`, non-owner cross-chat ACTION) | `INFO oob: challenge issued` (`challengeID`, `requesterID`, `intent`, `ttl`) | Track every approval prompt, including ones that timed out unanswered. |
+| Challenge approved (via terminal) | `INFO oob: challenge approved via terminal` (`challengeID`) | Audit who approved what and when. |
+| Challenge denied (via terminal) | `INFO oob: challenge denied via terminal` (`challengeID`) | Counterpart to approval log line. |
+| Chat `/approval` intercepted (redirected to terminal) | `INFO oob: chat approval intercepted, redirected to terminal` | Defense-in-depth — chat-based approval is disabled; any attempt is logged and redirected. |
+| Cross-chat OOB approved — action executed | `INFO action: cross-chat OOB approved - <created note/task/message/…>` (`chatID`, details) | Confirms the action ran after terminal approval. |
 | Full-access granted | `WARN oob: ACP full-access granted` (`ttl`, `expiresAt`) | Separate from the per-session `WARN ACP session granted full-access` line. |
 | Full-access revoked | `WARN oob: ACP full-access revoked` | Triggered by `/full-access revoke` or by re-grant. |
 | Full-access expired (TTL) | `WARN oob: ACP full-access expired (TTL reached)` | Fires proactively when the grant's `expiresAt` is reached, before any caller polls `FullAccessActive`. |
@@ -263,27 +267,35 @@ in `config.json` and unlock full-access on demand from the bot DM:
 /full-access revoke         # immediately lock again
 ```
 
-The grant flow is a two-step confirmation in the owner DM:
+The grant flow is a two-step confirmation requiring host machine access:
 
 1. Owner sends `/full-access grant [duration]`. Bot replies
-   immediately with `Full-access grant requested. Confirm via /approval in owner DM.`
-   and posts a prompt with a short-lived challenge ID:
-   `Pending approval: reply /approval <id> to confirm or /approval deny <id> to reject. Expires in 5 min. Requested TTL: <duration>.`.
-2. Owner replies `/approval <id>` to activate or `/approval deny <id>`
-   to reject. On approval the bot responds
-   `Full-access granted until <RFC3339 expiry>.`; on denial or expiry
-   the grant does not take effect.
+   immediately with `Full-access grant requested. Confirm via terminal.`
+   and posts a prompt to the owner DM with a short-lived challenge ID:
+   `Pending approval (challenge <id>). Run on the host machine: ringclaw approval <id>`.
+2. Owner runs `ringclaw approval <id>` on the host machine (or
+   `ringclaw approval deny <id>` to reject). On approval the bot
+   responds `Full-access granted until <RFC3339 expiry>.`; on denial
+   or expiry the grant does not take effect.
+
+**Chat-based `/approval` is disabled.** Any `/approval ...` message
+in the bot DM is consumed and redirected to the terminal CLI. This
+decouples approval authority from the RC account — a compromised
+account cannot approve without host machine access.
 
 Constraints:
 
-- Only the bot's DM with the trusted owner accepts `/full-access` and
-  `/approval`. Group-chat invocations are refused with an explanatory
-  message so the round-trip stays on the secured channel.
+- Only the bot's DM with the trusted owner accepts `/full-access`.
+  Group-chat invocations are refused with an explanatory message so
+  the round-trip stays on the secured channel.
 - Default grant duration is **24 hours**; the maximum is capped at
   **30 days**. Oversized inputs are silently clamped. Durations are
   parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`).
-- Non-requester approvals are refused — a teammate who also sees the
-  DM cannot poke at another user's pending challenge.
+- **Approval requires host machine access.** `ringclaw approval <id>`
+  calls the local API server (`127.0.0.1:18011`, loopback-only,
+  token-authenticated). A compromised RC account can see the challenge
+  ID in the DM but cannot approve without SSH or physical access to
+  the host.
 - Once granted, every newly-created ACP session is flipped into
   `session/set_mode "full-access"` until the grant expires or
   `/full-access revoke` is called. All OOB state is in-memory and is
@@ -304,7 +316,47 @@ Constraints:
   `set_mode "full-access"` call is in flight, the agent immediately
   compensates with `set_mode "default"`.
 
-### Phase 2 — Cross-chat heads-up notices (fail-closed)
+### Phase 2 — Non-owner cross-chat OOB challenge
+
+Non-owner senders who trigger a cross-chat ACTION (with `chatid=` targeting
+a different chat) now enter an OOB approval flow instead of being silently
+dropped:
+
+```text
+Non-owner user @bot → AI reply includes ACTION: MESSAGE chatid=<other-chat>
+  ↓
+Bot posts challenge prompt to owner DM:
+  "Pending approval (challenge abc12345).
+   Run on the host machine:
+     ringclaw approval abc12345
+     ringclaw approval deny abc12345
+   Expires in 5m."
+  ↓
+Owner runs: ringclaw approval abc12345
+  ↓
+Approved → action executes asynchronously in target chat → origin chat notified
+Denied / expired → origin chat notified
+```
+
+**Fallback**: when OOB is not configured (no Private App, no owner DM
+resolved, or `OwnerID` empty), the legacy silent-override behavior is
+preserved — `chatid=` is dropped and the action runs in the origin chat.
+
+**Terminal-only approval**: the challenge ID is delivered via DM so the
+owner knows a request is pending, but the approval itself requires running
+`ringclaw approval <id>` on the host machine. A compromised RC account can
+see the challenge ID but cannot approve without host access.
+
+### Phase 2 — Terminal approval CLI
+
+```bash
+ringclaw approval <id>          # approve a pending challenge
+ringclaw approval deny <id>     # deny a pending challenge
+ringclaw approval list          # list all pending challenges
+```
+
+Reads `~/.ringclaw/api_token`, calls `127.0.0.1:18011` (loopback-only,
+token-authenticated). Requires access to the host machine running ringclaw.
 
 Owner-initiated cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` actions
 are gated on a **synchronous pre-dispatch notice**. When the target
@@ -469,7 +521,7 @@ see the "DM is the trust boundary" warning above.
 | Summarize (NL trigger, e.g. "总结", "summarize") | ✅ (needs Private App) | ❌ | ⚠️ configured group only | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
 | Summarize without Private App | ❌ disabled | n/a | ❌ disabled | ❌ disabled | `handler_summarize.go:76` |
 | `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌ (owner-only, DM-only) | ❌ (DM-only) | ❌ (DM-only) | `handler_fullaccess.go:62-67` |
-| `/approval <id>` / `/approval deny <id>` | ✅ ⚠️ (requester only) | ⚠️ only consumed if the sender is the original requester | ❌ refused with explanatory message | ❌ refused with explanatory message | `handler.go:603-628` + `oob/authorize.go:126` |
+| `/approval <id>` / `/approval deny <id>` | ✅ consumed; redirected to terminal (`ringclaw approval <id>`) | ✅ consumed; redirected to terminal | ❌ refused with explanatory message | ❌ refused with explanatory message | `handler.go:603-628` + `oob/authorize.go:118-132` |
 | `/mem add [user\|chat\|global] <text>` | ✅ | ❌ | ✅ | ❌ | `handler_persona.go` + `handler_commands.go` privileged gate |
 | `/mem del [scope] [confirm]` | ✅ | ❌ | ✅ | ❌ | same as `/mem add`; two-phase confirmation |
 | `/mem show [scope]` | ✅ | ✅ | ✅ | ✅ | read-only, unprivileged |
@@ -479,7 +531,7 @@ Extra checks:
 
 - `/cwd` — the absolute path must land inside `agent_allow_workspace_list ∪ agent_workspace ∪ ~/.ringclaw/workspace` AND must not contain any of the denylisted directories (`.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`). Both checks run regardless of full-access state.
 - `/full-access grant [duration]` — only activates after the owner replies `/approval <id>`. Challenge TTL 5 min, default grant 24 h, max 30 d.
-- `/approval` — only the original requester may resolve their own challenge (`oob/authorize.go:146-154`). A `/approval ...` shape posted outside the bot DM is intercepted with an explicit refusal (`` `/approval` is only recognized in the bot DM with the owner.``) so the syntax never leaks into a default-agent prompt.
+- `/approval` — any `/approval ...` message in the bot DM is consumed and redirected to the terminal CLI with instructions (`oob/authorize.go:118-132`). Approval requires running `ringclaw approval <id>` on the host machine. A `/approval ...` shape posted outside the bot DM is intercepted with an explicit refusal so the syntax never leaks into a default-agent prompt.
 - Summarize in group — only the group whose ID matches `ringcentral.group_summary_group_id`; cross-group / cross-person summarize refused (`handler_summarize.go:84-115`).
 - `/mem add` and `/mem del` — Layer 1 privileged (same gate as `/cron`). All memory file writes land strictly under `persona.memory_dir`; hostile chat/user IDs cannot escape the tree because IDs go through `SanitizeID` before being used as filenames. See [Configuration › persona](../guide/configuration.md#persona) for the scope layout.
 - `/mem del` without the trailing `confirm` token never clears memory; the first call prints the resolved file path, current size and a tail preview so the operator can verify they are targeting the right scope before re-sending with `confirm`. `/mem del confirm` does **not** reset agent sessions — the persona banner is rebuilt from disk on the next message, but in-flight sessions still hold the old memory in their context. Run `/new` after a clear if you want the live agent to drop the old context too.
@@ -520,7 +572,7 @@ User: "这个讨论的摘要发到 #engineering 频道"
 | Scenario | Behavior | Gate |
 |---|---|---|
 | ACTION in the origin chat (any sender) | ✅ always allowed | `actions.go:166-310` |
-| `chatid=` override; requester is **not** on the trusted-sender allowlist | ⚠️ `chatid` silently dropped, forced back to origin chat (`WARN action: ignoring chatid override from non-owner sender`) | `actions.go:172-184` |
+| `chatid=` override; requester is **not** on the trusted-sender allowlist | ⚠️ **OOB challenge issued** when OOB is configured (Private App + owner DM resolved): bot posts a challenge prompt to the owner DM; owner approves via `ringclaw approval <id>` on the host; on approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. | `actions.go:177-193`; `crossChatOOBChallenge` at `actions.go:401` |
 | `chatid=` override by owner; target = origin chat | ✅ allowed (same as row 1) | — |
 | `chatid=` override by owner; target = owner's own DM | ✅ allowed without audit notice | `actions.go:195` (guard) |
 | `chatid=` override by owner; target ≠ origin AND target ≠ owner DM | 🔒 **fail-closed**: bot first posts `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` to the owner DM; if the notice succeeds within `crossChatNoticeTimeout` (5 s) the action dispatches, otherwise it is **refused** with `Refused cross-chat <TYPE>: …` | `actions.go:195-203`; `announceCrossChatOrRefuse` at `actions.go:329-357` |
