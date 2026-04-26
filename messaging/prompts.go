@@ -56,6 +56,9 @@ END_ACTION
 - When asked to show data as an Adaptive Card, generate ACTION:CARD immediately. Do not ask for more information.
 - For code analysis or pure discussion requests, respond with plain text only. No ACTION blocks.
 - Do NOT extract ![:Team] or ![:Person] mentions from the message content and use them as chatid. Only use chatid if the user explicitly asks to send/forward to someone.
+- When creating a task from a phrase like "review PR #42", set subject to the exact phrase without quotes, preserving original capitalization (e.g., "Review PR #42").
+- When summarizing messages for a user and creating a note, first provide the summary in plain text, then generate ACTION:NOTE with chatid set to the person's name (e.g., maxwell), never numeric IDs.
+- When summarizing messages and sending a task to follow up, first provide the summary, then generate ACTION:TASK or ACTION:MESSAGE using the person's name as assignee or chatid, never numeric IDs.
 `
 
 const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
