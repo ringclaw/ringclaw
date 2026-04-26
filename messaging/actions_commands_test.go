@@ -800,19 +800,26 @@ func TestParseActionParams(t *testing.T) {
 }
 
 // --- selectCardClient tests ---
+//
+// Empirically (spike against the live RingCentral instance) the Private
+// App is allowed to POST adaptive cards into the bot's own DM. We
+// therefore prefer the Private App across the board, so the card's
+// creator matches the human owner — the same identity NOTE / TASK /
+// EVENT actions already use. Bot is only used as a last-resort fallback
+// when no Private App is configured.
 
-func TestSelectCardClient_BotDM(t *testing.T) {
+func TestSelectCardClient_PrefersPrivateAppInBotDM(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
 	botClient.SetDMChatID("dm-1")
 	privateClient := ringcentral.NewBotClient("http://localhost", "private-token")
 
 	selected := selectCardClient(botClient, privateClient, "dm-1")
-	if selected != botClient {
-		t.Error("expected bot client for DM chat")
+	if selected != privateClient {
+		t.Error("expected private client even for bot DM (Private App may post cards there)")
 	}
 }
 
-func TestSelectCardClient_NonDM(t *testing.T) {
+func TestSelectCardClient_PrefersPrivateAppInGroup(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
 	botClient.SetDMChatID("dm-1")
 	privateClient := ringcentral.NewBotClient("http://localhost", "private-token")
@@ -823,11 +830,15 @@ func TestSelectCardClient_NonDM(t *testing.T) {
 	}
 }
 
-func TestSelectCardClient_NilActionClient(t *testing.T) {
+func TestSelectCardClient_FallsBackToBotWhenNoPrivateApp(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
-	selected := selectCardClient(botClient, nil, "group-1")
-	if selected != botClient {
-		t.Error("expected bot client when action client is nil")
+	botClient.SetDMChatID("dm-1")
+
+	if got := selectCardClient(botClient, nil, "dm-1"); got != botClient {
+		t.Error("expected bot client in DM when action client is nil")
+	}
+	if got := selectCardClient(botClient, nil, "group-1"); got != botClient {
+		t.Error("expected bot client in group when action client is nil")
 	}
 }
 

@@ -134,10 +134,16 @@ func resolveAssigneeParam(ctx context.Context, client *ringcentral.Client, raw s
 }
 
 // selectCardClient picks the right client for adaptive card creation.
-func selectCardClient(replyClient, actionClient *ringcentral.Client, targetChat string) *ringcentral.Client {
-	if replyClient != nil && replyClient.IsBot() && replyClient.IsBotDM(targetChat) {
-		return replyClient
-	}
+//
+// Always prefer the Private App (actionClient) when one is configured —
+// this includes the bot's own DM. The Private App is empirically allowed
+// to POST /chats/{botDM}/adaptive-cards (verified by spike) and posting
+// it under the user's identity is consistent with how NOTE / TASK /
+// EVENT actions already behave: the user owns the artefact.
+//
+// We only fall back to replyClient (the Bot) when no Private App is
+// configured at all.
+func selectCardClient(replyClient, actionClient *ringcentral.Client, _ string) *ringcentral.Client {
 	if actionClient != nil {
 		return actionClient
 	}
