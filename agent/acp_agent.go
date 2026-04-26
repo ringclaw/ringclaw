@@ -68,10 +68,11 @@ type ACPAgent struct {
 	notifyMu sync.Mutex
 	notifyCh map[string]chan *sessionUpdate // sessionID -> channel
 
-	stderr         *acpStderrWriter
-	droppedUpdates atomic.Int64
-	loggedMethods  sync.Map
-	termMgr        *terminalManager
+	stderr             *acpStderrWriter
+	droppedUpdates     atomic.Int64
+	loggedMethods      sync.Map
+	termMgr            *terminalManager
+	setModeUnsupported atomic.Bool // set when agent rejects session/set_mode (e.g. claude-agent-acp)
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
@@ -600,12 +601,23 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 		} else if a.fullAccess && dynGrant {
 			grantSource = "config:full_access+oob"
 		}
+		if a.setModeUnsupported.Load() {
+			slog.Debug("set_mode unsupported by agent, skipping full-access grant",
+				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "source", grantSource)
+			return sessionResult.SessionID, true, nil
+		}
 		if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
 			"sessionId": sessionResult.SessionID,
 			"modeId":    "full-access",
 		}); err != nil {
-			slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
-				"component", "acp", "session", sessionResult.SessionID, "source", grantSource, "error", err)
+			if isSetModeUnsupportedErr(err) {
+				a.setModeUnsupported.Store(true)
+				slog.Warn("set_mode full-access not supported by this agent; will skip on subsequent sessions (per-call approval still applies)",
+					"component", "acp", "command", a.command, "session", sessionResult.SessionID, "source", grantSource, "error", err)
+			} else {
+				slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
+					"component", "acp", "session", sessionResult.SessionID, "source", grantSource, "error", err)
+			}
 		} else {
 			slog.Warn("ACP session granted full-access (MCP guardrails disabled for this session)",
 				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "conversation", conversationID, "source", grantSource)
@@ -739,6 +751,11 @@ func (a *ACPAgent) demoteFullAccessSessions(ctx context.Context) {
 	if len(snapshot) == 0 {
 		return
 	}
+	if a.setModeUnsupported.Load() {
+		slog.Debug("acp demote: set_mode unsupported by agent, nothing to demote",
+			"component", "acp", "command", a.command, "sessions", len(snapshot))
+		return
+	}
 
 	for convID, sid := range snapshot {
 		callCtx, cancel := context.WithTimeout(ctx, acpDemoteRPCTimeout)
@@ -762,6 +779,21 @@ func (a *ACPAgent) demoteFullAccessSessions(ctx context.Context) {
 			"component", "acp", "command", a.command,
 			"session", sid, "conversation", convID)
 	}
+}
+
+// isSetModeUnsupportedErr reports whether an error from session/set_mode
+// indicates the agent does not support custom modes (e.g. claude-agent-acp
+// returns "Invalid Mode"). When true, the caller should cache the result
+// and skip future set_mode calls for this agent process.
+func isSetModeUnsupportedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid mode") ||
+		strings.Contains(msg, "unknown mode") ||
+		strings.Contains(msg, "method not found") ||
+		strings.Contains(msg, "unsupported mode")
 }
 
 func extractPromptResultText(result json.RawMessage) string {
