@@ -76,7 +76,7 @@ func cronList(store *CronStore) string {
 		}
 		sb.WriteString(fmt.Sprintf("**%s** [%s] (%s)\n", j.Name, j.ID, status))
 		sb.WriteString(fmt.Sprintf("  Schedule: `%s`\n", j.Schedule))
-		sb.WriteString(fmt.Sprintf("  Message: %s\n", truncateStr(j.Message, 60)))
+		sb.WriteString(fmt.Sprintf("  Message: %s\n", j.Message))
 		sb.WriteString(fmt.Sprintf("  Next: %s | Last: %s | Runs: %d\n\n", next, lastRun, j.State.RunCount))
 	}
 	return sb.String()
