@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -268,5 +269,49 @@ func TestAcpStderrWriter_MultipleWrites(t *testing.T) {
 	got := w.LastError()
 	if got != "error 2" {
 		t.Errorf("expected 'error 2', got %q", got)
+	}
+}
+
+func TestAcpStderrWriter_SkipsBraceOnlyLines(t *testing.T) {
+	// Mirrors the multi-line dump claude-agent-acp prints when set_mode
+	// fails: a closing `}` on its own line must not displace the actual
+	// error detail line.
+	w := &acpStderrWriter{prefix: "test"}
+	dump := "Error handling request {\n" +
+		"  jsonrpc: '2.0',\n" +
+		"  method: 'session/set_mode',\n" +
+		"} {\n" +
+		"  code: -32603,\n" +
+		"  data: { details: 'Invalid Mode' }\n" +
+		"}\n"
+	w.Write([]byte(dump))
+
+	got := w.LastError()
+	if got != "Error handling request {" {
+		t.Errorf("expected first non-indented non-structural line, got %q", got)
+	}
+}
+
+func TestIsStructuralOnly(t *testing.T) {
+	cases := map[string]bool{
+		"":                   false,
+		"{":                  true,
+		"}":                  true,
+		"} {":                true,
+		"},":                 true,
+		"[":                  true,
+		"]":                  true,
+		"{}":                 true,
+		"  }":                true,
+		"Error":              false,
+		"data: 'x'":          false,
+		"Invalid Mode":       false,
+		"Error handling {":   false,
+	}
+	for input, want := range cases {
+		got := isStructuralOnly(strings.TrimSpace(input))
+		if got != want {
+			t.Errorf("isStructuralOnly(%q) = %v, want %v", input, got, want)
+		}
 	}
 }

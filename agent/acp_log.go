@@ -90,15 +90,42 @@ func (w *acpStderrWriter) Write(p []byte) (int, error) {
 	lines := strings.Split(strings.TrimRight(string(p), "\n"), "\n")
 	w.mu.Lock()
 	for _, line := range lines {
-		if line != "" {
-			slog.Debug("subprocess stderr", "prefix", w.prefix, "line", line)
-			if !strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "Traceback") && !strings.HasPrefix(line, "...") {
-				w.last = line
-			}
+		if line == "" {
+			continue
 		}
+		slog.Debug("subprocess stderr", "prefix", w.prefix, "line", line)
+		if strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "Traceback") || strings.HasPrefix(line, "...") {
+			continue
+		}
+		// Skip pure brace/bracket structural lines from JSON-style multi-line
+		// error dumps (e.g. claude-agent-acp prints `} {`, `}` on their own
+		// lines). Without this filter LastError() captures the trailing `}`
+		// instead of the actual `details: 'Invalid Mode'` line.
+		trimmed := strings.TrimSpace(line)
+		if isStructuralOnly(trimmed) {
+			continue
+		}
+		w.last = line
 	}
 	w.mu.Unlock()
 	return len(p), nil
+}
+
+// isStructuralOnly returns true for lines that consist solely of structural
+// JSON-ish punctuation such as `{`, `}`, `} {`, `},`, `[`, `]`.
+func isStructuralOnly(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch r {
+		case '{', '}', '[', ']', ' ', '\t', ',':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // LastError returns the last captured error line and resets it.
