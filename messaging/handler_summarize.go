@@ -167,29 +167,7 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 	}
 
 	sendReply := func(reply string) {
-		// When the agent's response is entirely consumed by ACTION blocks
-		// (e.g. ACTION:NOTE ... END_ACTION with no surrounding text),
-		// `reply` is empty. Avoid replacing "Thinking..." with an empty
-		// post; delete the placeholder so the chat stays clean and the
-		// ACTION result message stands on its own.
-		if strings.TrimSpace(reply) == "" {
-			if placeholderID != "" {
-				if err := replyClient.DeletePost(ctx, chatID, placeholderID); err != nil {
-					slog.Error("failed to delete empty placeholder", "component", "summarize", "error", err)
-				} else {
-					slog.Info("deleted empty placeholder", "component", "summarize", "postID", placeholderID)
-				}
-			}
-			return
-		}
-		if placeholderID != "" {
-			if err := UpdatePostText(ctx, replyClient, chatID, placeholderID, reply); err != nil {
-				slog.Error("failed to update placeholder", "component", "handler", "error", err)
-				logSendError(SendTextReply(ctx, replyClient, chatID, reply))
-			}
-		} else {
-			logSendError(SendTextReply(ctx, replyClient, chatID, reply))
-		}
+		FinalizeReply(ctx, replyClient, chatID, placeholderID, reply, "summarize")
 	}
 
 	prompt, err := BuildSummaryPrompt(ctx, readClient, req)
