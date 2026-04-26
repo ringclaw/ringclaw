@@ -885,6 +885,76 @@ func TestHandlePermissionRequest(t *testing.T) {
 	}
 }
 
+func TestHandlePermissionRequest_FallbackToFirstOption(t *testing.T) {
+	stdinReader, stdinWriter := io.Pipe()
+
+	a := &ACPAgent{
+		stdin: stdinWriter,
+	}
+
+	var response string
+	done := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(stdinReader)
+		if scanner.Scan() {
+			response = scanner.Text()
+		}
+		close(done)
+	}()
+
+	// No option has kind="allow"; should fall back to first option's ID
+	raw := `{"jsonrpc":"2.0","id":6,"method":"session/request_permission","params":{"toolCall":{},"options":[{"optionId":"approve-all","name":"Approve All","kind":"approve"},{"optionId":"deny","name":"Deny","kind":"deny"}]}}`
+	a.handlePermissionRequest(raw)
+
+	stdinWriter.Close()
+	<-done
+
+	var resp rpcResponseOut
+	if err := json.Unmarshal([]byte(response), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	resultBytes, _ := json.Marshal(resp.Result)
+	if !strings.Contains(string(resultBytes), "approve-all") {
+		t.Errorf("expected fallback to first option 'approve-all', got %s", string(resultBytes))
+	}
+}
+
+func TestHandlePermissionRequest_EmptyOptions(t *testing.T) {
+	stdinReader, stdinWriter := io.Pipe()
+
+	a := &ACPAgent{
+		stdin: stdinWriter,
+	}
+
+	var response string
+	done := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(stdinReader)
+		if scanner.Scan() {
+			response = scanner.Text()
+		}
+		close(done)
+	}()
+
+	// Empty options array; should fall back to hardcoded "allow"
+	raw := `{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"toolCall":{},"options":[]}}`
+	a.handlePermissionRequest(raw)
+
+	stdinWriter.Close()
+	<-done
+
+	var resp rpcResponseOut
+	if err := json.Unmarshal([]byte(response), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	resultBytes, _ := json.Marshal(resp.Result)
+	if !strings.Contains(string(resultBytes), `"allow"`) {
+		t.Errorf("expected fallback to 'allow', got %s", string(resultBytes))
+	}
+}
+
 func TestSendResponse(t *testing.T) {
 	stdinReader, stdinWriter := io.Pipe()
 	a := &ACPAgent{stdin: stdinWriter}
