@@ -231,6 +231,13 @@ type ImageAttachment struct {
 	Name      string
 }
 
+// AudioAttachment holds a downloaded audio file for voice input.
+type AudioAttachment struct {
+	Data      []byte
+	MediaType string // e.g. "audio/m4a"
+	Name      string
+}
+
 // Agent is the interface for AI chat agents.
 type Agent interface {
 	// Chat sends a message to the agent and returns the response.
@@ -253,4 +260,9 @@ type Agent interface {
 // ImageSupporter is an optional interface for agents that support image input.
 type ImageSupporter interface {
 	ChatWithImages(ctx context.Context, conversationID string, message string, images []ImageAttachment) (string, error)
+}
+
+// AudioSupporter is an optional interface for agents that support audio/voice input.
+type AudioSupporter interface {
+	ChatWithAudio(ctx context.Context, conversationID string, message string, audio []AudioAttachment) (string, error)
 }

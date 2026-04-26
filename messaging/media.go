@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -199,4 +200,66 @@ func stripQuery(rawURL string) string {
 		return rawURL[:i]
 	}
 	return rawURL
+}
+
+const maxImages = 5
+
+var imageMediaTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+	"image/jpg":  true,
+}
+
+func extractImageAttachments(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) []agent.ImageAttachment {
+	var images []agent.ImageAttachment
+	for _, att := range post.Attachments {
+		if len(images) >= maxImages {
+			break
+		}
+		if att.ContentURI == "" {
+			continue
+		}
+		mt := att.MediaType
+		if mt == "" {
+			mt = inferMediaType(att.Name)
+		}
+		if !imageMediaTypes[mt] {
+			continue
+		}
+		data, detectedMT, err := client.DownloadAttachment(ctx, att.ContentURI)
+		if err != nil {
+			slog.Error("failed to download attachment", "component", "handler", "id", att.ID, "error", err)
+			continue
+		}
+		if detectedMT != "" && !imageMediaTypes[detectedMT] {
+			continue
+		}
+		if detectedMT != "" {
+			mt = detectedMT
+		}
+		images = append(images, agent.ImageAttachment{
+			Data:      data,
+			MediaType: mt,
+			Name:      att.Name,
+		})
+		slog.Info("downloaded image attachment", "component", "handler", "id", att.ID, "name", att.Name, "size", len(data))
+	}
+	return images
+}
+
+func inferMediaType(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".png"):
+		return "image/png"
+	case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(lower, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(lower, ".webp"):
+		return "image/webp"
+	}
+	return ""
 }
