@@ -72,7 +72,21 @@ type ACPAgent struct {
 	droppedUpdates     atomic.Int64
 	loggedMethods      sync.Map
 	termMgr            *terminalManager
-	setModeUnsupported atomic.Bool // set when agent rejects session/set_mode (e.g. claude-agent-acp)
+	setModeUnsupported atomic.Bool  // set when agent rejects session/set_mode (e.g. claude-agent-acp)
+	promptCaps         atomic.Value // holds *acpPromptCaps; populated from initialize result
+}
+
+// acpPromptCaps captures the agent's advertised prompt capabilities so
+// the handler can decide at runtime whether to forward image / audio
+// entries. The boolean fields mirror the well-known keys from the ACP
+// `agentCapabilities.promptCapabilities` map. `advertised` records
+// whether the agent included a promptCapabilities field at all — when
+// false we treat all kinds as supported to preserve backwards
+// compatibility with older ACP servers.
+type acpPromptCaps struct {
+	advertised bool
+	image      bool
+	audio      bool
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
@@ -348,8 +362,62 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	}
 
 	slog.Debug("initialized", "component", "acp", "pid", pid, "result", string(result))
+	a.parseInitializeResult(result)
 	registerActiveACPAgent(a)
 	return nil
+}
+
+// parseInitializeResult extracts and stores the agent's advertised
+// prompt capabilities from the JSON returned by the `initialize` call.
+// On any parse error the advertised flag is left false so SupportsMedia
+// falls back to "assume supported".
+func (a *ACPAgent) parseInitializeResult(raw json.RawMessage) {
+	var parsed struct {
+		AgentCapabilities struct {
+			PromptCapabilities *struct {
+				Image bool `json:"image"`
+				Audio bool `json:"audio"`
+			} `json:"promptCapabilities,omitempty"`
+		} `json:"agentCapabilities"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		slog.Warn("failed to parse initialize result for capabilities",
+			"component", "acp", "error", err)
+		return
+	}
+	caps := &acpPromptCaps{}
+	if pc := parsed.AgentCapabilities.PromptCapabilities; pc != nil {
+		caps.advertised = true
+		caps.image = pc.Image
+		caps.audio = pc.Audio
+	}
+	a.promptCaps.Store(caps)
+	slog.Info("agent prompt capabilities",
+		"component", "acp",
+		"advertised", caps.advertised,
+		"image", caps.image,
+		"audio", caps.audio)
+}
+
+// SupportsMedia reports whether this ACP agent's advertised
+// promptCapabilities include the given media kind. When the agent did
+// not advertise promptCapabilities at all (older ACP servers), this
+// method returns true for every kind so behavior matches the
+// pre-capability era.
+func (a *ACPAgent) SupportsMedia(kind string) bool {
+	v := a.promptCaps.Load()
+	caps, ok := v.(*acpPromptCaps)
+	if !ok || caps == nil || !caps.advertised {
+		return true
+	}
+	switch kind {
+	case MediaKindImage:
+		return caps.image
+	case MediaKindAudio:
+		return caps.audio
+	default:
+		return false
+	}
 }
 
 // Stop terminates the subprocess gracefully.

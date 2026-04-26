@@ -591,6 +591,44 @@ func (m *mockAudioAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "mock-audio", Type: "test"}
 }
 
+// mockCapabilityAgent implements all media interfaces statically but
+// gates them per-kind via the MediaCapable interface, mirroring how
+// ACPAgent reports its advertised promptCapabilities.
+type mockCapabilityAgent struct {
+	supportsImage bool
+	supportsAudio bool
+	calledImages  int
+	calledAudio   int
+}
+
+func (m *mockCapabilityAgent) Chat(_ context.Context, _, msg string) (string, error) {
+	return "text: " + msg, nil
+}
+func (m *mockCapabilityAgent) ChatWithImages(_ context.Context, _, msg string, imgs []agent.ImageAttachment) (string, error) {
+	m.calledImages = len(imgs)
+	return "with-images: " + msg, nil
+}
+func (m *mockCapabilityAgent) ChatWithAudio(_ context.Context, _, msg string, audio []agent.AudioAttachment) (string, error) {
+	m.calledAudio = len(audio)
+	return "with-audio: " + msg, nil
+}
+func (m *mockCapabilityAgent) ResetSession(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockCapabilityAgent) SetCwd(_ string) {}
+func (m *mockCapabilityAgent) Info() agent.AgentInfo {
+	return agent.AgentInfo{Name: "mock-capability", Type: "test"}
+}
+func (m *mockCapabilityAgent) SupportsMedia(kind string) bool {
+	switch kind {
+	case agent.MediaKindImage:
+		return m.supportsImage
+	case agent.MediaKindAudio:
+		return m.supportsAudio
+	}
+	return false
+}
+
 type mockTextOnlyAgent struct{}
 
 func (m *mockTextOnlyAgent) Chat(_ context.Context, _, msg string) (string, error) {
@@ -692,6 +730,69 @@ func TestChatWithAttachments_AudioPriorityOverImages(t *testing.T) {
 	// Audio should take priority over images when both are present.
 	if !strings.HasPrefix(reply, "with-audio:") {
 		t.Errorf("expected audio path to take priority, got %q", reply)
+	}
+}
+
+// TestChatWithAttachments_MediaCapableGatesAudio verifies that an agent
+// which statically exposes ChatWithAudio but reports SupportsMedia(audio)
+// = false is treated as audio-incapable: the audio is dropped and a
+// fallback note is appended to the prompt. This is the runtime check
+// that prevents silently feeding voice clips to e.g. Factory Droid
+// (whose ACP promptCapabilities advertises image only).
+func TestChatWithAttachments_MediaCapableGatesAudio(t *testing.T) {
+	h := &Handler{}
+	ag := &mockCapabilityAgent{supportsImage: true, supportsAudio: false}
+	audio := []agent.AudioAttachment{{Data: []byte("x"), MediaType: "audio/m4a", Name: "voice.m4a"}}
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", nil, audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "text:") {
+		t.Errorf("expected text fallback, got %q", reply)
+	}
+	if !strings.Contains(reply, "1 voice message(s) were attached") {
+		t.Errorf("expected audio fallback note, got %q", reply)
+	}
+	if ag.calledAudio != 0 {
+		t.Errorf("expected ChatWithAudio NOT called, got count %d", ag.calledAudio)
+	}
+}
+
+// TestChatWithAttachments_MediaCapableGatesImage is the symmetric
+// runtime check for image. An agent that advertises audio but not
+// image should drop image attachments with a fallback note.
+func TestChatWithAttachments_MediaCapableGatesImage(t *testing.T) {
+	h := &Handler{}
+	ag := &mockCapabilityAgent{supportsImage: false, supportsAudio: true}
+	imgs := []agent.ImageAttachment{{Data: []byte("x"), MediaType: "image/png", Name: "a.png"}}
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", imgs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "text:") {
+		t.Errorf("expected text fallback, got %q", reply)
+	}
+	if !strings.Contains(reply, "1 image(s) were attached") {
+		t.Errorf("expected image fallback note, got %q", reply)
+	}
+	if ag.calledImages != 0 {
+		t.Errorf("expected ChatWithImages NOT called, got count %d", ag.calledImages)
+	}
+}
+
+// TestChatWithAttachments_MediaCapableAllowsBoth covers the happy path
+// where the agent advertises support for the requested media kind:
+// the corresponding typed dispatch is invoked.
+func TestChatWithAttachments_MediaCapableAllowsBoth(t *testing.T) {
+	h := &Handler{}
+	ag := &mockCapabilityAgent{supportsImage: true, supportsAudio: true}
+	audio := []agent.AudioAttachment{{Data: []byte("x"), MediaType: "audio/m4a", Name: "voice.m4a"}}
+	reply, err := h.chatWithAttachments(context.Background(), ag, "conv1", "hello", nil, audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "with-audio:") {
+		t.Errorf("expected audio dispatch, got %q", reply)
 	}
 }
 

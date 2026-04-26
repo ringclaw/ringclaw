@@ -266,3 +266,26 @@ type ImageSupporter interface {
 type AudioSupporter interface {
 	ChatWithAudio(ctx context.Context, conversationID string, message string, audio []AudioAttachment) (string, error)
 }
+
+// Media kinds recognized by MediaCapable. Stable string constants so
+// callers can use them directly without depending on protocol-specific
+// type names.
+const (
+	MediaKindImage = "image"
+	MediaKindAudio = "audio"
+)
+
+// MediaCapable lets agents advertise per-media-kind support at runtime.
+// This is an additional gate on top of the static ImageSupporter /
+// AudioSupporter interface assertions: an agent might statically expose
+// ChatWithAudio (because the adapter implements ACP) yet the underlying
+// CLI may not actually accept audio prompts at runtime. For example,
+// the Factory Droid ACP advertises only `image` in its initialize-time
+// promptCapabilities and silently drops audio entries.
+//
+// Agents that do not implement MediaCapable are assumed to support
+// every media kind whose static interface they implement, preserving
+// backward compatibility with existing mocks and non-ACP agents.
+type MediaCapable interface {
+	SupportsMedia(kind string) bool
+}
