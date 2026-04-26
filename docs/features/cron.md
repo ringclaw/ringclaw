@@ -37,3 +37,19 @@ Schedule recurring or one-shot tasks that send messages to AI agents on a timer:
 ## Persistence
 
 Jobs are persisted to `~/.ringclaw/cron/jobs.json` and survive restarts. Each job can optionally target a specific agent or chat.
+
+## Security Notes
+
+- **`/cron add` is a privileged command.** It is subject to the same
+  owner gate as `/cwd` and `/new`. See
+  [Security › Layer 1](../security/index.md#layer-1-chat-command-authorization)
+  for where it is allowed.
+- **Cron-triggered agent replies do NOT execute `ACTION:` blocks.**
+  The scheduler posts the reply text verbatim — if the agent's output
+  contains an `ACTION: NOTE/TASK/EVENT/CARD/MESSAGE` block, it lands
+  in the chat as plain text and is not dispatched against the RC API.
+  This is intentional: scheduled jobs have no human sender, so the
+  Layer 2 cross-chat gate cannot distinguish owner from non-owner.
+  If you want a cron job to actually create a task/note, have the job
+  prompt tell the agent to call `/task create ...` in its output, and
+  run the job in a chat whose members are comfortable with that.

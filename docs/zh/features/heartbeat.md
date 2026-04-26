@@ -41,3 +41,11 @@ RingClaw 每次心跳间隔读取此文件，发给默认 Agent：
 | `interval` | `30m` | 心跳间隔 |
 | `active_hours` | — | 仅在此时段运行（如 `09:00-18:00`） |
 | `timezone` | 本地 | 活跃时段的时区（IANA 格式） |
+
+## 安全注意事项
+
+**心跳触发的 Agent 回复不会执行 `ACTION:` 块。** Runner 把回复原样
+以 `**[Heartbeat]**` 前缀发到聊天——任何 `ACTION: NOTE/TASK/EVENT/
+CARD/MESSAGE` 都以文本呈现，不会调 RC API 执行。原因同 cron：定时
+路径无人类 sender，无法给第二层跨聊天门控授权。见
+[安全 › 权限矩阵](../security/index.md#权限矩阵)。

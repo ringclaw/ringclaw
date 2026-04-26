@@ -15,7 +15,7 @@ import (
 // --- Send handler edge cases ---
 
 func TestHandleSend_NoDefaultChat_NoTo(t *testing.T) {
-	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/send", s.handleSend)
 
@@ -822,14 +822,14 @@ func TestResolveChatID_NoDefault(t *testing.T) {
 // --- NewServer validation ---
 
 func TestNewServer_InvalidAddr(t *testing.T) {
-	_, err := NewServer(nil, "not-a-host-port", "", "token")
+	_, err := NewServer(nil, "not-a-host-port", "", "token", nil)
 	if err == nil {
 		t.Error("expected error for invalid addr")
 	}
 }
 
 func TestNewServer_DefaultAddr(t *testing.T) {
-	s, err := NewServer(nil, "", "", "token")
+	s, err := NewServer(nil, "", "", "token", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -915,7 +915,7 @@ func TestHealthEndpoint_ForbiddenHost(t *testing.T) {
 // --- Middleware: no auth token configured ---
 
 func TestMiddleware_NoTokenRequired(t *testing.T) {
-	s, _ := NewServer(nil, "127.0.0.1:0", "", "")
+	s, _ := NewServer(nil, "127.0.0.1:0", "", "", nil)
 	handler := s.middleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

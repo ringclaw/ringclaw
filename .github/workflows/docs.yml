@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     paths: ['docs/**', 'README.md', 'README_CN.md']
+  pull_request:
+    branches: [main]
+    paths: ['docs/**', 'README.md', 'README_CN.md']
   workflow_dispatch:
 
 permissions:
@@ -12,8 +15,10 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  # Give PRs their own group so two PR runs can cancel each other
+  # without also cancelling a main-branch deploy in flight.
+  group: pages-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -29,11 +34,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: docs/pnpm-lock.yaml
       - run: cd docs && pnpm install --frozen-lockfile && pnpm docs:build
-      - uses: actions/upload-pages-artifact@v4
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
         with:
           path: docs/.vitepress/dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -44,6 +51,7 @@ jobs:
         uses: actions/deploy-pages@v5
 
   wiki:
+    if: github.event_name != 'pull_request'
     needs: deploy
     runs-on: ubuntu-latest
     steps:

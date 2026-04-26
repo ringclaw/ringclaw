@@ -22,23 +22,24 @@ RingClaw 通过名字解析目标聊天，使用 Private App 获取消息，然�
 flowchart TD
     Msg[收到消息] --> Trigger{匹配 intent 关键词?}
     Trigger -->|否| Agent[转发给默认 Agent]
-    Trigger -->|是| Keyword{以总结关键词开头?}
-    Keyword -->|是| Perm[权限检查]
+    Trigger -->|是| BotGroup{Bot 群聊?}
+    BotGroup -->|是| Owner{发送者是 owner?}
+    Owner -->|否| Block[拒绝: 特权命令]
+    Owner -->|是| Keyword{以总结关键词开头?}
+    BotGroup -->|否 - Bot DM| Keyword
+    Keyword -->|是| DMCheck{在 Bot DM 中?}
     Keyword -->|否| AI{AI 分类 intent}
-    AI -->|summarize| Perm
+    AI -->|summarize| DMCheck
     AI -->|task/note/event| Agent
     AI -->|chat| Agent
-    Perm --> BotGroup{Bot 群聊?}
-    BotGroup -->|否, Bot DM| PrivApp{有 Private App?}
-    BotGroup -->|是| GroupCfg{配置了 group_id?}
+    DMCheck -->|是| PrivApp{有 Private App?}
+    DMCheck -->|否 - 群聊| GroupCfg{group_summary_group_id 等于当前群?}
     GroupCfg -->|否| Deny[拒绝]
-    GroupCfg -->|是| GroupMatch{当前群 = 配置群?}
-    GroupMatch -->|否| Deny
-    GroupMatch -->|是| CrossCheck{跨群/跨人检查}
-    CrossCheck -->|通过| GroupSum[群内总结]
-    CrossCheck -->|拒绝| Deny
+    GroupCfg -->|是| CrossCheck{跨群/跨人 mention?}
+    CrossCheck -->|是| Deny
+    CrossCheck -->|否| GroupSum[handleCurrentGroupSummarize<br/>直接使用当前群]
     PrivApp -->|否| Deny2[拒绝: 需要 Private App]
-    PrivApp -->|是| Resolve[解析目标聊天]
+    PrivApp -->|是| Resolve[handleSummarize<br/>解析目标聊天]
 ```
 
 ## 名字解析

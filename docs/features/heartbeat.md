@@ -41,3 +41,12 @@ RingClaw reads this file on each heartbeat interval, sends it to the default age
 | `interval` | `30m` | Time between heartbeat checks |
 | `active_hours` | — | Only run during these hours (e.g. `09:00-18:00`) |
 | `timezone` | local | IANA timezone for active hours |
+
+## Security Notes
+
+**Heartbeat-triggered agent replies do NOT execute `ACTION:` blocks.**
+The runner posts the reply verbatim with a `**[Heartbeat]**` prefix —
+any `ACTION: NOTE/TASK/EVENT/CARD/MESSAGE` in the output lands in the
+chat as text, not as an RC API call. Same rationale as cron: the
+scheduled path has no human sender to authorize the Layer 2 cross-chat
+gate. See [Security › Permission Matrix](../security/index.md#permission-matrix).

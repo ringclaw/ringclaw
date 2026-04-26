@@ -21,7 +21,7 @@ func newTestServer() *Server {
 		ServerURL:    "https://example.com",
 	}
 	client := ringcentral.NewClient(creds)
-	s, err := NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken)
+	s, err := NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -38,7 +38,7 @@ func newTestServerWithBackend(backend *httptest.Server) *Server {
 	client := ringcentral.NewClient(creds)
 	// Pre-set a valid token so auth doesn't need to call the real endpoint
 	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
-	s, err := NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken)
+	s, err := NewServer(client, "127.0.0.1:0", "default-chat", testAPIToken, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -415,7 +415,7 @@ func TestMiddleware_FullChain(t *testing.T) {
 }
 
 func TestMiddleware_RateLimited(t *testing.T) {
-	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken, nil)
 	s.limiter = newRateLimiter(1, time.Minute)
 	handler := s.middleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -673,7 +673,7 @@ func TestHandleCards_InvalidMethod(t *testing.T) {
 }
 
 func TestHandleCards_NoChatID(t *testing.T) {
-	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/cards", s.handleCards)
 
@@ -756,7 +756,7 @@ func TestHandleCardByID_Delete(t *testing.T) {
 // --- Missing chat_id tests ---
 
 func TestHandleTasks_ListNoChatID(t *testing.T) {
-	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 
@@ -771,7 +771,7 @@ func TestHandleTasks_ListNoChatID(t *testing.T) {
 }
 
 func TestHandleNotes_ListNoChatID(t *testing.T) {
-	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/notes", s.handleNotes)
 
@@ -786,7 +786,7 @@ func TestHandleNotes_ListNoChatID(t *testing.T) {
 }
 
 func TestHandleTasks_CreateNoChatID(t *testing.T) {
-	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 
@@ -802,7 +802,7 @@ func TestHandleTasks_CreateNoChatID(t *testing.T) {
 }
 
 func TestHandleNotes_CreateNoChatID(t *testing.T) {
-	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken)
+	s, _ := NewServer(nil, "127.0.0.1:0", "", testAPIToken, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/notes", s.handleNotes)
 
@@ -842,7 +842,7 @@ func TestNewServer_LoopbackOnly(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.addr, func(t *testing.T) {
-			_, err := NewServer(client, tt.addr, "chat", "token")
+			_, err := NewServer(client, tt.addr, "chat", "token", nil)
 			if tt.wantErr && err == nil {
 				t.Errorf("NewServer(%q) should have returned error", tt.addr)
 			}

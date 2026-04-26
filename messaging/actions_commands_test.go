@@ -555,7 +555,7 @@ func TestExecuteAgentActions_NoteSuccess(t *testing.T) {
 		Body:   "Key points from the sprint.",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %v", results)
 	}
@@ -594,7 +594,7 @@ func TestExecuteAgentActions_NoteDefaultTitle(t *testing.T) {
 		Body:   "No title provided.",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %v", results)
 	}
@@ -620,7 +620,7 @@ func TestExecuteAgentActions_TaskSuccess(t *testing.T) {
 		Params: map[string]string{"subject": "Follow up"},
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %v", results)
 	}
@@ -642,7 +642,7 @@ func TestExecuteAgentActions_TaskSkippedNoSubject(t *testing.T) {
 		Params: map[string]string{},
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors for skipped task, got %v", results)
 	}
@@ -669,7 +669,7 @@ func TestExecuteAgentActions_EventSuccess(t *testing.T) {
 		},
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %v", results)
 	}
@@ -692,7 +692,7 @@ func TestExecuteAgentActions_EventSkippedMissingFields(t *testing.T) {
 		Params: map[string]string{"title": "Meeting", "start": "2026-04-10T10:00:00Z"},
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors for skipped event, got %v", results)
 	}
@@ -714,7 +714,7 @@ func TestExecuteAgentActions_CardInvalidJSON(t *testing.T) {
 		Body: "this is not valid json",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 1 || !strings.Contains(results[0], "invalid JSON") {
 		t.Errorf("expected invalid JSON error, got %v", results)
 	}
@@ -736,7 +736,7 @@ func TestExecuteAgentActions_CardEmptyBody(t *testing.T) {
 		Body: "",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors for skipped empty card, got %v", results)
 	}
@@ -758,7 +758,7 @@ func TestExecuteAgentActions_MessageEmptyBody(t *testing.T) {
 		Body: "   ",
 	}}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no errors for empty message, got %v", results)
 	}
@@ -800,19 +800,26 @@ func TestParseActionParams(t *testing.T) {
 }
 
 // --- selectCardClient tests ---
+//
+// Empirically (spike against the live RingCentral instance) the Private
+// App is allowed to POST adaptive cards into the bot's own DM. We
+// therefore prefer the Private App across the board, so the card's
+// creator matches the human owner — the same identity NOTE / TASK /
+// EVENT actions already use. Bot is only used as a last-resort fallback
+// when no Private App is configured.
 
-func TestSelectCardClient_BotDM(t *testing.T) {
+func TestSelectCardClient_PrefersPrivateAppInBotDM(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
 	botClient.SetDMChatID("dm-1")
 	privateClient := ringcentral.NewBotClient("http://localhost", "private-token")
 
 	selected := selectCardClient(botClient, privateClient, "dm-1")
-	if selected != botClient {
-		t.Error("expected bot client for DM chat")
+	if selected != privateClient {
+		t.Error("expected private client even for bot DM (Private App may post cards there)")
 	}
 }
 
-func TestSelectCardClient_NonDM(t *testing.T) {
+func TestSelectCardClient_PrefersPrivateAppInGroup(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
 	botClient.SetDMChatID("dm-1")
 	privateClient := ringcentral.NewBotClient("http://localhost", "private-token")
@@ -823,11 +830,15 @@ func TestSelectCardClient_NonDM(t *testing.T) {
 	}
 }
 
-func TestSelectCardClient_NilActionClient(t *testing.T) {
+func TestSelectCardClient_FallsBackToBotWhenNoPrivateApp(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
-	selected := selectCardClient(botClient, nil, "group-1")
-	if selected != botClient {
-		t.Error("expected bot client when action client is nil")
+	botClient.SetDMChatID("dm-1")
+
+	if got := selectCardClient(botClient, nil, "dm-1"); got != botClient {
+		t.Error("expected bot client in DM when action client is nil")
+	}
+	if got := selectCardClient(botClient, nil, "group-1"); got != botClient {
+		t.Error("expected bot client in group when action client is nil")
 	}
 }
 

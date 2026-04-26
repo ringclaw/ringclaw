@@ -4,34 +4,32 @@ title: Docker
 
 # Docker
 
+All RingClaw configuration lives in `~/.ringclaw/config.json` — mount the
+directory into the container and the file is shared with the host. The
+previously supported `-e RC_*` / `-e OPENCLAW_GATEWAY_*` environment
+variables are no longer honored.
+
 ## Build
 
 ```bash
 docker build -t ringclaw .
 ```
 
-## Run with Bot Token
+## Prepare Config
+
+On the host, run `ringclaw setup` (or edit manually) so that
+`~/.ringclaw/config.json` exists. See
+[Configuration](../guide/configuration.md) for the full schema.
+
+## Run
 
 ```bash
 docker run -d --name ringclaw \
   -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_BOT_TOKEN=xxx \
   ringclaw
 ```
 
-## Run with Private App and HTTP Agent
-
-```bash
-docker run -d --name ringclaw \
-  -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_BOT_TOKEN=xxx \
-  -e RC_CLIENT_ID=xxx \
-  -e RC_CLIENT_SECRET=xxx \
-  -e RC_JWT_TOKEN=xxx \
-  -e OPENCLAW_GATEWAY_URL=https://api.example.com \
-  -e OPENCLAW_GATEWAY_TOKEN=sk-xxx \
-  ringclaw
-```
+The container reads `/root/.ringclaw/config.json` on startup.
 
 ## View Logs
 
@@ -43,7 +41,6 @@ docker logs -f ringclaw
 
 ```bash
 docker run -it -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_BOT_TOKEN=xxx \
   ghcr.io/ringclaw/ringclaw start
 ```
 

@@ -17,11 +17,12 @@ export default withMermaid(defineConfig({
       themeConfig: {
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
-          { text: '功能', link: '/zh/features/summarize' },
-          { text: '架构', link: '/zh/architecture/prompt-evolution' },
+          { text: '配置', link: '/zh/guide/configuration' },
           { text: '安全', link: '/zh/security/' },
+          { text: '功能', link: '/zh/features/summarize' },
           { text: 'API', link: '/zh/api/rest' },
           { text: '部署', link: '/zh/deployment/background' },
+          { text: '架构', link: '/zh/architecture/prompt-evolution' },
         ],
         sidebar: {
           '/zh/guide/': [
@@ -29,10 +30,10 @@ export default withMermaid(defineConfig({
               text: '指南',
               items: [
                 { text: '快速开始', link: '/zh/guide/getting-started' },
-                { text: '工作原理', link: '/zh/guide/how-it-works' },
-                { text: '聊天命令', link: '/zh/guide/commands' },
-                { text: 'Agent 配置', link: '/zh/guide/agents' },
                 { text: '配置文件', link: '/zh/guide/configuration' },
+                { text: 'Agent 配置', link: '/zh/guide/agents' },
+                { text: '聊天命令', link: '/zh/guide/commands' },
+                { text: '工作原理', link: '/zh/guide/how-it-works' },
               ],
             },
           ],
@@ -90,11 +91,12 @@ export default withMermaid(defineConfig({
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Features', link: '/features/summarize' },
-      { text: 'Architecture', link: '/architecture/prompt-evolution' },
+      { text: 'Configuration', link: '/guide/configuration' },
       { text: 'Security', link: '/security/' },
+      { text: 'Features', link: '/features/summarize' },
       { text: 'API', link: '/api/rest' },
       { text: 'Deployment', link: '/deployment/background' },
+      { text: 'Architecture', link: '/architecture/prompt-evolution' },
     ],
 
     sidebar: {
@@ -103,10 +105,10 @@ export default withMermaid(defineConfig({
           text: 'Guide',
           items: [
             { text: 'Getting Started', link: '/guide/getting-started' },
-            { text: 'How It Works', link: '/guide/how-it-works' },
-            { text: 'Chat Commands', link: '/guide/commands' },
-            { text: 'Agent Configuration', link: '/guide/agents' },
             { text: 'Configuration', link: '/guide/configuration' },
+            { text: 'Agent Configuration', link: '/guide/agents' },
+            { text: 'Chat Commands', link: '/guide/commands' },
+            { text: 'How It Works', link: '/guide/how-it-works' },
           ],
         },
       ],

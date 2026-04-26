@@ -45,6 +45,14 @@ func (h *Handler) handleCwd(text string) string {
 		return fmt.Sprintf("Invalid path: %v", err)
 	}
 
+	// Allowlist check: must be inside the configured AgentWorkspace.
+	// Returns nil when no workspace root is configured (legacy mode).
+	if err := agent.EnsurePathInWorkspace(absPath); err != nil {
+		slog.Warn("cwd rejected: outside workspace root", "component", "handler", "path", absPath, "error", err)
+		return fmt.Sprintf("Denied: %v", err)
+	}
+	// Denylist check (defense in depth): block sensitive dotfile dirs even
+	// if a misconfigured AgentWorkspace would otherwise admit them.
 	if err := validateCwdPath(absPath); err != nil {
 		return fmt.Sprintf("Denied: %v", err)
 	}
@@ -98,6 +106,7 @@ func buildHelpText() string {
 /cwd /path - Switch workspace directory
 /info - Show current agent info
 /help - Show this help message
+/full-access status|grant [dur]|revoke - Owner DM only; /approval-gated ACP unlock (default 1d, max 30d)
 
 /task list|create|get|update|delete|complete
 /note list|create|get|update|delete|lock|unlock
@@ -107,7 +116,7 @@ func buildHelpText() string {
 /cron add|list|delete - Scheduled tasks
 /reload - Re-detect installed agents
 
-Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)`
+Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen) /ag(augment)`
 }
 
 func buildHelpCard() json.RawMessage {
@@ -127,6 +136,7 @@ func buildHelpCard() json.RawMessage {
 		{"/cwd /path", "Switch workspace directory"},
 		{"/info", "Show current agent info"},
 		{"/reload", "Re-detect installed agents"},
+		{"/full-access", "status | grant [dur] | revoke (owner DM, /approval gated)"},
 		{"/help", "Show this help"},
 	}
 
@@ -170,7 +180,7 @@ func buildHelpCard() json.RawMessage {
 		},
 	}
 
-	aliases := "/cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)"
+	aliases := "/cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen) /ag(augment)"
 
 	body := []any{
 		map[string]any{"type": "TextBlock", "text": "RingClaw Commands", "weight": "bolder", "size": "medium"},
@@ -246,6 +256,21 @@ func isPrivilegedCommand(text string) bool {
 	}
 	if text == "/reload" {
 		return true
+	}
+	// /full-access bypasses all ACP guardrails; restrict it to the bot
+	// owner even before the handler's stricter "DM-only" check kicks in.
+	if IsFullAccessCommand(text) {
+		return true
+	}
+	// /mem add and /mem del mutate the persona/memory banner that
+	// every subsequent prompt sees — treat them with the same gate
+	// as /cron (a poisoned memory affects every later conversation).
+	// /mem show and /persona are read-only; they stay out of this
+	// list. /mem with no subcommand falls through so the user gets
+	// a usage hint instead of a permission denial.
+	if IsMemCommand(text) {
+		sub := memSubcommand(text)
+		return sub == "add" || sub == "del"
 	}
 	return false
 }

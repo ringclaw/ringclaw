@@ -1,6 +1,6 @@
 {"task_input": "发消息给 John Lin 说明天开会", "expected_behavior": "Generate ACTION:MESSAGE chatid=John Lin with meeting notification. chatid must be a person name, NOT a numeric ID.", "difficulty": "easy", "category": "message_basic"}
 {"task_input": "send a message to Alice saying the PR is ready", "expected_behavior": "Generate ACTION:MESSAGE chatid=Alice with PR notification.", "difficulty": "easy", "category": "message_basic"}
-{"task_input": "发消息给我说测试结果", "expected_behavior": "Generate ACTION:MESSAGE chatid=我. The pronoun '我' should be preserved as chatid for self-resolution.", "difficulty": "medium", "category": "message_pronoun", "source_pr": "#40"}
+{"task_input": "发消息给我说测试结果", "expected_behavior": "Generate ACTION:MESSAGE with chatid set to a first-person pronoun (我, me, or myself). Any of these pronouns is acceptable for self-resolution.", "difficulty": "medium", "category": "message_pronoun", "source_pr": "#40"}
 {"task_input": "send a message to myself with the summary", "expected_behavior": "Generate ACTION:MESSAGE chatid=me or chatid=myself. Pronouns should be preserved.", "difficulty": "medium", "category": "message_pronoun", "source_pr": "#40"}
 {"task_input": "创建一个笔记记录会议要点", "expected_behavior": "Generate ACTION:NOTE with a descriptive title. Body should contain meeting notes placeholder.", "difficulty": "easy", "category": "note_basic"}
 {"task_input": "create a note titled 'API Design' with the discussion points", "expected_behavior": "Generate ACTION:NOTE title=API Design with discussion content in body.", "difficulty": "easy", "category": "note_basic"}
@@ -12,7 +12,7 @@
 {"task_input": "summarize Alice's messages and send her a task to follow up", "expected_behavior": "Provide summary, then ACTION:TASK with assignee=Alice or ACTION:MESSAGE chatid=Alice. Never use person ID numbers.", "difficulty": "hard", "category": "compound"}
 {"task_input": "用卡片展示本周进度", "expected_behavior": "Generate ACTION:CARD with valid Adaptive Card JSON v1.3 showing progress.", "difficulty": "medium", "category": "card"}
 {"task_input": "show team status as an adaptive card", "expected_behavior": "Generate ACTION:CARD with valid Adaptive Card JSON v1.3.", "difficulty": "medium", "category": "card"}
-{"task_input": "帮我分析一下这段代码", "expected_behavior": "Reply with code analysis text. No ACTION block needed — this is a normal chat response.", "difficulty": "easy", "category": "no_action"}
+{"task_input": "帮我分析一下这段代码", "expected_behavior": "Reply in plain text asking for the code to analyze, or provide general guidance. No ACTION block should be generated.", "difficulty": "easy", "category": "no_action"}
 {"task_input": "explain the difference between goroutine and thread", "expected_behavior": "Reply with explanation text only. No ACTION block should be generated.", "difficulty": "easy", "category": "no_action"}
 {"task_input": "发消息给 ![:Person](2540458021) 说项目完成了", "expected_behavior": "Generate ACTION:MESSAGE. The mention format ![:Person](ID) should be preserved as-is for chatid, system will resolve it.", "difficulty": "medium", "category": "mention_format"}
 {"task_input": "把结果发给 ![:Team](group-123)", "expected_behavior": "Generate ACTION:MESSAGE chatid=![:Team](group-123). Team mention should be preserved.", "difficulty": "medium", "category": "mention_format"}

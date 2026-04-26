@@ -33,7 +33,7 @@ func (a *testAgent) Info() agent.AgentInfo {
 }
 
 func newTestHandler() *Handler {
-	return &Handler{agents: make(map[string]agent.Agent)}
+	return &Handler{agents: make(map[string]agent.Agent), allowAllSenders: true}
 }
 
 func TestParseCommand_NoPrefix(t *testing.T) {
@@ -130,6 +130,7 @@ func TestResolveAlias(t *testing.T) {
 		"if":  "iflow",
 		"kr":  "kiro",
 		"qw":  "qwen",
+		"ag":  "augment",
 	}
 	for alias, want := range tests {
 		got := h.resolveAlias(alias)
@@ -779,6 +780,43 @@ func TestHandleMessage_BotMentionStripped(t *testing.T) {
 	}
 }
 
+func TestStripForwardedPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "forwarded message",
+			input:    "John Lin posted in ![:Team](156364201990)\n> 哦，那我针对 fyi 过来的消息不处理就是了",
+			expected: "哦，那我针对 fyi 过来的消息不处理就是了",
+		},
+		{
+			name:     "multi-line forwarded",
+			input:    "Alice posted in ![:Team](123)\n> line one\n> line two",
+			expected: "line one\nline two",
+		},
+		{
+			name:     "normal message",
+			input:    "hello world",
+			expected: "hello world",
+		},
+		{
+			name:     "empty after prefix",
+			input:    "Bob posted in ![:Team](456)\n> ",
+			expected: "Bob posted in ![:Team](456)\n> ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripForwardedPrefix(tt.input)
+			if got != tt.expected {
+				t.Errorf("stripForwardedPrefix(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestHandleMessage_HelpCommand(t *testing.T) {
 	srv, _ := newTestRC(t)
 	defer srv.Close()
@@ -1372,6 +1410,72 @@ func TestConversationIDForPost_Group(t *testing.T) {
 	}
 }
 
+// TestConversationIDForPost_PerUserIsolation locks in the security
+// invariant from review Finding #4: within the same group chat, two
+// different users MUST receive distinct conversationIDs so they cannot
+// share or hijack each other's agent session.
+func TestConversationIDForPost_PerUserIsolation(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+
+	chatID := "group-shared"
+	a := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "alice"})
+	b := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "bob"})
+
+	if a == b {
+		t.Fatalf("expected distinct conversation IDs for different users in same chat, got %q == %q", a, b)
+	}
+	if !strings.Contains(a, "alice") {
+		t.Errorf("expected conversation ID to bind to creator id, got %q", a)
+	}
+	if !strings.Contains(b, "bob") {
+		t.Errorf("expected conversation ID to bind to creator id, got %q", b)
+	}
+}
+
+// TestConversationIDForPost_PerChatIsolation ensures the same user in
+// different chats receives distinct conversationIDs. Without this,
+// private DM history could leak into a group chat (or vice versa).
+func TestConversationIDForPost_PerChatIsolation(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+
+	user := "alice"
+	g1 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-A", CreatorID: user})
+	g2 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-B", CreatorID: user})
+
+	if g1 == g2 {
+		t.Fatalf("expected distinct conversation IDs for same user in different chats, got %q == %q", g1, g2)
+	}
+}
+
+// TestConversationIDForPost_DMAndGroupNamespaces verifies that DM and
+// group chat IDs occupy disjoint namespaces, so a renamed/recycled chat
+// ID can never collide with an existing DM session.
+func TestConversationIDForPost_DMAndGroupNamespaces(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("shared-id")
+
+	dmPost := ringcentral.Post{GroupID: "shared-id", CreatorID: "alice"}
+	groupPost := ringcentral.Post{GroupID: "shared-id", CreatorID: "alice"}
+	// Force the second post to evaluate as a group chat.
+	other := ringcentral.NewBotClient("http://localhost", "token")
+	other.SetDMChatID("different-id")
+
+	dmID := conversationIDForPost(client, dmPost)
+	groupID := conversationIDForPost(other, groupPost)
+
+	if dmID == groupID {
+		t.Fatalf("expected DM and group chat IDs to live in different namespaces, got %q == %q", dmID, groupID)
+	}
+	if !strings.HasPrefix(dmID, "rc:dm:") {
+		t.Errorf("expected dm prefix, got %q", dmID)
+	}
+	if !strings.HasPrefix(groupID, "rc:chat:") {
+		t.Errorf("expected chat prefix, got %q", groupID)
+	}
+}
+
 // --- cleanSeenMsgs test ---
 
 func TestCleanSeenMsgs(t *testing.T) {
@@ -1685,6 +1789,77 @@ func TestHandleMessage_GroupPrivilegedBlocked(t *testing.T) {
 	}
 	if !strings.Contains(got[0], "Only the bot owner") {
 		t.Errorf("expected 'Only the bot owner' reply, got %q", got[0])
+	}
+}
+
+// TestHandleMessage_DMPrivilegedBlockedForNonOwnerWithPrivateApp confirms
+// that Layer 1 now enforces the owner gate in bot DMs as well, whenever
+// a Private App is configured. This closes the gap where a teammate also
+// listed in source_user_ids could drive /cron add etc. from their own DM
+// with the bot.
+func TestHandleMessage_DMPrivilegedBlockedForNonOwnerWithPrivateApp(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-non-owner")
+	// Distinct Private App client — its OwnerID names the real operator
+	// (alice). Bob is a trusted teammate but not the owner.
+	privateApp := ringcentral.NewBotClient(srv.URL, "token")
+	privateApp.SetOwnerID("alice")
+
+	h.HandleMessage(context.Background(), bot, privateApp, ringcentral.Post{
+		ID:        "priv-dm-1",
+		GroupID:   "dm-non-owner",
+		CreatorID: "bob",
+		Text:      "/cron list",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a permission denial reply")
+	}
+	if !strings.Contains(got[0], "Private App owner") {
+		t.Errorf("expected 'Private App owner' reply, got %q", got[0])
+	}
+}
+
+// TestHandleMessage_DMPrivilegedFallsBackWithoutPrivateApp confirms the
+// inverse: without a Private App (readClient == bot client), the DM
+// path cannot identify an owner and falls back to the legacy "every
+// trusted sender is trusted in their own DM" behavior. Here /cron list
+// is executed (it replies with "Cron is not configured." because no
+// store is set, not with the privileged-command refusal).
+func TestHandleMessage_DMPrivilegedFallsBackWithoutPrivateApp(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	// readClient == bot client (no Private App); CreatorID is a trusted
+	// sender other than the bot itself. Expected: falls through the
+	// privileged gate and hits the /cron handler's "not configured"
+	// response.
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "priv-dm-2",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/cron list",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a reply")
+	}
+	for _, reply := range got {
+		if strings.Contains(reply, "Only the Private App owner") || strings.Contains(reply, "Only the bot owner") {
+			t.Errorf("did not expect a privileged-command refusal without Private App, got %q", reply)
+		}
 	}
 }
 

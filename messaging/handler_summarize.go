@@ -167,14 +167,7 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 	}
 
 	sendReply := func(reply string) {
-		if placeholderID != "" {
-			if err := UpdatePostText(ctx, replyClient, chatID, placeholderID, reply); err != nil {
-				slog.Error("failed to update placeholder", "component", "handler", "error", err)
-				logSendError(SendTextReply(ctx, replyClient, chatID, reply))
-			}
-		} else {
-			logSendError(SendTextReply(ctx, replyClient, chatID, reply))
-		}
+		FinalizeReply(ctx, replyClient, chatID, placeholderID, reply, "summarize")
 	}
 
 	prompt, err := BuildSummaryPrompt(ctx, readClient, req)
@@ -203,7 +196,12 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 	}
 
 	if len(actions) > 0 {
-		results := ExecuteAgentActions(ctx, replyClient, readClient, chatID, actions)
+		results := ExecuteAgentActions(ctx, replyClient, readClient, chatID, actions, ActionContext{
+			OriginIsOwner: h.isTrustedSender(post.CreatorID),
+			OOB:           h.OOBManager(),
+			OwnerDMChat:   h.OwnerDMChatID(),
+			RequesterID:   post.CreatorID,
+		})
 		if len(results) > 0 {
 			logSendError(SendTextReply(ctx, replyClient, chatID, strings.Join(results, "\n")))
 		}

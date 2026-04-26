@@ -240,7 +240,7 @@ func TestExecuteAgentActions_MessageAction(t *testing.T) {
 		{Type: "MESSAGE", Params: map[string]string{}, Body: "hello from action"},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no error results, got %v", results)
 	}
@@ -269,7 +269,7 @@ func TestExecuteAgentActions_UnknownType(t *testing.T) {
 		{Type: "UNKNOWN", Params: map[string]string{}, Body: "some body"},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) == 0 {
 		t.Error("expected result for unknown action type")
 	}
@@ -289,7 +289,7 @@ func TestExecuteAgentActions_EmptyMessageBody(t *testing.T) {
 		{Type: "MESSAGE", Params: map[string]string{}, Body: "   "},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no results for empty body, got %v", results)
 	}
@@ -307,7 +307,7 @@ func TestExecuteAgentActions_EmptyEventParams(t *testing.T) {
 		{Type: "EVENT", Params: map[string]string{"title": "Meeting"}, Body: ""},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no results for incomplete event, got %v", results)
 	}
@@ -324,7 +324,7 @@ func TestExecuteAgentActions_EmptyTaskSubject(t *testing.T) {
 		{Type: "TASK", Params: map[string]string{}, Body: ""},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no results for empty task subject, got %v", results)
 	}
@@ -341,7 +341,7 @@ func TestExecuteAgentActions_InvalidCardJSON(t *testing.T) {
 		{Type: "CARD", Params: map[string]string{}, Body: "not valid json"},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) == 0 {
 		t.Error("expected error result for invalid JSON")
 	}
@@ -361,7 +361,7 @@ func TestExecuteAgentActions_EmptyCardBody(t *testing.T) {
 		{Type: "CARD", Params: map[string]string{}, Body: ""},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no results for empty card body, got %v", results)
 	}
@@ -650,7 +650,7 @@ func TestExecuteAgentActions_NoteAction(t *testing.T) {
 		{Type: "NOTE", Params: map[string]string{"title": "Meeting Notes"}, Body: "Key decisions..."},
 	}
 
-	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Errorf("expected no error results, got %v", results)
 	}
@@ -687,7 +687,7 @@ func TestExecuteAgentActions_NoteDefaultTitle_Extra(t *testing.T) {
 		{Type: "NOTE", Params: map[string]string{}, Body: "content"},
 	}
 
-	ExecuteAgentActions(context.Background(), client, client, "chat-1", actions)
+	ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
 	if noteTitle != "Note" {
 		t.Errorf("expected default title 'Note', got %q", noteTitle)
 	}
@@ -763,6 +763,26 @@ func TestHandleCronCommand_ListWithDisabled(t *testing.T) {
 	}
 	if !strings.Contains(reply, "disabled") {
 		t.Errorf("expected 'disabled' status, got %q", reply)
+	}
+}
+
+// TestHandleCronCommand_ListShowsFullMessage locks the behavior that
+// /cron list prints the entire job message verbatim — no truncation,
+// no ellipsis — so users can audit long scheduled prompts in-place.
+func TestHandleCronCommand_ListShowsFullMessage(t *testing.T) {
+	dir := t.TempDir()
+	store := NewCronStore(filepath.Join(dir, "jobs.json"))
+	_ = store.Load()
+
+	long := strings.Repeat("帮我总结一下今天所有团队的讨论并发到 DM ", 8)
+	_ = store.Add(CronJob{Name: "long-msg", Enabled: true, Schedule: "every:1h", Message: long})
+
+	reply := HandleCronCommand(store, "/cron list", "chat1")
+	if !strings.Contains(reply, long) {
+		t.Errorf("expected full message in /cron list output, got %q", reply)
+	}
+	if strings.Contains(reply, "...") {
+		t.Errorf("expected no truncation ellipsis in /cron list output, got %q", reply)
 	}
 }
 

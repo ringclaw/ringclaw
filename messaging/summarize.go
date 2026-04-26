@@ -13,8 +13,29 @@ import (
 
 const dateExtractConversationID = "date:extractor"
 
+// dateExtractTimeout caps how long we wait on the LLM to extract a date.
+// The previous 10s budget regularly hit context-deadline-exceeded with
+// long-running ACP sessions; the regex fast-path now handles common cases
+// without paying any LLM latency, so the LLM only runs on phrases the
+// regex can't classify.
+const dateExtractTimeout = 20 * time.Second
+
 func extractDateViaAgent(ctx context.Context, ag agent.Agent, text string) time.Time {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Fast path: try the deterministic regex parser first. It handles
+	// canonical phrases like "最近一周", "过去 7 天", "last 3 days",
+	// "4月10日", "2026-04-10", "昨天/last week/上个月" with zero LLM tokens
+	// and zero network latency. parseTimeRange only returns todayStart()
+	// when nothing matches, which is our signal to consult the LLM.
+	if parsed := parseTimeRange(text); !parsed.Equal(todayStart()) {
+		slog.Debug("date resolved via regex (LLM skipped)", "component", "summarize", "resolved", parsed.Format(time.RFC3339))
+		return parsed
+	}
+
+	if ag == nil {
+		return todayStart()
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, dateExtractTimeout)
 	defer cancel()
 
 	now := time.Now()
@@ -24,36 +45,33 @@ func extractDateViaAgent(ctx context.Context, ag agent.Agent, text string) time.
 	reply, err := ag.Chat(ctx, dateExtractConversationID, prompt)
 	elapsed := time.Since(start)
 	if err != nil {
-		slog.Warn("agent date extraction failed, falling back to regex", "component", "summarize", "error", err, "elapsed", elapsed)
-		return parseTimeRange(text)
+		slog.Warn("agent date extraction failed, defaulting to today", "component", "summarize", "error", err, "elapsed", elapsed)
+		return todayStart()
 	}
 
 	cleaned := strings.TrimSpace(reply)
 	cleaned = strings.Trim(cleaned, `"'`)
 
 	if strings.EqualFold(cleaned, "none") || cleaned == "" {
-		slog.Info("agent found no date, falling back to regex", "component", "summarize", "elapsed", elapsed)
-		return parseTimeRange(text)
+		slog.Info("agent found no date, defaulting to today", "component", "summarize", "elapsed", elapsed)
+		return todayStart()
 	}
 
-	// Try ISO 8601 parse
 	if t, err := time.Parse("2006-01-02", cleaned); err == nil {
 		slog.Info("agent extracted date", "component", "summarize", "date", cleaned, "elapsed", elapsed)
 		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, now.Location())
 	}
 
-	// Agent may return relative expression like "last week" — pass through parseTimeRange
-	parsed := parseTimeRange(cleaned)
-	if !parsed.Equal(todayStart()) {
+	if parsed := parseTimeRange(cleaned); !parsed.Equal(todayStart()) {
 		slog.Info("agent extracted relative date", "component", "summarize", "reply", cleaned, "resolved", parsed.Format("2006-01-02"), "elapsed", elapsed)
 		return parsed
 	}
 
-	slog.Info("agent date reply not parseable, falling back to regex on original text", "component", "summarize", "reply", cleaned, "elapsed", elapsed)
-	return parseTimeRange(text)
+	slog.Info("agent date reply not parseable, defaulting to today", "component", "summarize", "reply", cleaned, "elapsed", elapsed)
+	return todayStart()
 }
 
-var summarizeKeywords = []string{"总结", "summarize", "summary"}
+var summarizeKeywords = []string{"总结", "summarize", "summarise", "summary"}
 
 const defaultSummaryMessageLimit = 250
 

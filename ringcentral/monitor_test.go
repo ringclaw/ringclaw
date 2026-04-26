@@ -475,7 +475,7 @@ func TestMonitor_SourceUserIDs_EmptyAllowsAll(t *testing.T) {
 		mu.Unlock()
 	}, []string{"chat-1"}, nil, false)
 
-	// Empty allowlist → any user should be processed
+	// Default semantics: empty allowlist means "allow all" (legacy compat).
 	msg := makeWSMessage(Post{
 		ID:        "p302",
 		GroupID:   "chat-1",
@@ -490,7 +490,109 @@ func TestMonitor_SourceUserIDs_EmptyAllowsAll(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !called {
-		t.Error("handler should be called when source_user_ids is empty (allow all)")
+		t.Error("default monitor should accept any sender when allowlist is empty")
+	}
+}
+
+func TestMonitor_EnforceSenderAllowlist_EmptyDeniesAll(t *testing.T) {
+	var mu sync.Mutex
+	var called bool
+
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-ext-123")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		called = true
+		mu.Unlock()
+	}, []string{"chat-1"}, nil, false)
+	m.EnforceSenderAllowlist()
+
+	msg := makeWSMessage(Post{
+		ID:        "p303",
+		GroupID:   "chat-1",
+		Type:      "TextMessage",
+		Text:      "hello",
+		CreatorID: "random-user",
+		EventType: "PostAdded",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if called {
+		t.Error("strict mode with empty allowlist must drop all senders")
+	}
+}
+
+func TestMonitor_AddTrustedSender_EnablesUser(t *testing.T) {
+	var mu sync.Mutex
+	var called bool
+
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-ext-123")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		called = true
+		mu.Unlock()
+	}, []string{"chat-1"}, nil, false)
+	m.EnforceSenderAllowlist()
+
+	if m.HasTrustedSenders() {
+		t.Fatal("expected no trusted senders before AddTrustedSender")
+	}
+	m.AddTrustedSender("trusted-owner")
+	if !m.HasTrustedSenders() {
+		t.Fatal("expected HasTrustedSenders to be true after AddTrustedSender")
+	}
+
+	msg := makeWSMessage(Post{
+		ID:        "p304",
+		GroupID:   "chat-1",
+		Type:      "TextMessage",
+		Text:      "hello",
+		CreatorID: "trusted-owner",
+		EventType: "PostAdded",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !called {
+		t.Error("handler should be called for an explicitly trusted sender")
+	}
+}
+
+func TestMonitor_EnforceSenderAllowlist_BlocksUntrusted(t *testing.T) {
+	var mu sync.Mutex
+	var called bool
+
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-ext-123")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		called = true
+		mu.Unlock()
+	}, []string{"chat-1"}, nil, false)
+	m.EnforceSenderAllowlist()
+	m.AddTrustedSender("trusted-owner")
+
+	msg := makeWSMessage(Post{
+		ID:        "p305",
+		GroupID:   "chat-1",
+		Type:      "TextMessage",
+		Text:      "hello",
+		CreatorID: "stranger",
+		EventType: "PostAdded",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if called {
+		t.Error("strict mode must drop messages from untrusted senders")
 	}
 }
 
@@ -664,7 +766,7 @@ func TestMonitor_GroupChat_MentionOnlyDisabled(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if receivedClient != bot {
-		t.Error("with bot_mention_only=false, group message without mention should be processed by bot")
+		t.Error("with group_mention_only=false, group message without mention should be processed by bot")
 	}
 }
 

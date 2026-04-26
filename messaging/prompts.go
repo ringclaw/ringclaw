@@ -46,11 +46,16 @@ END_ACTION
 - chatid: person name (e.g. John Smith), numeric chat ID, or ![:Team](ID). Omit to use current chat.
 - assignee: person name or ![:Person](ID).
 - The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
-- For structured data, reports, or progress → use ACTION:CARD.
+- For structured data, reports, or progress → use ACTION:CARD. Always generate complete valid Adaptive Card JSON v1.3.
 - If no action needed, reply normally without ACTION blocks.
-- Preserve first-person pronouns (我, me, myself) as the chatid value. Do NOT substitute with IDs.
+- Preserve first-person pronouns exactly as given: "我" for Chinese, "me"/"myself" for English. Do NOT translate or substitute.
 - For multiple recipients, generate separate ACTION:MESSAGE blocks for each name.
-- For analysis or general questions without a clear action, reply with plain text only.
+- For analysis, explanations, or general questions without a clear action, reply with plain text only.
+- When a request combines analysis and an action: First provide the analysis/summary as plain text, then generate the ACTION block separately.
+- Use "me", "myself", or "我" as chatid when requested to message yourself. Do not use other pronouns or IDs.
+- When asked to show data as an Adaptive Card, generate ACTION:CARD immediately. Do not ask for more information.
+- For code analysis or pure discussion requests, respond with plain text only. No ACTION blocks.
+- Do NOT extract ![:Team] or ![:Person] mentions from the message content and use them as chatid. Only use chatid if the user explicitly asks to send/forward to someone.
 `
 
 const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY one word:
@@ -89,8 +94,14 @@ Reply in the same language as the messages. Highlight key topics, decisions, and
 const defaultDateExtractPrompt = `Extract the date or time range from this message.
 Reply with ONLY one of:
 - An ISO 8601 date like "2026-04-10" for a specific date
-- A relative expression like "yesterday", "last week", "3 days ago"
+- A relative expression like "yesterday", "last week", "3 days ago", "周五", "上周三", "next Friday"
 - "NONE" if no time/date is mentioned
+
+Weekday rules (apply to both Chinese and English):
+- Bare "周X" / "Friday" → the most recent past occurrence of that weekday (today if today is that day)
+- "上周X" / "last X" / "past X" → the X of the previous calendar week
+- "下周X" / "next X" → the X of the next calendar week
+- "本周X" / "这周X" / "this X" → the X of the current calendar week
 
 Current date: %s
 

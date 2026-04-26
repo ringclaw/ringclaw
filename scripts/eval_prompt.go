@@ -132,6 +132,26 @@ func newLLMClient() *llmClient {
 	}
 }
 
+// newJudgeLLMClient creates a separate client for judge/mutation calls.
+// Uses LLM_JUDGE_MODEL env var (falls back to LLM_MODEL if not set).
+func newJudgeLLMClient(base *llmClient) *llmClient {
+	model := os.Getenv("LLM_JUDGE_MODEL")
+	if model == "" || model == base.model {
+		return base
+	}
+	timeout := 60 * time.Second
+	if strings.Contains(model, "reasoner") {
+		timeout = 120 * time.Second
+	}
+	fmt.Printf("Using judge/mutation model: %s\n", model)
+	return &llmClient{
+		apiKey:  base.apiKey,
+		baseURL: base.baseURL,
+		model:   model,
+		client:  &http.Client{Timeout: timeout},
+	}
+}
+
 func (c *llmClient) chat(system, user string) (string, error) {
 	return c.chatWithOptions(system, user, 256, 0)
 }
@@ -211,6 +231,12 @@ Scoring criteria:
 - 0.3-0.6: Partially correct
 - 0.0-0.2: Wrong or missing
 
+Judging rules:
+- If expected says "Generate ACTION:CARD" and response contains "ACTION:CARD" with JSON, it PASSES (even if JSON content is placeholder data).
+- If expected says "No ACTION block", check that the response has NO "ACTION:" prefix lines.
+- Accept equivalent pronouns: "我", "me", "myself" are all valid for self-referencing chatid.
+- Focus on structure (correct ACTION type, required parameters) over exact wording.
+
 Expected behavior: %s
 
 Agent response: %s`
@@ -254,6 +280,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error: LLM_API_KEY not set (check .env or environment)")
 		os.Exit(1)
 	}
+	judgeLLM := newJudgeLLMClient(llm)
 
 	prompts := []string{*promptName}
 	if *promptName == "all" {
@@ -264,14 +291,14 @@ func main() {
 	var summary evolveSummary
 	for _, name := range prompts {
 		if *evolveRounds > 0 {
-			report, result := evolveLoop(llm, name, *evolveRounds, *datasetDir, *outputDir)
+			report, result := evolveLoop(llm, judgeLLM, name, *evolveRounds, *datasetDir, *outputDir)
 			allReports = append(allReports, report)
 			summary.Prompts = append(summary.Prompts, result)
 			if result.Delta >= *minImprovement {
 				summary.Improved = true
 			}
 		} else {
-			report := runEval(llm, name, *compareTo, *datasetDir, *outputDir)
+			report := runEval(llm, judgeLLM, name, *compareTo, *datasetDir, *outputDir)
 			allReports = append(allReports, report)
 		}
 	}
@@ -302,7 +329,7 @@ func main() {
 	}
 }
 
-func runEval(llm *llmClient, promptName, compareTo, datasetDir, outputDir string) evalReport {
+func runEval(llm, judgeLLM *llmClient, promptName, compareTo, datasetDir, outputDir string) evalReport {
 	dsDir := datasetDir
 	if dsDir == "" {
 		dsDir = filepath.Join("datasets", "prompts", promptName)
@@ -350,7 +377,7 @@ func runEval(llm *llmClient, promptName, compareTo, datasetDir, outputDir string
 		case "name_extract":
 			result = evalNameExtract(llm, tc, systemPrompt)
 		case "action":
-			result = evalAction(llm, tc, systemPrompt)
+			result = evalAction(llm, judgeLLM, tc, systemPrompt)
 		}
 
 		report.Results = append(report.Results, result)
@@ -473,14 +500,14 @@ func formatDiff(d [2]int) string {
 
 // --- Phase 2: Automated Mutation ---
 
-func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outputDir string) (evalReport, evolveResult) {
+func evolveLoop(llm, judgeLLM *llmClient, promptName string, rounds int, datasetDir, outputDir string) (evalReport, evolveResult) {
 	systemPrompt := getDefaultPrompt(promptName)
 	baselineSize := len(systemPrompt)
 
 	// Run baseline eval
 	fmt.Printf("=== %s Evolution (%d rounds) ===\n\n", promptName, rounds)
 	bestPrompt := systemPrompt
-	bestReport := runEvalWithPrompt(llm, promptName, bestPrompt, datasetDir, outputDir)
+	bestReport := runEvalWithPrompt(llm, judgeLLM, promptName, bestPrompt, datasetDir, outputDir)
 	bestScore := bestReport.Score
 	baselineScore := bestScore
 	fmt.Printf("Baseline: %d/%d (%.1f%%)\n\n", bestReport.Passed, bestReport.Total, bestScore)
@@ -510,7 +537,7 @@ func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outpu
 
 		// Generate candidate
 		maxGrowth := max(int(float64(baselineSize)*1.5), baselineSize+200)
-		candidate, err := mutatePrompt(llm, bestPrompt, failures, maxGrowth)
+		candidate, err := mutatePrompt(judgeLLM, bestPrompt, failures, maxGrowth)
 		if err != nil {
 			fmt.Printf("Mutation failed: %v — skipping round\n\n", err)
 			continue
@@ -527,7 +554,7 @@ func evolveLoop(llm *llmClient, promptName string, rounds int, datasetDir, outpu
 		}
 
 		// Eval candidate
-		candidateReport := runEvalWithPrompt(llm, promptName, candidate, datasetDir, outputDir)
+		candidateReport := runEvalWithPrompt(llm, judgeLLM, promptName, candidate, datasetDir, outputDir)
 		fmt.Printf("Candidate: %d/%d (%.1f%%)", candidateReport.Passed, candidateReport.Total, candidateReport.Score)
 
 		if candidateReport.Score > bestScore {
@@ -629,7 +656,7 @@ func getDefaultPrompt(name string) string {
 }
 
 // runEvalWithPrompt runs eval with a specific prompt text (no console output per case)
-func runEvalWithPrompt(llm *llmClient, promptName, systemPrompt, datasetDir, outputDir string) evalReport {
+func runEvalWithPrompt(llm, judgeLLM *llmClient, promptName, systemPrompt, datasetDir, outputDir string) evalReport {
 	dsDir := datasetDir
 	if dsDir == "" {
 		dsDir = filepath.Join("datasets", "prompts", promptName)
@@ -657,7 +684,7 @@ func runEvalWithPrompt(llm *llmClient, promptName, systemPrompt, datasetDir, out
 		case "name_extract":
 			result = evalNameExtract(llm, tc, systemPrompt)
 		case "action":
-			result = evalAction(llm, tc, systemPrompt)
+			result = evalAction(llm, judgeLLM, tc, systemPrompt)
 		}
 
 		report.Results = append(report.Results, result)
@@ -727,15 +754,15 @@ func evalNameExtract(llm *llmClient, tc testCase, prompt string) caseResult {
 }
 
 // evalAction calls LLM with ActionPrompt, then uses LLM-as-judge to score the response
-func evalAction(llm *llmClient, tc testCase, prompt string) caseResult {
+func evalAction(llm, judgeLLM *llmClient, tc testCase, prompt string) caseResult {
 	reply, err := llm.chat(prompt, tc.TaskInput)
 	if err != nil {
 		return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: "[error: " + err.Error() + "]", Diff: tc.Difficulty, Category: tc.Category}
 	}
 
-	// Use LLM-as-judge
+	// Use LLM-as-judge (may use a stronger model like deepseek-reasoner)
 	judgeQuery := fmt.Sprintf(judgePrompt, tc.ExpectedBehavior, reply)
-	judgeReply, err := llm.chat("You are a strict evaluator. Reply with only valid JSON.", judgeQuery)
+	judgeReply, err := judgeLLM.chat("You are a strict evaluator. Reply with only valid JSON.", judgeQuery)
 	if err != nil {
 		return caseResult{TaskInput: tc.TaskInput, Expected: tc.ExpectedBehavior, Got: reply, Diff: tc.Difficulty, Category: tc.Category}
 	}

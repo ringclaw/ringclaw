@@ -23,23 +23,24 @@ When a message arrives, RingClaw determines whether it's a summarize request thr
 flowchart TD
     Msg[Incoming message] --> Trigger{Matches intent keywords?}
     Trigger -->|No| Agent[Forward to default Agent]
-    Trigger -->|Yes| Keyword{Starts with summarize keyword?}
-    Keyword -->|Yes| Perm[Permission check]
+    Trigger -->|Yes| BotGroup{Bot group chat?}
+    BotGroup -->|Yes| Owner{Sender is owner?}
+    Owner -->|No| Block[Denied: privileged command]
+    Owner -->|Yes| Keyword{Starts with summarize keyword?}
+    BotGroup -->|No - Bot DM| Keyword
+    Keyword -->|Yes| DMCheck{In bot DM?}
     Keyword -->|No| AI{AI intent classification}
-    AI -->|summarize| Perm
+    AI -->|summarize| DMCheck
     AI -->|task/note/event| Agent
     AI -->|chat| Agent
-    Perm --> BotGroup{Bot group chat?}
-    BotGroup -->|No - Bot DM| PrivApp{Private App configured?}
-    BotGroup -->|Yes| GroupCfg{group_summary_group_id set?}
+    DMCheck -->|Yes| PrivApp{Private App configured?}
+    DMCheck -->|No - Group| GroupCfg{group_summary_group_id matches current?}
     GroupCfg -->|No| Deny[Denied]
-    GroupCfg -->|Yes| GroupMatch{Current group = configured group?}
-    GroupMatch -->|No| Deny
-    GroupMatch -->|Yes| CrossCheck{Cross-group/person check}
-    CrossCheck -->|Pass| GroupSum[In-group summarize]
-    CrossCheck -->|Deny| Deny
+    GroupCfg -->|Yes| CrossCheck{Cross-group/person mention?}
+    CrossCheck -->|Yes| Deny
+    CrossCheck -->|No| GroupSum[handleCurrentGroupSummarize<br/>uses current chat directly]
     PrivApp -->|No| Deny2[Denied: requires Private App]
-    PrivApp -->|Yes| Resolve[Resolve target chat]
+    PrivApp -->|Yes| Resolve[handleSummarize<br/>resolve target chat]
 ```
 
 ## Name Resolution

@@ -56,6 +56,7 @@ var agentCandidates = []agentCandidate{
 	{Name: "iflow", Binary: "iflow", Args: []string{"--experimental-acp"}, Type: "acp", Model: ""},
 	{Name: "kiro", Binary: "kiro-cli", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "qwen", Binary: "qwen", Args: []string{"--acp"}, Type: "acp", Model: ""},
+	{Name: "augment", Binary: "auggie", Args: []string{"--acp"}, Type: "acp", Model: ""},
 }
 
 // DefaultOrder returns the priority list for choosing the default agent.
@@ -65,7 +66,7 @@ func DefaultOrder() []string { return defaultOrder }
 // Lower index = higher priority.
 var defaultOrder = []string{
 	"claude", "codex", "cursor", "kimi", "gemini", "opencode", "openclaw",
-	"pi", "copilot", "droid", "iflow", "kiro", "qwen",
+	"pi", "copilot", "droid", "iflow", "kiro", "qwen", "augment",
 }
 
 // DetectAndConfigure auto-detects local agents and populates the config.
@@ -109,10 +110,17 @@ func DetectAndConfigure(cfg *Config) bool {
 		modified = true
 	}
 
+	// Backfill full_access for codex ACP agent (claude-agent-acp doesn't support set_mode)
+	if agCfg, exists := cfg.Agents["codex"]; exists && agCfg.Type == "acp" && !agCfg.FullAccess {
+		agCfg.FullAccess = true
+		cfg.Agents["codex"] = agCfg
+		modified = true
+	}
+
 	// Special handling for openclaw: resolve gateway connection from
-	// env vars -> ~/.openclaw/openclaw.json -> skip.
+	// cfg.OpenclawGateway -> ~/.openclaw/openclaw.json -> skip.
 	if agCfg, exists := cfg.Agents["openclaw"]; exists && agCfg.Type == "acp" && len(agCfg.Args) == 0 {
-		gwURL, gwToken, gwPassword := loadOpenclawGateway()
+		gwURL, gwToken, gwPassword := loadOpenclawGateway(cfg)
 		if gwURL != "" {
 			args := []string{"acp", "--url", gwURL, "--session", "agent:main:main"}
 			if gwToken != "" {
@@ -133,7 +141,7 @@ func DetectAndConfigure(cfg *Config) bool {
 
 	// Fallback: if openclaw not configured, try HTTP via gateway config.
 	if _, exists := cfg.Agents["openclaw"]; !exists {
-		gwURL, gwToken, _ := loadOpenclawGateway()
+		gwURL, gwToken, _ := loadOpenclawGateway(cfg)
 		if gwURL != "" {
 			// Convert ws(s):// to http(s):// for HTTP endpoint
 			httpURL := gwURL
@@ -170,15 +178,12 @@ func DetectAndConfigure(cfg *Config) bool {
 }
 
 // loadOpenclawGateway resolves openclaw gateway connection info.
-// Priority: env vars > ~/.openclaw/openclaw.json.
+// Priority: cfg.OpenclawGateway > ~/.openclaw/openclaw.json.
 // Returns (url, token, password). url="" means not configured.
-func loadOpenclawGateway() (gwURL, gwToken, gwPassword string) {
-	// 1. Environment variables take priority
-	gwURL = os.Getenv("OPENCLAW_GATEWAY_URL")
-	gwToken = os.Getenv("OPENCLAW_GATEWAY_TOKEN")
-	gwPassword = os.Getenv("OPENCLAW_GATEWAY_PASSWORD")
-	if gwURL != "" {
-		return
+func loadOpenclawGateway(cfg *Config) (gwURL, gwToken, gwPassword string) {
+	// 1. config.json openclaw_gateway takes priority
+	if cfg != nil && cfg.OpenclawGateway.URL != "" {
+		return cfg.OpenclawGateway.URL, cfg.OpenclawGateway.Token, cfg.OpenclawGateway.Password
 	}
 
 	// 2. Read from ~/.openclaw/openclaw.json

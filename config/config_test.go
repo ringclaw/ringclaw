@@ -66,32 +66,65 @@ func TestLoadFromFile(t *testing.T) {
 	}
 }
 
-func TestLoadEnvOverride(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.RC.ClientID = "from-file"
+// TestLoadIgnoresEnv verifies that all previously supported env vars
+// are silently ignored by Load(); config.json is the sole source.
+func TestLoadIgnoresEnv(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
 
-	t.Setenv("RC_CLIENT_ID", "from-env")
-	t.Setenv("RC_CLIENT_SECRET", "env-secret")
-	t.Setenv("RC_JWT_TOKEN", "env-jwt")
-	t.Setenv("RC_CHAT_IDS", "chat-1, chat-2 ,,chat-3")
-	t.Setenv("RC_BOT_MENTION_ONLY", "false")
+	cfgDir := filepath.Join(tmpHome, ".ringclaw")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	jsonPayload := `{
+		"default_agent": "from-json",
+		"ringcentral": {
+			"client_id": "json-cid",
+			"bot_token": "json-bot",
+			"chat_ids": ["json-chat-1"]
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(jsonPayload), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
 
-	loadEnv(cfg)
+	envVars := []string{
+		"RINGCLAW_DEFAULT_AGENT", "RINGCLAW_AGENT_WORKSPACE", "RINGCLAW_API_ADDR",
+		"RC_CLIENT_ID", "RC_CLIENT_SECRET", "RC_JWT_TOKEN", "RC_SERVER_URL",
+		"RC_CHAT_IDS", "RC_SOURCE_USER_IDS", "RC_BOT_TOKEN", "RC_BOT_MENTION_ONLY",
+	}
+	for _, name := range envVars {
+		t.Setenv(name, "env-"+name)
+	}
 
-	if cfg.RC.ClientID != "from-env" {
-		t.Errorf("expected env override for client_id, got %q", cfg.RC.ClientID)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
 	}
-	if cfg.RC.ClientSecret != "env-secret" {
-		t.Errorf("expected env-secret, got %q", cfg.RC.ClientSecret)
+
+	if cfg.DefaultAgent != "from-json" {
+		t.Errorf("DefaultAgent: env must be ignored, got %q", cfg.DefaultAgent)
 	}
-	if len(cfg.RC.ChatIDs) != 3 {
-		t.Fatalf("expected 3 chat IDs, got %d", len(cfg.RC.ChatIDs))
+	if cfg.RC.ClientID != "json-cid" {
+		t.Errorf("RC.ClientID: env must be ignored, got %q", cfg.RC.ClientID)
 	}
-	if cfg.RC.ChatIDs[0] != "chat-1" || cfg.RC.ChatIDs[1] != "chat-2" || cfg.RC.ChatIDs[2] != "chat-3" {
-		t.Fatalf("unexpected chat IDs: %#v", cfg.RC.ChatIDs)
+	if cfg.RC.BotToken != "json-bot" {
+		t.Errorf("RC.BotToken: env must be ignored, got %q", cfg.RC.BotToken)
 	}
-	if cfg.RC.BotMentionOnly == nil || *cfg.RC.BotMentionOnly {
-		t.Fatalf("expected bot_mention_only=false, got %#v", cfg.RC.BotMentionOnly)
+	if len(cfg.RC.ChatIDs) != 1 || cfg.RC.ChatIDs[0] != "json-chat-1" {
+		t.Errorf("RC.ChatIDs: env must be ignored, got %#v", cfg.RC.ChatIDs)
+	}
+	if cfg.RC.GroupMentionOnly != nil {
+		t.Errorf("RC.GroupMentionOnly: env must be ignored, got %#v", cfg.RC.GroupMentionOnly)
+	}
+	if cfg.RC.BotMentionOnly != nil {
+		t.Errorf("RC.BotMentionOnly: Load must normalize the deprecated field to nil, got %#v", cfg.RC.BotMentionOnly)
+	}
+	if cfg.AgentWorkspace != "" {
+		t.Errorf("AgentWorkspace: env must be ignored, got %q", cfg.AgentWorkspace)
+	}
+	if cfg.APIAddr != "" {
+		t.Errorf("APIAddr: env must be ignored, got %q", cfg.APIAddr)
 	}
 }
 

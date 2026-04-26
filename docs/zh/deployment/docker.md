@@ -4,34 +4,30 @@ title: Docker
 
 # Docker
 
+所有 RingClaw 配置都存放在 `~/.ringclaw/config.json` 中——将该目录挂载到容器内即可
+与宿主机共享同一份配置文件。此前使用的 `-e RC_*` / `-e OPENCLAW_GATEWAY_*` 等
+环境变量已被废弃，容器内不再读取。
+
 ## 构建
 
 ```bash
 docker build -t ringclaw .
 ```
 
-## 使用 Bot Token 启动
+## 准备配置
+
+在宿主机上运行 `ringclaw setup`（或直接编辑文件）确保 `~/.ringclaw/config.json`
+已存在。完整字段清单见[配置](../guide/configuration.md)。
+
+## 启动
 
 ```bash
 docker run -d --name ringclaw \
   -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_BOT_TOKEN=xxx \
   ringclaw
 ```
 
-## 使用 Private App 和 HTTP Agent 启动
-
-```bash
-docker run -d --name ringclaw \
-  -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_BOT_TOKEN=xxx \
-  -e RC_CLIENT_ID=xxx \
-  -e RC_CLIENT_SECRET=xxx \
-  -e RC_JWT_TOKEN=xxx \
-  -e OPENCLAW_GATEWAY_URL=https://api.example.com \
-  -e OPENCLAW_GATEWAY_TOKEN=sk-xxx \
-  ringclaw
-```
+容器启动时会读取 `/root/.ringclaw/config.json`。
 
 ## 查看日志
 
@@ -43,7 +39,6 @@ docker logs -f ringclaw
 
 ```bash
 docker run -it -v ~/.ringclaw:/root/.ringclaw \
-  -e RC_BOT_TOKEN=xxx \
   ghcr.io/ringclaw/ringclaw start
 ```
 

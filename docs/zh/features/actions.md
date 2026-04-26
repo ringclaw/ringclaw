@@ -14,6 +14,7 @@ AI Agent 在对话中可以自动创建笔记、任务、日历事件和 Adaptiv
 sequenceDiagram
     participant AI as AI Agent
     participant R as RingClaw
+    participant O as Owner DM
     participant RC as RingCentral
 
     AI-->>R: 回复 (含 ACTION 块)
@@ -21,11 +22,31 @@ sequenceDiagram
     R->>R: 分离文本回复和 ACTION
     R->>RC: 发送文本回复
     loop 每个 ACTION
-        R->>R: 解析类型和参数
+        R->>R: 解析类型、参数、chatid
+        alt 指定了 chatid 且发送者不在可信列表 且 OOB 已配置
+            R->>O: Challenge 提示<br/>"待审批 (challenge id).<br/>在主机运行: ringclaw approval id"
+            Note over O,R: Owner 在主机执行 `ringclaw approval id`
+            R->>R: 异步等待终端审批
+            alt 批准
+                R->>RC: 在目标聊天执行 action
+                R->>RC: 通知原聊天
+            else 拒绝 / 超时
+                R->>RC: 通知原聊天
+            end
+        else 指定了 chatid 且发送者不在可信列表 且 OOB 未配置
+            R->>R: 静默丢弃 chatid，强制回到 origin chat (WARN 日志)
+        end
+        alt owner 跨聊天 (target ≠ origin 且 ≠ owner DM)
+            R->>O: 同步 audit notice<br/>[notice] TYPE by requester at ts: origin=... target=...
+            O-->>R: ACK (5 秒内) 或超时/错误
+            alt 通知发送失败
+                R->>R: 拒绝 action (Refused cross-chat TYPE: ...)
+            end
+        end
         alt NOTE
             R->>RC: CreateNote + PublishNote
         else TASK
-            R->>RC: CreateTask
+            R->>RC: CreateTask (可选: 通过 Private App 解析 assignee)
         else EVENT
             R->>RC: CreateEvent
         else CARD
@@ -35,7 +56,7 @@ sequenceDiagram
             R->>RC: SendPost
         end
     end
-    R->>RC: 发送 ACTION 执行结果
+    R->>RC: 发送 ACTION 执行结果汇总
 ```
 
 ## ACTION 块格式
@@ -52,7 +73,12 @@ ACTION:EVENT title=Sprint 评审 start=2026-04-01T14:00:00Z end=2026-04-01T15:00
 END_ACTION
 ```
 
-通过 `chatid=<id>` 参数可以将操作定向到其他聊天（Bot 模式下出于安全考虑已禁用）。无需额外配置 — ACTION 提示词会自动注入。
+ACTION 可通过 `chatid=<id>` 参数定向到其他聊天。
+
+- **非 owner 发送者**：OOB 已配置时（Private App + owner 私聊已解析），系统向 owner 私聊发送 challenge 提示，owner 需在主机上执行 `ringclaw approval <id>` 批准。批准后 action 异步在目标聊天执行。OOB 未配置时回退为静默丢弃（强制回到 origin chat）。
+- **owner 发起的跨聊天**：派发前经过**同步 fail-closed audit notice**（通过 owner 私聊确认）——完整门控规则见 [安全 › 第二层](../security/index.md#第二层-ai-驱动的-action-派发)。
+
+无需额外配置 — ACTION 提示词会自动注入。
 
 ## 任务命令
 

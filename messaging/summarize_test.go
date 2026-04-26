@@ -373,6 +373,91 @@ func TestExtractDateViaAgent_Error(t *testing.T) {
 	}
 }
 
+// dateAgentSpy fails the test if Chat is invoked — used to assert the
+// regex fast-path short-circuits the LLM call.
+type dateAgentSpy struct {
+	t      *testing.T
+	called int
+}
+
+func (a *dateAgentSpy) Chat(_ context.Context, _, _ string) (string, error) {
+	a.called++
+	a.t.Fatalf("agent.Chat must not be called when regex matches")
+	return "", nil
+}
+func (a *dateAgentSpy) ResetSession(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (a *dateAgentSpy) SetCwd(_ string)        {}
+func (a *dateAgentSpy) Info() agent.AgentInfo { return agent.AgentInfo{Name: "spy"} }
+
+// TestExtractDateViaAgent_RegexFastPath_SkipsLLM is the regression for the
+// production bug where "总结最近一周的聊天" timed out on the LLM extractor
+// (10 s deadline) and then the regex fallback collapsed to -3 days. With
+// the regex now run first AND covering "一周", the LLM must not be called
+// at all.
+func TestExtractDateViaAgent_RegexFastPath_SkipsLLM(t *testing.T) {
+	cases := []string{
+		"总结最近一周的聊天",
+		"总结一下![:Team](158994374662) 最近一周的聊天",
+		"过去三天的消息",
+		"最近一个月的活动",
+		"4月10日的消息",
+		"summarize last 7 days",
+		// Weekday phrases must also short-circuit the LLM. This is the
+		// regression for the production bug where "周五" fell through
+		// to the LLM, which returned NONE, defaulting summary to today.
+		"总结周五的讨论",
+		"上周三的会议纪要",
+		"summarize last friday",
+		"this monday update",
+	}
+	for _, in := range cases {
+		ag := &dateAgentSpy{t: t}
+		got := extractDateViaAgent(context.Background(), ag, in)
+		if got.Equal(todayStart()) && !looksLikeTodayWeekdayMatch(in) {
+			t.Errorf("extractDateViaAgent(%q) = today; expected regex match to back-date", in)
+		}
+		if ag.called != 0 {
+			t.Errorf("extractDateViaAgent(%q) invoked LLM %d time(s); expected 0", in, ag.called)
+		}
+	}
+}
+
+// looksLikeTodayWeekdayMatch is a narrow escape hatch: when the host clock
+// is on the same weekday the test phrase names ("周X" alone or "this X"),
+// resolveWeekday correctly returns today, which is otherwise our
+// "no match" signal in the assertion above.
+func looksLikeTodayWeekdayMatch(in string) bool {
+	wd := int(time.Now().Weekday())
+	if wd == 0 {
+		wd = 7
+	}
+	zhMap := map[int]string{1: "周一", 2: "周二", 3: "周三", 4: "周四", 5: "周五", 6: "周六", 7: "周日"}
+	enMap := map[int]string{1: "monday", 2: "tuesday", 3: "wednesday", 4: "thursday", 5: "friday", 6: "saturday", 7: "sunday"}
+	if z, ok := zhMap[wd]; ok && strings.Contains(in, z) && !strings.Contains(in, "上") && !strings.Contains(in, "下") {
+		return true
+	}
+	if e, ok := enMap[wd]; ok && strings.Contains(strings.ToLower(in), e) &&
+		!strings.Contains(strings.ToLower(in), "last") &&
+		!strings.Contains(strings.ToLower(in), "next") &&
+		!strings.Contains(strings.ToLower(in), "past") {
+		return true
+	}
+	return false
+}
+
+// TestExtractDateViaAgent_NilAgent_RegexOnly confirms the helper still
+// works when no agent is configured (e.g. early init paths).
+func TestExtractDateViaAgent_NilAgent_RegexOnly(t *testing.T) {
+	got := extractDateViaAgent(context.Background(), nil, "总结最近一周的聊天")
+	now := time.Now()
+	diffDays := int(now.Sub(got).Hours()/24 + 0.5)
+	if diffDays < 6 || diffDays > 8 {
+		t.Errorf("expected ~7 days back, got %d days (%s)", diffDays, got.Format("2006-01-02 15:04"))
+	}
+}
+
 func TestResolveChatTarget_SkipsBotMention(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

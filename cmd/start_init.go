@@ -10,6 +10,8 @@ import (
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/messaging"
 	"github.com/ringclaw/ringclaw/messaging/heartbeat"
+	"github.com/ringclaw/ringclaw/messaging/oob"
+	"github.com/ringclaw/ringclaw/messaging/persona"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -42,7 +44,9 @@ func initClients(ctx context.Context, cfg *config.Config) (*clients, error) {
 		}
 		privateClient = ringcentral.NewClient(creds)
 		if err := privateClient.Authenticate(); err != nil {
-			slog.Error("private app authentication failed, continuing without it", "error", err)
+			slog.Error("private app authentication failed, continuing without it — summarize and cross-chat features will be unavailable. "+
+				"If you see OAU-251, ensure the Private App has 'JWT' grant type enabled in the RingCentral Developer Console "+
+				"(https://developers.ringcentral.com) and the JWT token belongs to a user in the same account as the app.", "error", err)
 			privateClient = nil
 		} else {
 			slog.Info("private app authentication successful")
@@ -114,6 +118,30 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 	}
 	handler.SetGroupSummaryConfig(cfg.RC.GroupSummaryGroup(), cfg.RC.GroupSummaryLimit())
 
+	// Persona + memory banner: a single Loader feeds every dispatch so
+	// switching agents or resetting sessions keeps the operator's
+	// SOUL.md and layered memory visible. Disabled by config? the
+	// loader's Enabled() reports false and the handler silently emits
+	// an empty banner.
+	personaCfg := cfg.Persona.Resolved()
+	if personaCfg.Enabled {
+		store := persona.NewStore(personaCfg)
+		// Best-effort template creation — never fatal; a missing soul
+		// just means no persona injection until the operator edits
+		// the file (or re-runs).
+		if err := store.EnsureSoulTemplate(); err != nil {
+			slog.Warn("persona: EnsureSoulTemplate failed", "component", "start", "error", err)
+		}
+		handler.SetPersonaLoader(persona.NewLoader(store))
+		slog.Info("persona loader installed",
+			"component", "start",
+			"soul", personaCfg.SoulFile,
+			"memoryDir", personaCfg.MemoryDir,
+		)
+	} else {
+		slog.Info("persona disabled via config", "component", "start")
+	}
+
 	// Set up reload callback for /reload command
 	handler.SetReloadAgents(func() ([]messaging.AgentMeta, map[string]string, []string) {
 		before := make(map[string]bool, len(cfg.Agents))
@@ -164,7 +192,7 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 }
 
 // initServices starts the API server, cron scheduler, and heartbeat runner.
-func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *messaging.Handler) {
+func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *messaging.Handler, oobMgr *oob.Manager) {
 	defaultChatID := ""
 	if len(cfg.RC.ChatIDs) > 0 {
 		defaultChatID = cfg.RC.ChatIDs[0]
@@ -183,7 +211,7 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 	if err != nil {
 		slog.Warn("failed to load API token, API will be unauthenticated", "component", "api", "error", err)
 	}
-	apiServer, err := api.NewServer(apiClient, apiAddr, defaultChatID, apiToken)
+	apiServer, err := api.NewServer(apiClient, apiAddr, defaultChatID, apiToken, oobMgr)
 	if err != nil {
 		slog.Error("failed to create API server", "error", err)
 		return

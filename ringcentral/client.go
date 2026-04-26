@@ -45,6 +45,17 @@ func (c *Client) IsBotDM(chatID string) bool {
 	return c.isBot && c.dmChatID != "" && chatID == c.dmChatID
 }
 
+// DMChatID returns the bot's DM chat ID with the trusted owner (set
+// via SetDMChatID at startup). Empty when the client is not a bot or
+// the DM chat has not been resolved yet. Used by the OOB approval flow
+// to choose where to deliver challenge cards.
+func (c *Client) DMChatID() string {
+	if !c.isBot {
+		return ""
+	}
+	return c.dmChatID
+}
+
 // SetMonitor links a monitor for tracking sent posts.
 func (c *Client) SetMonitor(m *Monitor) {
 	c.monitor = m

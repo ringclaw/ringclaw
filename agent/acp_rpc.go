@@ -237,12 +237,18 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		return
 	}
 
-	optionID := "allow"
+	var optionID string
 	for _, opt := range req.Params.Options {
+		if optionID == "" {
+			optionID = opt.OptionID
+		}
 		if opt.Kind == "allow" {
 			optionID = opt.OptionID
 			break
 		}
+	}
+	if optionID == "" {
+		optionID = "allow"
 	}
 
 	type permissionOutcome struct {
@@ -260,6 +266,10 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		},
 	})
 
+	optionNames := make([]string, 0, len(req.Params.Options))
+	for _, opt := range req.Params.Options {
+		optionNames = append(optionNames, fmt.Sprintf("%s(kind=%s)", opt.OptionID, opt.Kind))
+	}
 	slog.Debug("auto-allowed permission request", "component", "acp",
-		"optionId", optionID)
+		"optionId", optionID, "available", strings.Join(optionNames, ","))
 }

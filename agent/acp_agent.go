@@ -32,6 +32,7 @@ func init() {
 			Model:        cfg.Model,
 			SystemPrompt: cfg.SystemPrompt,
 			AllowWrite:   cfg.AllowWrite,
+			FullAccess:   cfg.FullAccess,
 		})
 		if err := ag.Start(ctx); err != nil {
 			return nil, fmt.Errorf("start ACP agent: %w", err)
@@ -49,6 +50,7 @@ type ACPAgent struct {
 	cwd          string
 	env          map[string]string
 	allowWrite   bool
+	fullAccess   bool
 
 	mu       sync.Mutex
 	cmd      *exec.Cmd
@@ -66,10 +68,11 @@ type ACPAgent struct {
 	notifyMu sync.Mutex
 	notifyCh map[string]chan *sessionUpdate // sessionID -> channel
 
-	stderr         *acpStderrWriter
-	droppedUpdates atomic.Int64
-	loggedMethods  sync.Map
-	termMgr        *terminalManager
+	stderr             *acpStderrWriter
+	droppedUpdates     atomic.Int64
+	loggedMethods      sync.Map
+	termMgr            *terminalManager
+	setModeUnsupported atomic.Bool // set when agent rejects session/set_mode (e.g. claude-agent-acp)
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
@@ -81,6 +84,7 @@ type ACPAgentConfig struct {
 	Cwd          string
 	Env          map[string]string
 	AllowWrite   bool
+	FullAccess   bool
 }
 
 // --- ACP protocol types ---
@@ -156,6 +160,82 @@ type permissionOption struct {
 	Kind     string `json:"kind"`
 }
 
+var (
+	fullAccessAckMu       sync.RWMutex
+	fullAccessAckOverride *bool // nil = not acknowledged (treated as false)
+
+	// fullAccessGrantSource, when non-nil, is consulted on every new
+	// ACP session to decide whether full-access mode should be enabled
+	// for that session. Phase 2 wires it to oob.Manager.FullAccessActive
+	// so the /full-access slash command can issue a TTL-bounded unlock
+	// without flipping any persistent config field.
+	//
+	// The startup-time `full_access: true` toggle still takes effect
+	// when isFullAccessAcked() is true; this source is additive — a
+	// session is granted full-access when EITHER the static config is
+	// on OR the dynamic source returns true.
+	fullAccessGrantSource func() bool
+)
+
+// SetFullAccessAck installs a configured acknowledgement for ACP
+// `full_access` mode. config.json is the sole source; pass true to
+// acknowledge, false to explicitly refuse.
+//
+// Intended to be called once from cmd/start after config load. Pass a
+// fresh value (or call ResetFullAccessAck) in tests to avoid leakage.
+func SetFullAccessAck(ack bool) {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessAckOverride = &ack
+}
+
+// ResetFullAccessAck clears any configured acknowledgement so that the
+// effective value falls back to its default (false). Test-only helper.
+func ResetFullAccessAck() {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessAckOverride = nil
+}
+
+// SetFullAccessGrantSource installs a callback that the agent layer
+// consults on every new ACP session. When the callback returns true,
+// the session is granted full-access mode regardless of the static
+// `full_access` config field. Pass nil to clear (test-only).
+//
+// Phase 2 wires this to oob.Manager.FullAccessActive so the
+// /full-access slash command can grant a TTL-bounded unlock.
+func SetFullAccessGrantSource(source func() bool) {
+	fullAccessAckMu.Lock()
+	defer fullAccessAckMu.Unlock()
+	fullAccessGrantSource = source
+}
+
+// isFullAccessGranted reports whether the dynamic grant source (e.g.
+// the OOB /full-access flow) is currently active. Returns false when
+// no source has been installed.
+func isFullAccessGranted() bool {
+	fullAccessAckMu.RLock()
+	src := fullAccessGrantSource
+	fullAccessAckMu.RUnlock()
+	if src == nil {
+		return false
+	}
+	return src()
+}
+
+// isFullAccessAcked resolves the effective acknowledgement. config.json
+// (via SetFullAccessAck) is the sole source; absent config is treated as
+// not acknowledged.
+func isFullAccessAcked() bool {
+	fullAccessAckMu.RLock()
+	override := fullAccessAckOverride
+	fullAccessAckMu.RUnlock()
+	if override != nil {
+		return *override
+	}
+	return false
+}
+
 // NewACPAgent creates a new ACP agent.
 func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	if cfg.Command == "" {
@@ -163,6 +243,15 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 	}
 	if cfg.Cwd == "" {
 		cfg.Cwd = defaultWorkspace()
+	}
+	fullAccess := cfg.FullAccess
+	if fullAccess && !isFullAccessAcked() {
+		slog.Warn("full_access requested but not acknowledged: refusing to disable MCP guardrails. Set full_access_ack: true in ~/.ringclaw/config.json.",
+			"component", "acp", "command", cfg.Command, "ack_config", "full_access_ack")
+		fullAccess = false
+	} else if fullAccess {
+		slog.Warn("full_access ENABLED: agent will execute MCP tool calls without per-call approval",
+			"component", "acp", "command", cfg.Command)
 	}
 	return &ACPAgent{
 		command:      cfg.Command,
@@ -172,6 +261,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		cwd:          cfg.Cwd,
 		env:          cfg.Env,
 		allowWrite:   cfg.AllowWrite,
+		fullAccess:   fullAccess,
 		sessions:     make(map[string]string),
 		pending:      make(map[int64]chan *rpcResponse),
 		notifyCh:     make(map[string]chan *sessionUpdate),
@@ -258,6 +348,7 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	}
 
 	slog.Debug("initialized", "component", "acp", "pid", pid, "result", string(result))
+	registerActiveACPAgent(a)
 	return nil
 }
 
@@ -304,13 +395,30 @@ func (a *ACPAgent) Stop() {
 	a.mu.Lock()
 	a.started = false
 	a.mu.Unlock()
+
+	unregisterActiveACPAgent(a)
 }
 
 // SetCwd changes the working directory for subsequent sessions.
+// Rejects paths outside the configured workspace root as a defense-in-depth
+// against bypasses of the /cwd handler.
 func (a *ACPAgent) SetCwd(cwd string) {
+	if err := EnsurePathInWorkspace(cwd); err != nil {
+		slog.Warn("acp agent cwd rejected", "component", "acp", "cwd", cwd, "error", err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cwd == cwd {
+		return
+	}
 	a.cwd = cwd
+	// Clear all sessions so they get recreated with the new cwd.
+	// Existing ACP sessions retain the cwd from session/new and cannot be updated.
+	for k := range a.sessions {
+		delete(a.sessions, k)
+	}
+	slog.Info("cwd changed, cleared existing sessions", "component", "acp", "cwd", cwd)
 }
 
 // ResetSession clears the existing session and creates a new one.
@@ -462,14 +570,80 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
 
-	if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
-		"sessionId": sessionResult.SessionID,
-		"modeId":    "full-access",
-	}); err != nil {
-		slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
-			"component", "acp", "session", sessionResult.SessionID, "error", err)
-	} else {
-		slog.Info("set session mode to full-access", "component", "acp", "session", sessionResult.SessionID)
+	// The static a.fullAccess toggle covers operators who configured
+	// `full_access: true` + acknowledged it at startup. The dynamic
+	// grant source (Phase 2 OOB /full-access) covers TTL-bounded
+	// unlocks. Either one flips the session into full-access mode for
+	// THIS conversation; we record which source granted it so audit
+	// logs distinguish the two.
+	//
+	// Race note: we re-read isFullAccessGranted() a second time after
+	// the session has been registered in a.sessions. This closes the
+	// narrow window where /full-access revoke (or TTL expiry) fires
+	// AFTER our first check but BEFORE the new session became visible
+	// to the revoke hook — without this double-read the revoke hook's
+	// snapshot could miss the session, leaving it in full-access
+	// despite the operator seeing "revoked". A third post-call check
+	// handles the even narrower window where revoke fires mid-flight;
+	// we compensate by issuing an immediate demotion.
+	dynGrant := isFullAccessGranted()
+	if a.fullAccess || dynGrant {
+		// Post-registration re-read: if the dynamic grant has
+		// flipped off since the first check, skip set_mode entirely.
+		// a.fullAccess (static) cannot change at runtime so it is
+		// excluded from the re-check.
+		if !a.fullAccess && !isFullAccessGranted() {
+			return sessionResult.SessionID, true, nil
+		}
+		grantSource := "config:full_access"
+		if !a.fullAccess && dynGrant {
+			grantSource = "oob:/full-access"
+		} else if a.fullAccess && dynGrant {
+			grantSource = "config:full_access+oob"
+		}
+		if a.setModeUnsupported.Load() {
+			slog.Debug("set_mode unsupported by agent, skipping full-access grant",
+				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "source", grantSource)
+			return sessionResult.SessionID, true, nil
+		}
+		if _, err := a.call(ctx, "session/set_mode", map[string]interface{}{
+			"sessionId": sessionResult.SessionID,
+			"modeId":    "full-access",
+		}); err != nil {
+			if isSetModeUnsupportedErr(err) {
+				a.setModeUnsupported.Store(true)
+				slog.Warn("set_mode full-access not supported by this agent; will skip on subsequent sessions (per-call approval still applies)",
+					"component", "acp", "command", a.command, "session", sessionResult.SessionID, "source", grantSource, "error", err)
+			} else {
+				slog.Warn("set_mode full-access failed, MCP tool calls may be blocked by approval",
+					"component", "acp", "session", sessionResult.SessionID, "source", grantSource, "error", err)
+			}
+		} else {
+			slog.Warn("ACP session granted full-access (MCP guardrails disabled for this session)",
+				"component", "acp", "command", a.command, "session", sessionResult.SessionID, "conversation", conversationID, "source", grantSource)
+			// Post-call re-check: if revoke landed while our
+			// set_mode was in flight, demote immediately so the
+			// session does not linger in full-access.
+			if !a.fullAccess && !isFullAccessGranted() {
+				if _, derr := a.call(ctx, "session/set_mode", map[string]interface{}{
+					"sessionId": sessionResult.SessionID,
+					"modeId":    "default",
+				}); derr != nil {
+					a.mu.Lock()
+					if cur, ok := a.sessions[conversationID]; ok && cur == sessionResult.SessionID {
+						delete(a.sessions, conversationID)
+					}
+					a.mu.Unlock()
+					slog.Warn("acp: post-grant revoke compensation failed, session dropped from map",
+						"component", "acp", "command", a.command,
+						"session", sessionResult.SessionID, "conversation", conversationID, "error", derr)
+				} else {
+					slog.Warn("acp: post-grant revoke compensation demoted session to default",
+						"component", "acp", "command", a.command,
+						"session", sessionResult.SessionID, "conversation", conversationID)
+				}
+			}
+		}
 	}
 
 	return sessionResult.SessionID, true, nil
@@ -505,6 +679,121 @@ func extractChunkText(update *sessionUpdate) string {
 		}
 	}
 	return ""
+}
+
+// activeACPAgents tracks every ACPAgent whose Start() has completed
+// successfully and whose Stop() has not yet run. The OOB /full-access
+// revoke / TTL-expiry hook walks this set to demote live sessions
+// back to the default mode so a grant truly ends when the operator
+// (or the TTL) says so, not only on the next brand-new session.
+var activeACPAgents sync.Map // map[*ACPAgent]struct{}
+
+func registerActiveACPAgent(a *ACPAgent) {
+	if a == nil {
+		return
+	}
+	activeACPAgents.Store(a, struct{}{})
+}
+
+func unregisterActiveACPAgent(a *ACPAgent) {
+	if a == nil {
+		return
+	}
+	activeACPAgents.Delete(a)
+}
+
+// DemoteAllACPFullAccess walks every registered ACPAgent and
+// best-effort downgrades every live session back to the default ACP
+// mode. Intended to be wired from oob.Manager's revoke hook so
+// explicit /full-access revoke and TTL expiry both take effect on
+// sessions that were already unlocked, not just on brand-new ones
+// created after the revoke.
+//
+// The ctx is optional — pass context.Background() from a revoke hook
+// when no request-scoped context is available; each per-session RPC
+// gets its own short timeout internally.
+func DemoteAllACPFullAccess(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	activeACPAgents.Range(func(k, _ interface{}) bool {
+		a, ok := k.(*ACPAgent)
+		if !ok || a == nil {
+			return true
+		}
+		a.demoteFullAccessSessions(ctx)
+		return true
+	})
+}
+
+// acpDemoteRPCTimeout caps the per-session set_mode call issued by
+// demoteFullAccessSessions so a single stuck ACP subprocess cannot
+// block demotion of the remaining sessions.
+const acpDemoteRPCTimeout = 3 * time.Second
+
+// demoteFullAccessSessions iterates every live (conversationID ->
+// sessionID) pair and sends session/set_mode modeId="default". On
+// success the entry stays in a.sessions so conversation history is
+// preserved; on error the entry is dropped so the next prompt for
+// that conversation creates a fresh session (which will honor the
+// current grant state via getOrCreateSession).
+func (a *ACPAgent) demoteFullAccessSessions(ctx context.Context) {
+	a.mu.Lock()
+	if !a.started {
+		a.mu.Unlock()
+		return
+	}
+	snapshot := make(map[string]string, len(a.sessions))
+	for k, v := range a.sessions {
+		snapshot[k] = v
+	}
+	a.mu.Unlock()
+	if len(snapshot) == 0 {
+		return
+	}
+	if a.setModeUnsupported.Load() {
+		slog.Debug("acp demote: set_mode unsupported by agent, nothing to demote",
+			"component", "acp", "command", a.command, "sessions", len(snapshot))
+		return
+	}
+
+	for convID, sid := range snapshot {
+		callCtx, cancel := context.WithTimeout(ctx, acpDemoteRPCTimeout)
+		_, err := a.call(callCtx, "session/set_mode", map[string]interface{}{
+			"sessionId": sid,
+			"modeId":    "default",
+		})
+		cancel()
+		if err != nil {
+			a.mu.Lock()
+			if cur, ok := a.sessions[convID]; ok && cur == sid {
+				delete(a.sessions, convID)
+			}
+			a.mu.Unlock()
+			slog.Warn("acp demote: set_mode default failed, session dropped from map (next prompt will rebuild)",
+				"component", "acp", "command", a.command,
+				"session", sid, "conversation", convID, "error", err)
+			continue
+		}
+		slog.Info("acp demote: session returned to default mode",
+			"component", "acp", "command", a.command,
+			"session", sid, "conversation", convID)
+	}
+}
+
+// isSetModeUnsupportedErr reports whether an error from session/set_mode
+// indicates the agent does not support custom modes (e.g. claude-agent-acp
+// returns "Invalid Mode"). When true, the caller should cache the result
+// and skip future set_mode calls for this agent process.
+func isSetModeUnsupportedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid mode") ||
+		strings.Contains(msg, "unknown mode") ||
+		strings.Contains(msg, "method not found") ||
+		strings.Contains(msg, "unsupported mode")
 }
 
 func extractPromptResultText(result json.RawMessage) string {

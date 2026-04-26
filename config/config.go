@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"github.com/ringclaw/ringclaw/messaging/persona"
 )
 
 var debugMode atomic.Bool
@@ -34,15 +36,41 @@ func ParseLogLevel(s string) slog.Level {
 
 // Config holds the application configuration.
 type Config struct {
-	DefaultAgent   string                 `json:"default_agent"`
-	AgentWorkspace string                 `json:"agent_workspace,omitempty"`
-	APIAddr        string                 `json:"api_addr,omitempty"`
-	LogLevel       string                 `json:"log_level,omitempty"`  // "debug", "info" (default), "warn", "error"
-	LogFormat      string                 `json:"log_format,omitempty"` // "text" (default), "json", "color"
-	Agents         map[string]AgentConfig `json:"agents"`
-	RC             RCConfig               `json:"ringcentral,omitempty"`
-	Heartbeat      HeartbeatConfig        `json:"heartbeat,omitempty"`
-	Cron           CronConfig             `json:"cron,omitempty"`
+	DefaultAgent   string `json:"default_agent"`
+	AgentWorkspace string `json:"agent_workspace,omitempty"`
+	// AgentAllowWorkspaceList is the list of directory roots that /cwd
+	// and Agent.SetCwd are allowed to target. ~/.ringclaw/workspace and
+	// the legacy AgentWorkspace are always implicitly merged in by
+	// cmd/start so the agent's default cwd is admissible. See
+	// docs/security/index.md "Workspace Path Restrictions".
+	AgentAllowWorkspaceList []string               `json:"agent_allow_workspace_list,omitempty"`
+	APIAddr                 string                 `json:"api_addr,omitempty"`
+	LogLevel                string                 `json:"log_level,omitempty"`  // "debug", "info" (default), "warn", "error"
+	LogFormat               string                 `json:"log_format,omitempty"` // "text" (default), "json", "color"
+	Agents                  map[string]AgentConfig `json:"agents"`
+	RC                      RCConfig               `json:"ringcentral,omitempty"`
+	Heartbeat               HeartbeatConfig        `json:"heartbeat,omitempty"`
+	Cron                    CronConfig             `json:"cron,omitempty"`
+	OpenclawGateway         OpenclawGatewayConfig  `json:"openclaw_gateway,omitempty"`
+	// FullAccessAck acknowledges that ACP agents with `full_access: true`
+	// will execute MCP tool calls without per-call approval. When nil
+	// (omitted), this is treated as false. config.json is the sole
+	// source. See docs/security/index.md "ACP Full-Access Mode".
+	FullAccessAck *bool `json:"full_access_ack,omitempty"`
+
+	// Persona holds the SOUL + layered MEMORY configuration. Zero
+	// value is valid (the feature defaults to enabled with stock
+	// paths); see messaging/persona for the full resolution logic.
+	Persona persona.Config `json:"persona,omitempty"`
+}
+
+// OpenclawGatewayConfig holds the connection info for the external openclaw
+// gateway consumed by the auto-detected `openclaw` agent. When URL is empty,
+// ringclaw falls back to reading ~/.openclaw/openclaw.json.
+type OpenclawGatewayConfig struct {
+	URL      string `json:"url,omitempty"`
+	Token    string `json:"token,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 // HeartbeatConfig holds heartbeat runner configuration.
@@ -60,14 +88,25 @@ type CronConfig struct {
 
 // RCConfig holds RingCentral connection configuration.
 type RCConfig struct {
-	ClientID       string   `json:"client_id,omitempty"`
-	ClientSecret   string   `json:"client_secret,omitempty"`
-	JWTToken       string   `json:"jwt_token,omitempty"`
-	ChatIDs        []string `json:"chat_ids,omitempty"`
-	SourceUserIDs  []string `json:"source_user_ids,omitempty"`
-	ServerURL      string   `json:"server_url,omitempty"`
-	BotToken       string   `json:"bot_token,omitempty"`
-	BotMentionOnly *bool    `json:"bot_mention_only,omitempty"`
+	ClientID      string   `json:"client_id,omitempty"`
+	ClientSecret  string   `json:"client_secret,omitempty"`
+	JWTToken      string   `json:"jwt_token,omitempty"`
+	ChatIDs       []string `json:"chat_ids,omitempty"`
+	SourceUserIDs []string `json:"source_user_ids,omitempty"`
+	ServerURL     string   `json:"server_url,omitempty"`
+	BotToken      string   `json:"bot_token,omitempty"`
+
+	// GroupMentionOnly, when true (default), makes the bot only
+	// respond to messages where it is @mentioned in group chats. Bot
+	// DMs always respond regardless. Rename of the legacy
+	// bot_mention_only field; see the BotMentionOnly comment below.
+	GroupMentionOnly *bool `json:"group_mention_only,omitempty"`
+
+	// Deprecated: renamed to GroupMentionOnly. The bot_mention_only
+	// JSON field is still accepted for backward compatibility —
+	// Load() copies it into GroupMentionOnly and emits a WARN so
+	// operators know to rename it. Remove in a future release.
+	BotMentionOnly *bool `json:"bot_mention_only,omitempty"`
 
 	GroupSummaryGroupID      string `json:"group_summary_group_id,omitempty"`
 	GroupSummaryMessageLimit int    `json:"group_summary_message_limit,omitempty"`
@@ -97,13 +136,18 @@ func (rc RCConfig) HasPrivateApp() bool {
 	return rc.ClientID != "" && rc.ClientSecret != "" && rc.JWTToken != ""
 }
 
-// IsBotMentionOnly returns whether the bot requires @mention in group chats.
-// Defaults to true if not explicitly set.
-func (rc RCConfig) IsBotMentionOnly() bool {
-	if rc.BotMentionOnly == nil {
+// IsGroupMentionOnly returns whether the bot requires @mention in
+// group chats. Defaults to true if not explicitly set. Bot DMs are
+// not affected by this flag — DMs always receive every message.
+//
+// Load() normalizes the deprecated bot_mention_only field into
+// GroupMentionOnly, so callers reading the parsed config can always
+// rely on the new field.
+func (rc RCConfig) IsGroupMentionOnly() bool {
+	if rc.GroupMentionOnly == nil {
 		return true
 	}
-	return *rc.BotMentionOnly
+	return *rc.GroupMentionOnly
 }
 
 const defaultGroupSummaryMessageLimit = 200
@@ -137,6 +181,7 @@ type AgentConfig struct {
 	Cwd          string            `json:"cwd,omitempty"`           // working directory (workspace)
 	Env          map[string]string `json:"env,omitempty"`           // extra environment variables (cli/acp type)
 	AllowWrite   bool              `json:"allow_write,omitempty"`   // grant file write permission to ACP agent (default: false)
+	FullAccess   bool              `json:"full_access,omitempty"`   // call session/set_mode "full-access" on ACP session creation
 	Model        string            `json:"model,omitempty"`         // model name
 	SystemPrompt string            `json:"system_prompt,omitempty"` // system prompt
 	Endpoint     string            `json:"endpoint,omitempty"`      // API endpoint (http type)
@@ -177,7 +222,8 @@ func ConfigPath() (string, error) {
 	return filepath.Join(home, ".ringclaw", "config.json"), nil
 }
 
-// Load loads configuration from disk and environment variables.
+// Load loads configuration from ~/.ringclaw/config.json. Environment
+// variables are no longer consulted; config.json is the sole source.
 func Load() (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -189,7 +235,6 @@ func Load() (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			loadEnv(cfg)
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read config: %w", err)
@@ -201,61 +246,27 @@ func Load() (*Config, error) {
 	if cfg.Agents == nil {
 		cfg.Agents = make(map[string]AgentConfig)
 	}
+	normalizeDeprecatedFields(cfg)
 
-	loadEnv(cfg)
 	return cfg, nil
 }
 
-func loadEnv(cfg *Config) {
-	if v := os.Getenv("RINGCLAW_DEFAULT_AGENT"); v != "" {
-		cfg.DefaultAgent = v
-	}
-	if v := os.Getenv("RINGCLAW_AGENT_WORKSPACE"); v != "" {
-		cfg.AgentWorkspace = v
-	}
-	if v := os.Getenv("RINGCLAW_API_ADDR"); v != "" {
-		cfg.APIAddr = v
-	}
-	if v := os.Getenv("RC_CLIENT_ID"); v != "" {
-		cfg.RC.ClientID = v
-	}
-	if v := os.Getenv("RC_CLIENT_SECRET"); v != "" {
-		cfg.RC.ClientSecret = v
-	}
-	if v := os.Getenv("RC_JWT_TOKEN"); v != "" {
-		cfg.RC.JWTToken = v
-	}
-	if v := os.Getenv("RC_SERVER_URL"); v != "" {
-		cfg.RC.ServerURL = v
-	}
-	if v := os.Getenv("RC_CHAT_IDS"); v != "" {
-		parts := strings.Split(v, ",")
-		chatIDs := make([]string, 0, len(parts))
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				chatIDs = append(chatIDs, part)
-			}
+// normalizeDeprecatedFields folds legacy JSON field names into their
+// current counterparts after a raw Unmarshal. Each branch emits a
+// single WARN so operators see the rename once per startup and can
+// migrate their config file; the next Save rewrites only the new
+// field because the old one is cleared here.
+func normalizeDeprecatedFields(cfg *Config) {
+	if cfg.RC.BotMentionOnly != nil {
+		if cfg.RC.GroupMentionOnly == nil {
+			cfg.RC.GroupMentionOnly = cfg.RC.BotMentionOnly
+			slog.Warn("config: `bot_mention_only` has been renamed to `group_mention_only`; migrated automatically (next save drops the old field)",
+				"component", "config")
+		} else {
+			slog.Warn("config: both `group_mention_only` and the deprecated `bot_mention_only` are set; keeping `group_mention_only` and discarding `bot_mention_only`",
+				"component", "config")
 		}
-		cfg.RC.ChatIDs = chatIDs
-	}
-	if v := os.Getenv("RC_SOURCE_USER_IDS"); v != "" {
-		parts := strings.Split(v, ",")
-		userIDs := make([]string, 0, len(parts))
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				userIDs = append(userIDs, part)
-			}
-		}
-		cfg.RC.SourceUserIDs = userIDs
-	}
-	if v := os.Getenv("RC_BOT_TOKEN"); v != "" {
-		cfg.RC.BotToken = v
-	}
-	if v := os.Getenv("RC_BOT_MENTION_ONLY"); v != "" {
-		value := strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
-		cfg.RC.BotMentionOnly = &value
+		cfg.RC.BotMentionOnly = nil
 	}
 }
 

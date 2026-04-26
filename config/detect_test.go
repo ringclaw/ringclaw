@@ -5,10 +5,6 @@ import "testing"
 func TestDetectAndConfigure_NoBinaries(t *testing.T) {
 	// With an empty PATH, no agents should be detected
 	t.Setenv("PATH", t.TempDir())
-	// Clear openclaw env vars so HTTP fallback doesn't trigger
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
 	// Override HOME to prevent reading real ~/.openclaw/openclaw.json
 	t.Setenv("HOME", t.TempDir())
 
@@ -29,7 +25,6 @@ func TestDetectAndConfigure_SkipsExisting(t *testing.T) {
 	cfg.Agents["claude"] = AgentConfig{Type: "http", Endpoint: "https://custom.api/v1"}
 
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
 	t.Setenv("HOME", t.TempDir())
 
 	DetectAndConfigure(cfg)
@@ -47,7 +42,6 @@ func TestDetectAndConfigure_DefaultOrder(t *testing.T) {
 	cfg.Agents["kimi"] = AgentConfig{Type: "acp", Command: "/usr/bin/kimi"}
 
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
 	t.Setenv("HOME", t.TempDir())
 
 	DetectAndConfigure(cfg)
@@ -65,7 +59,6 @@ func TestDetectAndConfigure_DefaultOrder_KeepsExisting(t *testing.T) {
 	cfg.Agents["codex"] = AgentConfig{Type: "cli", Command: "/usr/bin/codex"}
 
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
 	t.Setenv("HOME", t.TempDir())
 
 	DetectAndConfigure(cfg)
@@ -76,31 +69,49 @@ func TestDetectAndConfigure_DefaultOrder_KeepsExisting(t *testing.T) {
 	}
 }
 
-func TestLoadOpenclawGateway_EnvVars(t *testing.T) {
-	t.Setenv("OPENCLAW_GATEWAY_URL", "wss://gw.example.com")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "test-token-123")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
+func TestLoadOpenclawGateway_FromConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &Config{OpenclawGateway: OpenclawGatewayConfig{
+		URL:   "wss://gw.example.com",
+		Token: "test-token-123",
+	}}
 
-	gwURL, gwToken, gwPassword := loadOpenclawGateway()
+	gwURL, gwToken, gwPassword := loadOpenclawGateway(cfg)
 
 	if gwURL != "wss://gw.example.com" {
-		t.Errorf("expected URL from env, got %q", gwURL)
+		t.Errorf("expected URL from config, got %q", gwURL)
 	}
 	if gwToken != "test-token-123" {
-		t.Errorf("expected token from env, got %q", gwToken)
+		t.Errorf("expected token from config, got %q", gwToken)
 	}
 	if gwPassword != "" {
 		t.Errorf("expected empty password, got %q", gwPassword)
 	}
 }
 
-func TestLoadOpenclawGateway_NoConfig(t *testing.T) {
-	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "")
+func TestLoadOpenclawGateway_EnvIgnored(t *testing.T) {
+	t.Setenv("OPENCLAW_GATEWAY_URL", "wss://env.example.com")
+	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "env-token")
+	t.Setenv("OPENCLAW_GATEWAY_PASSWORD", "env-pass")
 	t.Setenv("HOME", t.TempDir())
 
-	gwURL, gwToken, gwPassword := loadOpenclawGateway()
+	gwURL, gwToken, gwPassword := loadOpenclawGateway(&Config{})
+
+	if gwURL != "" {
+		t.Errorf("OPENCLAW_GATEWAY_URL env must be ignored, got %q", gwURL)
+	}
+	if gwToken != "" {
+		t.Errorf("OPENCLAW_GATEWAY_TOKEN env must be ignored, got %q", gwToken)
+	}
+	if gwPassword != "" {
+		t.Errorf("OPENCLAW_GATEWAY_PASSWORD env must be ignored, got %q", gwPassword)
+	}
+}
+
+func TestLoadOpenclawGateway_NoConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	gwURL, gwToken, gwPassword := loadOpenclawGateway(&Config{})
 
 	if gwURL != "" {
 		t.Errorf("expected empty URL, got %q", gwURL)

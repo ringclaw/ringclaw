@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/lmittmann/tint"
+	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
 )
@@ -73,7 +75,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Validate RC config: bot token is required, private app is optional
 	if cfg.RC.BotToken == "" {
-		return fmt.Errorf("bot token not configured. Set RC_BOT_TOKEN environment variable or add bot_token to config file. Run 'ringclaw setup' for guided configuration")
+		return fmt.Errorf("bot token not configured. Add ringcentral.bot_token to ~/.ringclaw/config.json or run 'ringclaw setup' for guided configuration")
 	}
 	if len(cfg.RC.ChatIDs) == 0 {
 		return fmt.Errorf("RingCentral chat IDs not configured. Add chat_ids to config file")
@@ -90,6 +92,51 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	verifyAgents(cfg)
 
+	// Configure the cwd allowlist before any agent is created so
+	// /cwd and Agent.SetCwd are pinned to a safe set of subtrees.
+	// Finding #2 from the security review.
+	//
+	// The effective allowlist is the union of:
+	//   - cfg.AgentAllowWorkspaceList (operator-controlled list)
+	//   - cfg.AgentWorkspace          (legacy default cwd, implicitly trusted)
+	//   - ~/.ringclaw/workspace       (always-on default)
+	//
+	// Duplicates and empty entries are dropped by agent.SetWorkspaceRoots.
+	{
+		roots := make([]string, 0, len(cfg.AgentAllowWorkspaceList)+2)
+		roots = append(roots, cfg.AgentAllowWorkspaceList...)
+		if cfg.AgentWorkspace != "" {
+			roots = append(roots, cfg.AgentWorkspace)
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			roots = append(roots, filepath.Join(home, ".ringclaw", "workspace"))
+		}
+		agent.SetWorkspaceRoots(roots)
+		if effective := agent.WorkspaceRoots(); len(effective) > 0 {
+			slog.Info("workspace allowlist configured", "component", "start", "roots", effective)
+		}
+	}
+
+	// Resolve the ACP full-access acknowledgement. config.json is the
+	// sole source; any previously supported env override was removed.
+	// Finding #6 from the security review.
+	{
+		ack := false
+		source := "default(false)"
+		if cfg.FullAccessAck != nil {
+			ack = *cfg.FullAccessAck
+			source = "config.full_access_ack"
+		}
+		agent.SetFullAccessAck(ack)
+		if ack {
+			slog.Warn("full_access acknowledgement ACTIVE: any agent with full_access:true will be allowed to disable MCP guardrails",
+				"component", "start", "source", source)
+		} else {
+			slog.Info("full_access acknowledgement not granted: full_access:true on any agent will be downgraded with a warning",
+				"component", "start", "source", source)
+		}
+	}
+
 	// Initialize clients, handler, and services
 	c, err := initClients(ctx, cfg)
 	if err != nil {
@@ -97,7 +144,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	handler := initHandler(ctx, cfg)
-	initServices(ctx, cfg, c, handler)
+
+	// OOB manager must be initialized before initServices so the API
+	// server can expose the approval endpoints.
+	var oobMgr *oob.Manager
+	if err := initOOBManager(handler, c, func(m *oob.Manager) { oobMgr = m }); err != nil {
+		slog.Error("failed to initialize OOB approval manager; /full-access and cross-chat notices will be disabled",
+			"component", "start", "error", err)
+	}
+	initServices(ctx, cfg, c, handler, oobMgr)
 
 	// Start WebSocket monitor
 	slog.Info("starting message bridge", "chatIDs", cfg.RC.ChatIDs)
@@ -112,10 +167,25 @@ func runStart(cmd *cobra.Command, args []string) error {
 		slog.Info("source_user_ids resolved", "count", len(resolvedUserIDs), "ids", resolvedUserIDs)
 	}
 
-	monitor := ringcentral.NewMonitor(c.bot, handler.HandleMessage, cfg.RC.ChatIDs, resolvedUserIDs, cfg.RC.IsBotMentionOnly())
+	monitor := ringcentral.NewMonitor(c.bot, handler.HandleMessage, cfg.RC.ChatIDs, resolvedUserIDs, cfg.RC.IsGroupMentionOnly())
 	if c.private != nil {
 		monitor.SetPrivateClient(c.private)
 		c.private.SetMonitor(monitor)
+		if ownerID := c.private.OwnerID(); ownerID != "" {
+			monitor.AddTrustedSender(ownerID)
+			handler.AddTrustedSender(ownerID)
+		}
+	}
+	for _, id := range resolvedUserIDs {
+		handler.AddTrustedSender(id)
+	}
+	// Mandatory sender allowlist: monitor and handler both deny anyone not on
+	// the trusted set. Findings #1 and #7 from the security review.
+	monitor.EnforceSenderAllowlist()
+	handler.EnforceSenderAllowlist()
+	if !monitor.HasTrustedSenders() {
+		slog.Error("sender allowlist is empty: no source_user_ids configured and no Private App owner detected; the bot will drop ALL incoming messages until you add ringcentral.source_user_ids or configure a Private App",
+			"component", "start")
 	}
 	c.bot.SetMonitor(monitor)
 	if err := monitor.Run(ctx); err != nil && ctx.Err() == nil {

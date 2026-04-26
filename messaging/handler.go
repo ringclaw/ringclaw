@@ -12,6 +12,8 @@ import (
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/internal/util"
+	"github.com/ringclaw/ringclaw/messaging/oob"
+	"github.com/ringclaw/ringclaw/messaging/persona"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -52,17 +54,145 @@ type Handler struct {
 
 	groupSummaryGroupID      string
 	groupSummaryMessageLimit int
+
+	// trustedSenders is the set of user IDs allowed to drive the agent.
+	// Mirrors the Monitor's allowlist as a defense-in-depth check so callers
+	// that bypass the WebSocket path (cron, /api/send, tests) cannot inject
+	// posts from arbitrary CreatorIDs. Empty + allowAllSenders=false means
+	// only the bot's own posts and configured cron jobs may dispatch.
+	trustedSenders  map[string]bool
+	allowAllSenders bool
+
+	// oobManager and ownerDMChatID power the Phase 2b /approval flow.
+	// When oobManager is nil, /full-access is disabled and cross-chat
+	// actions skip the owner-DM notice (falling back to the Phase 1
+	// warn-log for cross-chat and env-only full-access
+	// acknowledgement). ownerDMChatID is the chat ID where /approval
+	// prompts and cross-chat notices are delivered; empty disables OOB
+	// even when the manager is configured.
+	oobManager    *oob.Manager
+	ownerDMChatID string
+
+	// persona is the optional SOUL + layered MEMORY loader. When
+	// non-nil and Enabled, its Build() output is prepended to every
+	// prompt dispatched through the WebSocket message path so
+	// switching agents or resetting sessions does not wipe the
+	// operator's persona / memory context. A nil loader is safe to
+	// carry (Enabled reports false).
+	personaLoader *persona.Loader
 }
 
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc, version string) *Handler {
 	return &Handler{
-		agents:      make(map[string]agent.Agent),
-		factory:     factory,
-		saveDefault: saveDefault,
-		version:     version,
-		startTime:   time.Now(),
+		agents:          make(map[string]agent.Agent),
+		factory:         factory,
+		saveDefault:     saveDefault,
+		version:         version,
+		startTime:       time.Now(),
+		trustedSenders:  make(map[string]bool),
+		allowAllSenders: true, // legacy-compatible default; cmd/start.go flips this off
 	}
+}
+
+// AddTrustedSender adds a user ID to the handler's defense-in-depth sender
+// allowlist. Mirrors Monitor.AddTrustedSender; both layers must agree before
+// a message is dispatched to an agent.
+func (h *Handler) AddTrustedSender(userID string) {
+	if userID == "" {
+		return
+	}
+	h.mu.Lock()
+	if h.trustedSenders == nil {
+		h.trustedSenders = make(map[string]bool)
+	}
+	h.trustedSenders[userID] = true
+	h.mu.Unlock()
+}
+
+// EnforceSenderAllowlist switches the handler into strict mode: only IDs on
+// the trusted senders list may drive an agent. Should be called by production
+// startup code after AddTrustedSender has populated the allowlist.
+func (h *Handler) EnforceSenderAllowlist() {
+	h.mu.Lock()
+	h.allowAllSenders = false
+	h.mu.Unlock()
+}
+
+// SetOOBManager installs the Phase 2 out-of-band approval manager and the
+// chat ID that should receive approval cards (the Private App owner's bot
+// DM). Pass a nil manager to disable OOB and revert to Phase 1 semantics.
+//
+// ownerDMChatID is the bot's own DM chat with the trusted machine owner
+// (typically *ringcentral.Client.IsBotDM(...) returns true for it). When
+// empty, OOB call sites refuse to gate actions.
+func (h *Handler) SetOOBManager(mgr *oob.Manager, ownerDMChatID string) {
+	h.mu.Lock()
+	h.oobManager = mgr
+	h.ownerDMChatID = ownerDMChatID
+	h.mu.Unlock()
+}
+
+// OOBManager returns the configured manager (or nil). Used by callers
+// (e.g. the /full-access slash command, /info status card) that need to
+// inspect or drive OOB state.
+func (h *Handler) OOBManager() *oob.Manager {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.oobManager
+}
+
+// OwnerDMChatID returns the chat ID where OOB approval cards should be
+// posted; empty when OOB is not configured.
+func (h *Handler) OwnerDMChatID() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.ownerDMChatID
+}
+
+// SetPersonaLoader installs the persona + memory banner loader. Pass
+// nil to disable persona injection. See messaging/persona for the
+// loader's construction from config.
+func (h *Handler) SetPersonaLoader(l *persona.Loader) {
+	h.mu.Lock()
+	h.personaLoader = l
+	h.mu.Unlock()
+}
+
+// PersonaLoader returns the installed loader (or nil). Used by the
+// /mem add|show|del and /persona slash commands.
+func (h *Handler) PersonaLoader() *persona.Loader {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.personaLoader
+}
+
+// buildPersonaBanner returns the context banner to prepend to a
+// prompt, or the empty string when persona is disabled. Centralized
+// here so both dispatchToAgent and broadcastToAgents share exactly
+// the same injection logic.
+func (h *Handler) buildPersonaBanner(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) string {
+	loader := h.PersonaLoader()
+	if !loader.Enabled() {
+		return ""
+	}
+	isDM := client != nil && client.IsBotDM(post.GroupID)
+	return loader.Build(ctx, post.GroupID, post.CreatorID, isDM)
+}
+
+// isTrustedSender reports whether a given creator ID may drive the agent.
+// Returns true when allow-all mode is enabled, or when the ID is on the
+// trusted senders allowlist. An empty ID is treated as untrusted.
+func (h *Handler) isTrustedSender(creatorID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.allowAllSenders {
+		return true
+	}
+	if creatorID == "" {
+		return false
+	}
+	return h.trustedSenders[creatorID]
 }
 
 // cleanSeenMsgs removes entries older than 5 minutes from the dedup cache.
@@ -209,6 +339,7 @@ var agentAliases = map[string]string{
 	"if":  "iflow",
 	"kr":  "kiro",
 	"qw":  "qwen",
+	"ag":  "augment",
 }
 
 // resolveAlias returns the full agent name for an alias, or the original name if no alias matches.
@@ -283,6 +414,33 @@ func (h *Handler) parseCommand(text string) ([]string, string) {
 	return unique, rest
 }
 
+// stripForwardedPrefix removes the "XXX posted in ![:Team](ID)\n> " prefix
+// from forwarded messages, returning just the quoted content.
+func stripForwardedPrefix(text string) string {
+	idx := strings.Index(text, " posted in ![:Team](")
+	if idx < 0 {
+		return text
+	}
+	// Find the end of the prefix line
+	nl := strings.Index(text[idx:], "\n")
+	if nl < 0 {
+		return text
+	}
+	after := text[idx+nl+1:]
+	// Strip leading "> " from each line (blockquote)
+	var lines []string
+	for _, line := range strings.Split(after, "\n") {
+		line = strings.TrimPrefix(line, "> ")
+		lines = append(lines, line)
+	}
+	result := strings.TrimSpace(strings.Join(lines, "\n"))
+	if result == "" {
+		return text
+	}
+	slog.Debug("stripped forwarded prefix", "component", "handler")
+	return result
+}
+
 // HandleMessage processes a single incoming RingCentral post.
 func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
 	text := strings.TrimSpace(post.Text)
@@ -301,6 +459,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		}
 	}
 
+	// Strip forwarded message prefix: "XXX posted in ![:Team](ID)\n> content" → "content"
+	text = stripForwardedPrefix(text)
+
 	// Deduplicate by post ID to avoid processing the same message multiple times
 	if post.ID != "" {
 		if _, loaded := h.seenMsgs.LoadOrStore(post.ID, time.Now()); loaded {
@@ -316,14 +477,60 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	chatID := post.GroupID
 	slog.Info("received message", "component", "handler", "creatorID", post.CreatorID, "chatID", chatID, "text", util.Truncate(text, 80))
 
-	// In bot group chats (not bot DM), restrict privileged commands to the bot owner
+	// Defense-in-depth sender allowlist. Monitor already filters at the
+	// WebSocket layer; this re-check protects callers that bypass Monitor
+	// (cron jobs, /api/send, tests) from spoofing CreatorID.
+	if !h.isTrustedSender(post.CreatorID) {
+		slog.Warn("dropping message from untrusted sender",
+			"component", "handler", "creatorID", post.CreatorID, "chatID", chatID)
+		return
+	}
+
+	// Phase 2b OOB approval interception. `/approval <id>` and
+	// `/approval deny <id>` replies are typed back into the bot DM (the
+	// same chat the prompt was posted to). When the message matches a
+	// recognized approval shape we route it to the OOB manager and
+	// short-circuit normal agent dispatch so the slash command is never
+	// forwarded to the AI agent.
+	if h.routeOOBApprovalReply(ctx, client, chatID, post.CreatorID, text) {
+		return
+	}
+
+	// Privileged-command owner gate.
+	//
+	// Layer 1 of the permission matrix. Two cases:
+	//
+	//  1. Bot group chat: always enforce — non-owner cannot run
+	//     privileged commands (historical behavior).
+	//  2. Bot DM: enforce ONLY when a Private App is configured, so
+	//     `readClient != client`. In that case `readClient.OwnerID()`
+	//     names the true machine owner and non-owner trusted senders
+	//     (e.g. a teammate also listed in source_user_ids) are blocked.
+	//     Without a Private App, RingClaw has no reliable owner ID
+	//     (readClient == bot client, whose OwnerID is the bot itself),
+	//     so the DM path falls back to "every trusted sender is
+	//     trusted" — see the Permission Matrix "DM is the trust
+	//     boundary" warning in docs/security/index.md.
 	isBotGroup := client.IsBot() && !client.IsBotDM(chatID)
-	if isBotGroup && isPrivilegedCommand(text) {
-		if post.CreatorID != readClient.OwnerID() {
-			slog.Info("blocked privileged command from non-owner", "component", "handler", "creatorID", post.CreatorID, "command", util.Truncate(text, 30))
-			logSendError(SendTextReply(ctx, client, chatID, "Only the bot owner can use this command in group chats."))
-			return
+	hasPrivateApp := readClient != nil && readClient != client
+	if isPrivilegedCommand(text) {
+		switch {
+		case isBotGroup:
+			if post.CreatorID != readClient.OwnerID() {
+				slog.Info("blocked privileged command from non-owner (group)",
+					"component", "handler", "creatorID", post.CreatorID, "command", util.Truncate(text, 30))
+				logSendError(SendTextReply(ctx, client, chatID, "Only the bot owner can use this command in group chats."))
+				return
+			}
+		case hasPrivateApp:
+			if post.CreatorID != readClient.OwnerID() {
+				slog.Info("blocked privileged command from non-owner (DM + PrivateApp)",
+					"component", "handler", "creatorID", post.CreatorID, "command", util.Truncate(text, 30))
+				logSendError(SendTextReply(ctx, client, chatID, "Only the Private App owner can use this privileged command."))
+				return
+			}
 		}
+		// No Private App + DM: cannot identify an owner; fall through.
 	}
 
 	// Built-in commands (no typing needed)
@@ -344,6 +551,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	} else if strings.HasPrefix(text, "/cwd") {
 		logSendError(SendTextReply(ctx, client, chatID, h.handleCwd(text)))
 		return
+	} else if IsFullAccessCommand(text) {
+		h.handleFullAccess(ctx, client, chatID, post.CreatorID, text)
+		return
 	} else if text == "/help" {
 		cardJSON := buildHelpCard()
 		if _, err := client.CreateAdaptiveCard(ctx, chatID, cardJSON); err != nil {
@@ -360,6 +570,13 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	} else if strings.HasPrefix(text, "/chatinfo") {
 		logSendError(SendTextReply(ctx, client, chatID, handleChatInfo(ctx, readClient, chatID, text)))
+		return
+	} else if IsMemCommand(text) {
+		isDM := client != nil && client.IsBotDM(chatID)
+		logSendError(SendTextReply(ctx, client, chatID, h.handleMemCommand(text, chatID, post.CreatorID, isDM)))
+		return
+	} else if IsPersonaCommand(text) {
+		logSendError(SendTextReply(ctx, client, chatID, h.handlePersonaCommand()))
 		return
 	}
 
@@ -423,6 +640,50 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	}
 }
 
+// routeOOBApprovalReply is the Phase 2b hook that consumes `/approval`
+// replies in the owner's bot DM before they reach the agent. Returns
+// true when the message was handled (caller must short-circuit).
+//
+// In the bot DM the reply is passed to the OOB manager. Outside the
+// bot DM (group chats, other DMs) a recognizable `/approval ...`
+// shape is NOT dispatched to the agent as text — instead we post a
+// short explanation so the operator gets a clear signal that they
+// used the command in the wrong place, rather than seeing the AI
+// answer a confused "what is /approval abc123?" prompt.
+func (h *Handler) routeOOBApprovalReply(ctx context.Context, client *ringcentral.Client, chatID, senderID, text string) bool {
+	mgr := h.OOBManager()
+	if mgr == nil {
+		return false
+	}
+	if client.IsBotDM(chatID) {
+		return mgr.HandleApprovalReply(ctx, newOOBClient(client), chatID, senderID, text)
+	}
+	// Outside the owner DM, intercept recognizable /approval shapes
+	// with an explicit refusal so they neither reach the OOB manager
+	// nor leak into the default agent prompt.
+	if reply := oob.ParseApprovalReply(text); reply.Kind != oob.ReplyNone {
+		slog.Info("refused /approval outside bot DM", "component", "handler", "chatID", chatID, "senderID", senderID)
+		logSendError(SendTextReply(ctx, client, chatID, "`/approval` is only recognized in the bot DM with the owner."))
+		return true
+	}
+	return false
+}
+
+// conversationIDForPost returns the session key used to address a single
+// agent conversation. The key MUST be unique per (chatID, creatorID) pair
+// so that:
+//
+//  1. Different users in the same group chat get isolated agent contexts
+//     (no piggybacking on another user's prior session). This is the
+//     mitigation referenced in security review Finding #4.
+//  2. The same user in different chats does not leak conversation history
+//     across chats.
+//  3. Bot DMs and group chats live in distinct namespaces so renaming a
+//     chat ID can never collide with an existing DM session.
+//
+// Any caller building an ad-hoc conversationID must preserve these
+// invariants; in particular, do not reduce the key to just the chat or
+// just the user.
 func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) string {
 	chatID := strings.TrimSpace(post.GroupID)
 	creatorID := strings.TrimSpace(post.CreatorID)
@@ -437,8 +698,13 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 	conversationID := conversationIDForPost(client, post)
 	images := extractImageAttachments(ctx, client, post)
 
+	// Prepend the persona + memory banner (empty string when persona
+	// is disabled or all sources are blank). This keeps the operator's
+	// SOUL and layered memory visible to every agent regardless of
+	// which one is currently default.
+	prompt := h.buildPersonaBanner(ctx, client, post) + message + ActionPrompt()
 
-	reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
+	reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, prompt, images)
 	if err != nil {
 		reply = agent.UserMessage(err)
 	}
@@ -486,6 +752,11 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 	conversationID := conversationIDForPost(client, post)
 	images := extractImageAttachments(ctx, client, post)
 
+	// Compute the persona banner once outside the fan-out so all
+	// broadcast targets see identical context. Empty when persona is
+	// disabled.
+	prompt := h.buildPersonaBanner(ctx, client, post) + message + ActionPrompt()
+
 	type result struct {
 		name  string
 		reply string
@@ -499,7 +770,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
 			}
-			reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, message+ActionPrompt(), images)
+			reply, err := h.chatWithAgentOrImages(ctx, ag, conversationID, prompt, images)
 			if err != nil {
 				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
@@ -520,11 +791,23 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.Client, actionClient *ringcentral.Client, post ringcentral.Post, reply, placeholderID string) {
 	chatID := post.GroupID
 
-	// Parse and execute any ACTION blocks from the agent's response
+	// Parse and execute any ACTION blocks from the agent's response.
+	// originIsOwner mirrors the trusted-senders allowlist so non-owner posts
+	// cannot pivot the agent's reply into a different chat (Finding #5).
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
 		reply = cleanReply
-		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions)
+		ownerID := ""
+		if actionClient != nil {
+			ownerID = actionClient.OwnerID()
+		}
+		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
+			OriginIsOwner: h.isTrustedSender(post.CreatorID),
+			OOB:           h.OOBManager(),
+			OwnerDMChat:   h.OwnerDMChatID(),
+			RequesterID:   post.CreatorID,
+			OwnerID:       ownerID,
+		})
 		if len(results) > 0 {
 			defer func() {
 				logSendError(SendTextReply(ctx, client, chatID, strings.Join(results, "\n")))
@@ -548,28 +831,10 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		reply = fmt.Sprintf("![:Person](%s) %s", post.CreatorID, reply)
 	}
 
-	// Update the placeholder with the real reply, or send a new post
-	if strings.TrimSpace(reply) == "" {
-		// No text reply -- delete the placeholder instead of leaving it empty
-		if placeholderID != "" {
-			if delErr := client.DeletePost(ctx, chatID, placeholderID); delErr != nil {
-				slog.Error("failed to delete empty placeholder", "component", "handler", "error", delErr)
-			} else {
-				slog.Info("deleted empty placeholder", "component", "handler", "postID", placeholderID)
-			}
-		}
-	} else if placeholderID != "" {
-		if updateErr := UpdatePostText(ctx, client, chatID, placeholderID, reply); updateErr != nil {
-			slog.Error("failed to update placeholder, sending new post", "component", "handler", "error", updateErr)
-			if sendErr := SendTextReply(ctx, client, chatID, reply); sendErr != nil {
-				slog.Error("failed to send reply", "component", "handler", "error", sendErr)
-			}
-		}
-	} else {
-		if sendErr := SendTextReply(ctx, client, chatID, reply); sendErr != nil {
-			slog.Error("failed to send reply", "component", "handler", "error", sendErr)
-		}
-	}
+	// Update the placeholder with the real reply, or send a new post.
+	// Empty reply (e.g. agent response was 100% ACTION blocks) deletes
+	// the placeholder so no phantom empty post remains.
+	FinalizeReply(ctx, client, chatID, placeholderID, reply, "handler")
 
 	// Send extracted images as separate file uploads
 	for _, imgURL := range imageURLs {
