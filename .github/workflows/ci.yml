@@ -68,8 +68,16 @@ jobs:
           echo '<!-- prompt-eval -->' | cat - eval-report.md > eval-comment.md
           gh pr comment "$PR_NUMBER" --body-file eval-comment.md || true
 
+      # SonarCloud cannot run on fork PRs because GitHub strips secrets
+      # (including SONAR_TOKEN) for cross-repo workflow runs. Skip the
+      # scan in that case so fork contributors don't get a hard CI fail
+      # on a step they have no way to fix. Same-repo branch PRs and
+      # pushes to main still run the scan with the configured token.
       - name: SonarCloud Scan
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        if: |
+          (github.event_name == 'pull_request' &&
+           github.event.pull_request.head.repo.full_name == github.repository) ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
