@@ -23,21 +23,24 @@ var audioExtensions = map[string]bool{
 }
 
 // audioMimeTypes lists MIME types treated as voice/audio content.
+// Includes the common "audio/x-*" aliases and "video/webm" because some
+// WebM containers carry Opus audio; we still emit the canonical form
+// from inferAudioMimeType, this map is only used for recognition.
 var audioMimeTypes = map[string]bool{
-	"audio/m4a":   true,
-	"audio/mp4":   true,
-	"audio/mpeg":  true,
-	"audio/wav":   true,
-	"audio/ogg":   true,
-	"audio/aac":   true,
-	"audio/opus":  true,
-	"audio/flac":  true,
-	"audio/webm":  true,
-	"audio/x-m4a": true,
-	"audio/x-wav": true,
+	"audio/m4a":    true,
+	"audio/mp4":    true,
+	"audio/mpeg":   true,
+	"audio/wav":    true,
+	"audio/ogg":    true,
+	"audio/aac":    true,
+	"audio/opus":   true,
+	"audio/flac":   true,
+	"audio/webm":   true,
+	"audio/x-m4a":  true,
+	"audio/x-wav":  true,
 	"audio/x-flac": true,
-	"audio/x-ogg": true,
-	"video/webm":  true, // WebM containers often carry Opus audio
+	"audio/x-ogg":  true,
+	"video/webm":   true,
 }
 
 // isAudioAttachment reports whether an attachment is an audio/voice file.
@@ -73,10 +76,17 @@ func inferAudioMimeType(name string) string {
 	}
 }
 
+// maxAudioAttachments caps how many audio files we forward to the agent
+// per post. Voice messages are normally a single clip per send, and a
+// raw m4a is much larger than a typical screenshot, so we keep the cap
+// tight. Bump deliberately if a use case demands it.
 const maxAudioAttachments = 1
 
 // extractAudioAttachments downloads audio attachments from a post.
-// Mirrors extractImageAttachments in handler.go.
+// Mirrors extractImageAttachments in media.go: the response Content-Type
+// is re-checked against audioMimeTypes after download so a mislabeled
+// (or maliciously named) attachment whose actual bytes are not audio is
+// dropped before being forwarded to the agent.
 func extractAudioAttachments(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) []agent.AudioAttachment {
 	var audios []agent.AudioAttachment
 	for _, att := range post.Attachments {
@@ -89,14 +99,24 @@ func extractAudioAttachments(ctx context.Context, client *ringcentral.Client, po
 		if !isAudioAttachment(att) {
 			continue
 		}
-		data, _, err := client.DownloadAttachment(ctx, att.ContentURI)
+		data, detectedMT, err := client.DownloadAttachment(ctx, att.ContentURI)
 		if err != nil {
 			slog.Error("voice: failed to download audio attachment",
 				"component", "voice", "id", att.ID, "name", att.Name, "error", err)
 			continue
 		}
+		// Re-check the actual content type returned by the server. Skip
+		// when the server reports a non-audio type, mirroring the
+		// behavior of extractImageAttachments.
+		if detectedMT != "" && !audioMimeTypes[detectedMT] {
+			slog.Warn("voice: detected MIME does not match audio types, skipping",
+				"component", "voice", "id", att.ID, "name", att.Name, "detected", detectedMT)
+			continue
+		}
 		mt := att.MediaType
-		if mt == "" {
+		if detectedMT != "" {
+			mt = detectedMT
+		} else if mt == "" {
 			mt = inferAudioMimeType(att.Name)
 		}
 		audios = append(audios, agent.AudioAttachment{
@@ -120,4 +140,3 @@ func hasAudioAttachments(post ringcentral.Post) bool {
 	}
 	return false
 }
-

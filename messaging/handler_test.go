@@ -519,7 +519,7 @@ func TestExtractImageAttachments(t *testing.T) {
 		Attachments: []ringcentral.Attachment{
 			{ID: "a1", ContentURI: srv.URL + "/img1.png", Name: "screenshot.png", MediaType: "image/png"},
 			{ID: "a2", ContentURI: srv.URL + "/img2.jpg", Name: "photo.jpg", MediaType: "image/jpeg"},
-			{ID: "a3", ContentURI: "", Name: "nourl.png"},           // no URI — skipped
+			{ID: "a3", ContentURI: "", Name: "nourl.png"},                                           // no URI — skipped
 			{ID: "a4", ContentURI: srv.URL + "/f.pdf", Name: "f.pdf", MediaType: "application/pdf"}, // not image — skipped
 		},
 	}
@@ -599,7 +599,7 @@ func (m *mockTextOnlyAgent) Chat(_ context.Context, _, msg string) (string, erro
 func (m *mockTextOnlyAgent) ResetSession(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (m *mockTextOnlyAgent) SetCwd(_ string)    {}
+func (m *mockTextOnlyAgent) SetCwd(_ string) {}
 func (m *mockTextOnlyAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "text-only", Type: "test"}
 }
@@ -1161,7 +1161,7 @@ func (a *cliTestAgent) Chat(_ context.Context, _, _ string) (string, error) { re
 func (a *cliTestAgent) ResetSession(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (a *cliTestAgent) SetCwd(_ string)        {}
+func (a *cliTestAgent) SetCwd(_ string) {}
 func (a *cliTestAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "codex", Type: "cli"}
 }

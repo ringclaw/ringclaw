@@ -188,3 +188,56 @@ func TestExtractAudioAttachments_SkipsMissingURI(t *testing.T) {
 	}
 }
 
+// TestExtractAudioAttachments_DetectedMimeMismatch verifies that an
+// attachment whose filename suggests audio but whose actual response
+// body is served with a non-audio Content-Type is dropped, rather than
+// blindly forwarded to the agent. Mirrors the behavior already in
+// extractImageAttachments and protects against mislabeled or hostile
+// uploads.
+func TestExtractAudioAttachments_DetectedMimeMismatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html>not audio</html>"))
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewBotClient(srv.URL, "bot-token")
+	post := ringcentral.Post{
+		Attachments: []ringcentral.Attachment{
+			{ID: "v1", ContentURI: srv.URL + "/voice.m4a", Name: "voice.m4a"},
+		},
+	}
+
+	audios := extractAudioAttachments(context.Background(), client, post)
+	if len(audios) != 0 {
+		t.Errorf("expected 0 audio (MIME mismatch), got %d", len(audios))
+	}
+}
+
+// TestExtractAudioAttachments_DetectedMimeOverridesClaimed verifies that
+// when the server returns an audio Content-Type, the resulting
+// AudioAttachment.MediaType reflects the detected value rather than any
+// caller-supplied or inferred guess.
+func TestExtractAudioAttachments_DetectedMimeOverridesClaimed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/webm")
+		w.Write([]byte("opus-bytes"))
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewBotClient(srv.URL, "bot-token")
+	post := ringcentral.Post{
+		Attachments: []ringcentral.Attachment{
+			// Caller claims m4a; server says webm. Detected MIME wins.
+			{ID: "v1", ContentURI: srv.URL + "/voice.m4a", Name: "voice.m4a", MediaType: "audio/m4a"},
+		},
+	}
+
+	audios := extractAudioAttachments(context.Background(), client, post)
+	if len(audios) != 1 {
+		t.Fatalf("expected 1 audio, got %d", len(audios))
+	}
+	if got := audios[0].MediaType; got != "audio/webm" {
+		t.Errorf("expected MediaType=audio/webm (detected), got %q", got)
+	}
+}
