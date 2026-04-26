@@ -831,28 +831,10 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		reply = fmt.Sprintf("![:Person](%s) %s", post.CreatorID, reply)
 	}
 
-	// Update the placeholder with the real reply, or send a new post
-	if strings.TrimSpace(reply) == "" {
-		// No text reply -- delete the placeholder instead of leaving it empty
-		if placeholderID != "" {
-			if delErr := client.DeletePost(ctx, chatID, placeholderID); delErr != nil {
-				slog.Error("failed to delete empty placeholder", "component", "handler", "error", delErr)
-			} else {
-				slog.Info("deleted empty placeholder", "component", "handler", "postID", placeholderID)
-			}
-		}
-	} else if placeholderID != "" {
-		if updateErr := UpdatePostText(ctx, client, chatID, placeholderID, reply); updateErr != nil {
-			slog.Error("failed to update placeholder, sending new post", "component", "handler", "error", updateErr)
-			if sendErr := SendTextReply(ctx, client, chatID, reply); sendErr != nil {
-				slog.Error("failed to send reply", "component", "handler", "error", sendErr)
-			}
-		}
-	} else {
-		if sendErr := SendTextReply(ctx, client, chatID, reply); sendErr != nil {
-			slog.Error("failed to send reply", "component", "handler", "error", sendErr)
-		}
-	}
+	// Update the placeholder with the real reply, or send a new post.
+	// Empty reply (e.g. agent response was 100% ACTION blocks) deletes
+	// the placeholder so no phantom empty post remains.
+	FinalizeReply(ctx, client, chatID, placeholderID, reply, "handler")
 
 	// Send extracted images as separate file uploads
 	for _, imgURL := range imageURLs {

@@ -167,14 +167,7 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 	}
 
 	sendReply := func(reply string) {
-		if placeholderID != "" {
-			if err := UpdatePostText(ctx, replyClient, chatID, placeholderID, reply); err != nil {
-				slog.Error("failed to update placeholder", "component", "handler", "error", err)
-				logSendError(SendTextReply(ctx, replyClient, chatID, reply))
-			}
-		} else {
-			logSendError(SendTextReply(ctx, replyClient, chatID, reply))
-		}
+		FinalizeReply(ctx, replyClient, chatID, placeholderID, reply, "summarize")
 	}
 
 	prompt, err := BuildSummaryPrompt(ctx, readClient, req)

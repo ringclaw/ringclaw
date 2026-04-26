@@ -602,6 +602,84 @@ func TestExecuteSummarize_NonBotWraps(t *testing.T) {
 	}
 }
 
+// TestExecuteSummarize_EmptyReplyDeletesPlaceholder pins the contract that
+// when the agent's reply is consumed entirely by ACTION blocks (so the
+// stripped reply is empty), the typing placeholder is DELETED instead of
+// being updated to an empty string. Otherwise users see a blank "Thinking..."
+// turn into a phantom empty post.
+func TestExecuteSummarize_EmptyReplyDeletesPlaceholder(t *testing.T) {
+	var (
+		patchedTexts    []string
+		deletedPostIDs  []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts") {
+			// SendTypingPlaceholder: respond with a real post ID
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "placeholder-1"})
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/posts") {
+			_ = json.NewEncoder(w).Encode(ringcentral.PostList{
+				Records: []ringcentral.Post{
+					{
+						ID: "m1", GroupID: "c1", Text: "discussion",
+						CreatorID: "glip-user-1", CreationTime: time.Now().UTC().Format(time.RFC3339),
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			patchedTexts = append(patchedTexts, req["text"])
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "placeholder-1"})
+			return
+		}
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/posts/") {
+			parts := strings.Split(r.URL.Path, "/posts/")
+			if len(parts) > 1 {
+				deletedPostIDs = append(deletedPostIDs, parts[1])
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	// Agent reply is 100% an ACTION block — cleanReply will be empty.
+	ag := &testAgent{reply: "ACTION:NOTE title=Test\nbody\nEND_ACTION"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+
+	h.executeSummarize(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "c1", CreatorID: "user-1"},
+		&SummarizeRequest{
+			ChatID:      "c1",
+			ChatName:    "Test",
+			TimeFrom:    time.Now().Add(-time.Hour),
+			UserRequest: "summarize and note",
+		})
+
+	time.Sleep(100 * time.Millisecond)
+
+	for _, txt := range patchedTexts {
+		if strings.TrimSpace(txt) == "" {
+			t.Errorf("placeholder should not be PATCHed to empty text, got patches=%v", patchedTexts)
+		}
+	}
+	if len(deletedPostIDs) == 0 {
+		t.Errorf("expected the placeholder to be DELETEd when reply is empty after stripping ACTION, got deletes=%v patches=%v", deletedPostIDs, patchedTexts)
+	} else if deletedPostIDs[0] != "placeholder-1" {
+		t.Errorf("expected DELETE on 'placeholder-1', got %v", deletedPostIDs)
+	}
+}
+
 // errorAgent always returns an error from Chat.
 type errorAgent struct {
 	err error
