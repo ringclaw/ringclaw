@@ -565,7 +565,13 @@ END_ACTION`
 	}
 }
 
-func TestExecuteAgentActions_CardUsesBotClientInDM(t *testing.T) {
+// TestExecuteAgentActions_CardUsesPrivateClientInDM locks the new
+// behavior: when both clients are configured, CARD actions in the
+// bot's own DM are now POSTed under the Private App's identity so
+// the card's creator matches the human owner — same as NOTE / TASK /
+// EVENT. The empirical justification is captured in the
+// integration-tagged test in actions_card_integration_test.go.
+func TestExecuteAgentActions_CardUsesPrivateClientInDM(t *testing.T) {
 	var mu sync.Mutex
 	var authHeaders []string
 
@@ -599,8 +605,8 @@ func TestExecuteAgentActions_CardUsesBotClientInDM(t *testing.T) {
 	if len(authHeaders) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(authHeaders))
 	}
-	if authHeaders[0] != "Bearer bot-token" {
-		t.Fatalf("expected bot token, got %q", authHeaders[0])
+	if authHeaders[0] != "Bearer private-token" {
+		t.Fatalf("expected private token for card create in bot DM (CARD now follows NOTE/TASK/EVENT identity), got %q", authHeaders[0])
 	}
 }
 
