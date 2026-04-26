@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -158,5 +159,247 @@ func TestParseTimeRange_ZuiJinAlone(t *testing.T) {
 	diffDays := int(now.Sub(got).Hours()/24 + 0.5)
 	if diffDays < 2 || diffDays > 4 {
 		t.Errorf("parseTimeRange(最近的群聊有什么) → %d days back, want ≈3", diffDays)
+	}
+}
+
+// --- Weekday resolution tests ---
+//
+// resolveWeekday is exercised directly against synthetic `now` values so the
+// math is verified independently of the host clock. parseTimeRange wrappers
+// then assert the regex/dispatch glue is wired up correctly.
+
+func TestResolveWeekday_BareUsesMostRecentPast(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	// Sunday 2026-04-26.
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, loc)
+	cases := []struct {
+		target    int
+		wantMonth time.Month
+		wantDay   int
+	}{
+		{1, time.April, 20}, // Mon → 6 days back
+		{2, time.April, 21}, // Tue
+		{3, time.April, 22}, // Wed
+		{4, time.April, 23}, // Thu
+		{5, time.April, 24}, // Fri
+		{6, time.April, 25}, // Sat
+		{7, time.April, 26}, // Sun → today
+	}
+	for _, c := range cases {
+		got := resolveWeekday(wkpNone, c.target, now)
+		if got.Month() != c.wantMonth || got.Day() != c.wantDay {
+			t.Errorf("resolveWeekday(none, %d, Sun 4/26) = %s, want 2026-%02d-%02d",
+				c.target, got.Format("2006-01-02"), c.wantMonth, c.wantDay)
+		}
+	}
+}
+
+func TestResolveWeekday_LastAlwaysPreviousWeek(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, loc) // Sun
+	cases := []struct {
+		target    int
+		wantMonth time.Month
+		wantDay   int
+	}{
+		{1, time.April, 13}, // Mon of last week
+		{5, time.April, 17}, // Fri of last week
+		{7, time.April, 19}, // Sun of last week
+	}
+	for _, c := range cases {
+		got := resolveWeekday(wkpLast, c.target, now)
+		if got.Month() != c.wantMonth || got.Day() != c.wantDay {
+			t.Errorf("resolveWeekday(last, %d, Sun 4/26) = %s, want 2026-%02d-%02d",
+				c.target, got.Format("2006-01-02"), c.wantMonth, c.wantDay)
+		}
+	}
+}
+
+func TestResolveWeekday_NextAlwaysNextWeek(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, loc) // Sun
+	cases := []struct {
+		target    int
+		wantMonth time.Month
+		wantDay   int
+	}{
+		{1, time.April, 27}, // Mon of next week
+		{5, time.May, 1},    // Fri of next week
+		{7, time.May, 3},    // Sun of next week
+	}
+	for _, c := range cases {
+		got := resolveWeekday(wkpNext, c.target, now)
+		if got.Month() != c.wantMonth || got.Day() != c.wantDay {
+			t.Errorf("resolveWeekday(next, %d, Sun 4/26) = %s, want 2026-%02d-%02d",
+				c.target, got.Format("2006-01-02"), c.wantMonth, c.wantDay)
+		}
+	}
+}
+
+func TestResolveWeekday_ThisCalendarWeek(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	// Wed 2026-04-22. Week is Mon 4/20 – Sun 4/26.
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, loc)
+	cases := []struct {
+		target    int
+		wantMonth time.Month
+		wantDay   int
+	}{
+		{1, time.April, 20}, // Mon (past)
+		{3, time.April, 22}, // Wed (today)
+		{5, time.April, 24}, // Fri (future this week)
+		{7, time.April, 26}, // Sun (future this week)
+	}
+	for _, c := range cases {
+		got := resolveWeekday(wkpThis, c.target, now)
+		if got.Month() != c.wantMonth || got.Day() != c.wantDay {
+			t.Errorf("resolveWeekday(this, %d, Wed 4/22) = %s, want 2026-%02d-%02d",
+				c.target, got.Format("2006-01-02"), c.wantMonth, c.wantDay)
+		}
+	}
+}
+
+// TestParseWeekday_ChineseDispatch confirms the ZH regex picks the right
+// weekday + prefix.
+func TestParseWeekday_ChineseDispatch(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, loc) // Sun
+	cases := []struct {
+		input string
+		want  string // expected RFC-3339 date portion
+	}{
+		{"周五", "2026-04-24"},
+		{"周一", "2026-04-20"},
+		{"周日", "2026-04-26"}, // today
+		{"星期五", "2026-04-24"},
+		{"礼拜五", "2026-04-24"},
+		{"周天", "2026-04-26"},
+		{"上周五", "2026-04-17"},
+		{"下周五", "2026-05-01"},
+		{"本周五", "2026-04-24"},
+		{"这周五", "2026-04-24"},
+		{"上个周五", "2026-04-17"},
+		{"下个周五", "2026-05-01"},
+		{"周 五", "2026-04-24"}, // tolerate whitespace
+		{"总结一下周五的讨论", "2026-04-24"},
+	}
+	for _, c := range cases {
+		got, ok := parseWeekday(c.input, now)
+		if !ok {
+			t.Errorf("parseWeekday(%q) = no match; want %s", c.input, c.want)
+			continue
+		}
+		if g := got.Format("2006-01-02"); g != c.want {
+			t.Errorf("parseWeekday(%q) = %s, want %s", c.input, g, c.want)
+		}
+	}
+}
+
+// TestParseWeekday_EnglishDispatch confirms the EN regex picks the right
+// weekday + prefix and handles abbreviations / case.
+func TestParseWeekday_EnglishDispatch(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, loc) // Sun
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"friday", "2026-04-24"},
+		{"Friday", "2026-04-24"},
+		{"FRI", "2026-04-24"},
+		{"summarize Friday's discussion", "2026-04-24"},
+		{"last friday", "2026-04-17"},
+		{"past Friday", "2026-04-17"},
+		{"next friday", "2026-05-01"},
+		{"this friday", "2026-04-24"},
+		{"sunday", "2026-04-26"}, // today
+		{"sun", "2026-04-26"},
+	}
+	for _, c := range cases {
+		got, ok := parseWeekday(strings.ToLower(c.input), now)
+		if !ok {
+			t.Errorf("parseWeekday(%q) = no match; want %s", c.input, c.want)
+			continue
+		}
+		if g := got.Format("2006-01-02"); g != c.want {
+			t.Errorf("parseWeekday(%q) = %s, want %s", c.input, g, c.want)
+		}
+	}
+}
+
+// TestParseTimeRange_WeekdayBeatsLastWeek ensures the weekday rule runs
+// before the bare "上周" rule so "上周五" resolves to last Friday rather
+// than the Monday that "上周" returns.
+func TestParseTimeRange_WeekdayBeatsLastWeek(t *testing.T) {
+	now := time.Now()
+	got := parseTimeRange("上周五的总结")
+	if got.Weekday() != time.Friday {
+		t.Errorf("parseTimeRange(上周五的总结) → %s, want Friday", got.Weekday())
+	}
+	diff := int(now.Sub(got).Hours() / 24)
+	if diff < 7 || diff > 14 {
+		t.Errorf("parseTimeRange(上周五的总结) → %d days back, want 7-14", diff)
+	}
+}
+
+// TestParseTimeRange_BareWeekdaySmoke runs against the host clock so any
+// regression in the regex / dispatch glue surfaces in CI even without a
+// pinned `now`.
+func TestParseTimeRange_BareWeekdaySmoke(t *testing.T) {
+	now := time.Now()
+	got := parseTimeRange("周五的讨论")
+	if got.Weekday() != time.Friday {
+		t.Errorf("parseTimeRange(周五的讨论) → %s, want Friday", got.Weekday())
+	}
+	diff := int(now.Sub(got).Hours() / 24)
+	if diff < 0 || diff > 7 {
+		t.Errorf("parseTimeRange(周五的讨论) → %d days back, want 0-6 (most recent past Friday)", diff)
+	}
+}
+
+// TestParseTimeRange_WeekdayDoesNotShadowAbsoluteDate ensures absolute
+// dates still win over weekday matches when both are present.
+func TestParseTimeRange_WeekdayDoesNotShadowAbsoluteDate(t *testing.T) {
+	got := parseTimeRange("周五开会,具体看 2026-04-10 的纪要")
+	if got.Year() != 2026 || got.Month() != time.April || got.Day() != 10 {
+		t.Errorf("parseTimeRange(...) = %s, want 2026-04-10 (absolute date wins)", got.Format("2006-01-02"))
+	}
+}
+
+// TestParseWeekday_PrefixBoundary covers the regression where greedy regex
+// matching against "总结一下周五的讨论" picked "下" as a "next" prefix and
+// resolved to next Friday instead of the most recent past Friday.
+// The boundary check should also reject "晚上周五" → last Friday and
+// preserve the "this/last/next" semantics when the prefix is at a real
+// word boundary.
+func TestParseWeekday_PrefixBoundary(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, loc) // Sun
+	cases := []struct {
+		input string
+		want  string
+	}{
+		// CJK char immediately before prefix → drop prefix, treat as bare.
+		{"一下周五", "2026-04-24"},
+		{"总结一下周五的讨论", "2026-04-24"},
+		{"晚上周五", "2026-04-24"},
+		{"明天上周五", "2026-04-24"},
+		// Boundary present → prefix honored.
+		{"上周五", "2026-04-17"},
+		{"下周五", "2026-05-01"},
+		{" 上周五", "2026-04-17"},
+		{",下周五", "2026-05-01"},
+		{"。上周五", "2026-04-17"},
+		{"开会:上周五的纪要", "2026-04-17"},
+	}
+	for _, c := range cases {
+		got, ok := parseWeekday(c.input, now)
+		if !ok {
+			t.Errorf("parseWeekday(%q) = no match", c.input)
+			continue
+		}
+		if g := got.Format("2006-01-02"); g != c.want {
+			t.Errorf("parseWeekday(%q) = %s, want %s", c.input, g, c.want)
+		}
 	}
 }
