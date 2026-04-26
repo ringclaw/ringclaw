@@ -892,24 +892,49 @@ func dispatchTypedMedia(ag agent.Agent, conversationID, mediaKind string, count 
 	return reply, nil
 }
 
+// agentSupportsMedia consults the optional MediaCapable interface to
+// decide whether the agent should receive prompts of the given media
+// kind at runtime. Agents that don't implement MediaCapable fall back
+// to "assume supported" so existing mocks and non-ACP agents keep
+// working unchanged.
+func agentSupportsMedia(ag agent.Agent, kind string) bool {
+	mc, ok := ag.(agent.MediaCapable)
+	if !ok {
+		return true
+	}
+	return mc.SupportsMedia(kind)
+}
+
 // chatWithAttachments dispatches to the appropriate multimedia-capable interface
 // on the agent (audio first, then images), or falls back to text-only with an
 // informational note appended to the message.
+//
+// The dispatch is gated by both the static interface assertion
+// (ImageSupporter / AudioSupporter) AND the runtime MediaCapable check.
+// Some adapters (notably ACPAgent) statically expose ChatWithAudio /
+// ChatWithImages but the underlying CLI may decline a given media kind
+// in its initialize handshake; in that case we silently drop the media
+// entries and leave a fallback note in the prompt so the user can see
+// what happened.
 func (h *Handler) chatWithAttachments(ctx context.Context, ag agent.Agent, conversationID, message string, images []agent.ImageAttachment, audio []agent.AudioAttachment) (string, error) {
 	if len(audio) > 0 {
-		if as, ok := ag.(agent.AudioSupporter); ok {
+		if as, ok := ag.(agent.AudioSupporter); ok && agentSupportsMedia(ag, agent.MediaKindAudio) {
 			return dispatchTypedMedia(ag, conversationID, "audio", len(audio), func() (string, error) {
 				return as.ChatWithAudio(ctx, conversationID, message, audio)
 			})
 		}
+		slog.Info("dropping audio attachments: agent does not support audio",
+			"component", "handler", "agent", ag.Info().Name, "audio", len(audio))
 		message += fmt.Sprintf("\n\n[Note: %d voice message(s) were attached but this agent does not support audio input.]", len(audio))
 	}
 	if len(images) > 0 {
-		if is, ok := ag.(agent.ImageSupporter); ok {
+		if is, ok := ag.(agent.ImageSupporter); ok && agentSupportsMedia(ag, agent.MediaKindImage) {
 			return dispatchTypedMedia(ag, conversationID, "images", len(images), func() (string, error) {
 				return is.ChatWithImages(ctx, conversationID, message, images)
 			})
 		}
+		slog.Info("dropping image attachments: agent does not support images",
+			"component", "handler", "agent", ag.Info().Name, "images", len(images))
 		message += fmt.Sprintf("\n\n[Note: %d image(s) were attached but this agent does not support image input.]", len(images))
 	}
 	return h.chatWithAgent(ctx, ag, conversationID, message)
