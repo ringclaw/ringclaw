@@ -94,8 +94,14 @@ Reply in the same language as the messages. Highlight key topics, decisions, and
 const defaultDateExtractPrompt = `Extract the date or time range from this message.
 Reply with ONLY one of:
 - An ISO 8601 date like "2026-04-10" for a specific date
-- A relative expression like "yesterday", "last week", "3 days ago"
+- A relative expression like "yesterday", "last week", "3 days ago", "周五", "上周三", "next Friday"
 - "NONE" if no time/date is mentioned
+
+Weekday rules (apply to both Chinese and English):
+- Bare "周X" / "Friday" → the most recent past occurrence of that weekday (today if today is that day)
+- "上周X" / "last X" / "past X" → the X of the previous calendar week
+- "下周X" / "next X" → the X of the next calendar week
+- "本周X" / "这周X" / "this X" → the X of the current calendar week
 
 Current date: %s
 

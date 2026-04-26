@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -24,12 +25,52 @@ var (
 	reAbsDateEN    = regexp.MustCompile(`(?i)(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?`)
 	reAbsDateSlash = regexp.MustCompile(`(\d{1,2})/(\d{1,2})`)
 	reAbsDateISO   = regexp.MustCompile(`(\d{4})-(\d{2})-(\d{2})`)
+
+	// Weekday names with optional direction modifier.
+	// ZH:  "周五" / "上周五" / "下周五" / "本周五" / "这周五"
+	//      also accepts 星期X / 礼拜X and 上个/下个/这个 prefixes.
+	// EN:  "Friday" / "last Friday" / "next Friday" / "this Friday" / abbreviations.
+	// Bare weekday → most recent past occurrence (or today if today is that day).
+	// 上/last  → previous calendar week's X (always 7+ days back).
+	// 下/next  → next calendar week's X (always 1-7 days forward).
+	// 本/这/this → current calendar week's X (may be past, today, or future).
+	reWeekdayZH = regexp.MustCompile(`(上个?|下个?|这个?|本)?\s*(?:周|星期|礼拜)\s*([一二三四五六日天])`)
+	reWeekdayEN = regexp.MustCompile(`(?i)(?:\b(this|last|next|past)\s+)?\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b\.?`)
 )
 
 var cnSmallNum = map[string]int{
 	"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
 	"六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
 }
+
+// Weekday lookup tables. Values use ISO numbering (Mon=1 … Sun=7) so the
+// resolver math stays uniform across the (Mon-first) Chinese calendar
+// convention and Go's (Sun=0) time.Weekday.
+var zhWeekdayMap = map[string]int{
+	"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+	"日": 7, "天": 7,
+}
+
+var enWeekdayMap = map[string]int{
+	"monday": 1, "mon": 1,
+	"tuesday": 2, "tue": 2,
+	"wednesday": 3, "wed": 3,
+	"thursday": 4, "thu": 4,
+	"friday": 5, "fri": 5,
+	"saturday": 6, "sat": 6,
+	"sunday": 7, "sun": 7,
+}
+
+// weekdayPrefix encodes the calendar-week direction modifier that may
+// precede a weekday name.
+type weekdayPrefix int
+
+const (
+	wkpNone weekdayPrefix = iota // 周五  / Friday
+	wkpThis                      // 本周五 / 这周五 / this Friday
+	wkpLast                      // 上周五 / last Friday / past Friday
+	wkpNext                      // 下周五 / next Friday
+)
 
 var monthNames = map[string]time.Month{
 	"jan": time.January, "january": time.January,
@@ -128,6 +169,13 @@ func parseTimeRange(text string) time.Time {
 		return t
 	}
 
+	// Weekday names ("周五", "上周五", "Friday", "last Friday"). Must run
+	// before the timeRules loop so "上周五" is not swallowed by the broader
+	// "上周 → start of last week" rule.
+	if t, ok := parseWeekday(lower, now); ok {
+		return t
+	}
+
 	for _, r := range timeRules {
 		if containsAny(lower, r.keywords...) {
 			return r.resolve(now)
@@ -135,6 +183,122 @@ func parseTimeRange(text string) time.Time {
 	}
 
 	return todayStart()
+}
+
+// parseWeekday matches "周X" / "上周X" / "下周X" / "本周X" and the English
+// equivalents (Friday, last Friday, next Monday, etc.) and returns the
+// resolved date with the configured semantics.
+//
+// For Chinese, the directional prefix (上/下/本/这) is only honored when it
+// sits at a natural word boundary (start of input, ASCII whitespace /
+// punctuation, or CJK punctuation). Otherwise we treat the weekday as a
+// bare match — this avoids false positives like "一下周五" (a bit of
+// Friday's stuff) being parsed as "next Friday", or "晚上周五" being
+// parsed as "last Friday".
+func parseWeekday(lower string, now time.Time) (time.Time, bool) {
+	if loc := reWeekdayZH.FindStringSubmatchIndex(lower); len(loc) == 6 {
+		target, ok := zhWeekdayMap[lower[loc[4]:loc[5]]]
+		if !ok {
+			return time.Time{}, false
+		}
+		prefix := wkpNone
+		if loc[2] >= 0 && isCJKWordBoundaryBefore(lower, loc[2]) {
+			prefix = zhWeekdayPrefix(lower[loc[2]:loc[3]])
+		}
+		return resolveWeekday(prefix, target, now), true
+	}
+	if m := reWeekdayEN.FindStringSubmatch(lower); len(m) == 3 {
+		if target, ok := enWeekdayMap[strings.ToLower(m[2])]; ok {
+			return resolveWeekday(enWeekdayPrefix(strings.ToLower(m[1])), target, now), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// isCJKWordBoundaryBefore reports whether the byte position pos in s sits
+// at a word boundary suitable for a Chinese directional prefix.
+// True when pos is the start of the string, or the rune immediately before
+// pos is ASCII (space, punctuation, alphanumeric) or CJK punctuation.
+// False when the preceding rune is another CJK ideograph / hiragana /
+// katakana / hangul, since those typically form compound words with 上/下
+// (e.g. 一下, 晚上) that shouldn't be reinterpreted as directional prefixes.
+func isCJKWordBoundaryBefore(s string, pos int) bool {
+	if pos <= 0 {
+		return true
+	}
+	r, size := utf8.DecodeLastRuneInString(s[:pos])
+	if r == utf8.RuneError && size == 0 {
+		return true
+	}
+	if r < 0x80 { // ASCII
+		return true
+	}
+	// CJK Symbols and Punctuation (U+3000–U+303F): includes 、。「」 etc.
+	if r >= 0x3000 && r <= 0x303F {
+		return true
+	}
+	// Fullwidth ASCII punctuation segments inside U+FF00–U+FFEF.
+	if (r >= 0xFF00 && r <= 0xFF20) || (r >= 0xFF3B && r <= 0xFF40) || (r >= 0xFF5B && r <= 0xFF65) {
+		return true
+	}
+	return false
+}
+
+func zhWeekdayPrefix(s string) weekdayPrefix {
+	switch {
+	case strings.HasPrefix(s, "上"):
+		return wkpLast
+	case strings.HasPrefix(s, "下"):
+		return wkpNext
+	case strings.HasPrefix(s, "这"), strings.HasPrefix(s, "本"):
+		return wkpThis
+	}
+	return wkpNone
+}
+
+func enWeekdayPrefix(s string) weekdayPrefix {
+	switch s {
+	case "last", "past":
+		return wkpLast
+	case "next":
+		return wkpNext
+	case "this":
+		return wkpThis
+	}
+	return wkpNone
+}
+
+// resolveWeekday computes the date for the requested weekday using the
+// agreed semantics:
+//   - bare ("周五" / "Friday"): most recent past occurrence; today if today
+//     is that weekday.
+//   - "上周X" / "last X" / "past X": the X of the previous calendar week
+//     (always between 7 and 13 days back).
+//   - "下周X" / "next X": the X of the next calendar week (1–7 days forward).
+//   - "本周X" / "这周X" / "this X": the X of the current calendar week
+//     (may be past, today, or future).
+//
+// target uses ISO weekday numbering (Mon=1 … Sun=7).
+func resolveWeekday(prefix weekdayPrefix, target int, now time.Time) time.Time {
+	wd := int(now.Weekday())
+	if wd == 0 {
+		wd = 7 // Sunday → 7 to match ISO numbering
+	}
+
+	var deltaDays int
+	switch prefix {
+	case wkpLast:
+		deltaDays = -(wd - target + 7)
+	case wkpNext:
+		deltaDays = target - wd + 7
+	case wkpThis:
+		deltaDays = target - wd
+	default: // wkpNone
+		deltaDays = -((wd - target + 7) % 7)
+	}
+
+	d := now.AddDate(0, 0, deltaDays)
+	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
 }
 
 // parseRelativeDuration matches "最近一周", "过去 7 天", "last 3 weeks",
@@ -281,9 +445,20 @@ func flattenLang(m map[string][]string) []string {
 
 var timeWords = flattenLang(map[string][]string{
 	"zh": {"上星期", "这星期", "上个月", "这段时间", "这几天",
+		"上周一", "上周二", "上周三", "上周四", "上周五", "上周六", "上周日", "上周天",
+		"下周一", "下周二", "下周三", "下周四", "下周五", "下周六", "下周日", "下周天",
+		"本周一", "本周二", "本周三", "本周四", "本周五", "本周六", "本周日", "本周天",
+		"这周一", "这周二", "这周三", "这周四", "这周五", "这周六", "这周日", "这周天",
+		"周一", "周二", "周三", "周四", "周五", "周六", "周日", "周天",
+		"星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日", "星期天",
+		"礼拜一", "礼拜二", "礼拜三", "礼拜四", "礼拜五", "礼拜六", "礼拜日", "礼拜天",
 		"上周", "这周", "上月", "本月", "前天", "近期",
 		"今天", "昨天", "本周", "最近", "过去"},
 	"en": {"last week", "last month", "this week", "this month", "past week", "past month",
+		"last monday", "last tuesday", "last wednesday", "last thursday", "last friday", "last saturday", "last sunday",
+		"next monday", "next tuesday", "next wednesday", "next thursday", "next friday", "next saturday", "next sunday",
+		"this monday", "this tuesday", "this wednesday", "this thursday", "this friday", "this saturday", "this sunday",
+		"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
 		"today", "yesterday", "recently", "last"},
 	"ja": {"一昨日", "先週", "今週", "先月", "今月", "最近"},
 	"ko": {"지난주", "이번주", "지난달", "이번달", "그저께", "최근"},

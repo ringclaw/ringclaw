@@ -404,17 +404,47 @@ func TestExtractDateViaAgent_RegexFastPath_SkipsLLM(t *testing.T) {
 		"最近一个月的活动",
 		"4月10日的消息",
 		"summarize last 7 days",
+		// Weekday phrases must also short-circuit the LLM. This is the
+		// regression for the production bug where "周五" fell through
+		// to the LLM, which returned NONE, defaulting summary to today.
+		"总结周五的讨论",
+		"上周三的会议纪要",
+		"summarize last friday",
+		"this monday update",
 	}
 	for _, in := range cases {
 		ag := &dateAgentSpy{t: t}
 		got := extractDateViaAgent(context.Background(), ag, in)
-		if got.Equal(todayStart()) {
+		if got.Equal(todayStart()) && !looksLikeTodayWeekdayMatch(in) {
 			t.Errorf("extractDateViaAgent(%q) = today; expected regex match to back-date", in)
 		}
 		if ag.called != 0 {
 			t.Errorf("extractDateViaAgent(%q) invoked LLM %d time(s); expected 0", in, ag.called)
 		}
 	}
+}
+
+// looksLikeTodayWeekdayMatch is a narrow escape hatch: when the host clock
+// is on the same weekday the test phrase names ("周X" alone or "this X"),
+// resolveWeekday correctly returns today, which is otherwise our
+// "no match" signal in the assertion above.
+func looksLikeTodayWeekdayMatch(in string) bool {
+	wd := int(time.Now().Weekday())
+	if wd == 0 {
+		wd = 7
+	}
+	zhMap := map[int]string{1: "周一", 2: "周二", 3: "周三", 4: "周四", 5: "周五", 6: "周六", 7: "周日"}
+	enMap := map[int]string{1: "monday", 2: "tuesday", 3: "wednesday", 4: "thursday", 5: "friday", 6: "saturday", 7: "sunday"}
+	if z, ok := zhMap[wd]; ok && strings.Contains(in, z) && !strings.Contains(in, "上") && !strings.Contains(in, "下") {
+		return true
+	}
+	if e, ok := enMap[wd]; ok && strings.Contains(strings.ToLower(in), e) &&
+		!strings.Contains(strings.ToLower(in), "last") &&
+		!strings.Contains(strings.ToLower(in), "next") &&
+		!strings.Contains(strings.ToLower(in), "past") {
+		return true
+	}
+	return false
 }
 
 // TestExtractDateViaAgent_NilAgent_RegexOnly confirms the helper still
