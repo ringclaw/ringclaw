@@ -3,20 +3,20 @@
   "prompts": [
     {
       "name": "intent",
-      "baseline": 88.23529411764706,
+      "baseline": 94.11764705882352,
       "best": 100,
-      "delta": 11.764705882352942
+      "delta": 5.882352941176478
     },
     {
       "name": "name_extract",
-      "baseline": 91.30434782608695,
+      "baseline": 100,
       "best": 100,
-      "delta": 8.695652173913047
+      "delta": 0
     },
     {
       "name": "action",
-      "baseline": 65,
-      "best": 80,
+      "baseline": 85,
+      "best": 100,
       "delta": 15
     }
   ]
