@@ -766,6 +766,26 @@ func TestHandleCronCommand_ListWithDisabled(t *testing.T) {
 	}
 }
 
+// TestHandleCronCommand_ListShowsFullMessage locks the behavior that
+// /cron list prints the entire job message verbatim — no truncation,
+// no ellipsis — so users can audit long scheduled prompts in-place.
+func TestHandleCronCommand_ListShowsFullMessage(t *testing.T) {
+	dir := t.TempDir()
+	store := NewCronStore(filepath.Join(dir, "jobs.json"))
+	_ = store.Load()
+
+	long := strings.Repeat("帮我总结一下今天所有团队的讨论并发到 DM ", 8)
+	_ = store.Add(CronJob{Name: "long-msg", Enabled: true, Schedule: "every:1h", Message: long})
+
+	reply := HandleCronCommand(store, "/cron list", "chat1")
+	if !strings.Contains(reply, long) {
+		t.Errorf("expected full message in /cron list output, got %q", reply)
+	}
+	if strings.Contains(reply, "...") {
+		t.Errorf("expected no truncation ellipsis in /cron list output, got %q", reply)
+	}
+}
+
 // --- HandleCronCommand: unknown subcommand ---
 
 func TestHandleCronCommand_Unknown(t *testing.T) {
