@@ -148,6 +148,48 @@ func TestCollectAuthorizeMeta_Branches(t *testing.T) {
 		}
 	})
 
+	t.Run("formatPersonLabel covers all branches", func(t *testing.T) {
+		cases := []struct {
+			name, displayName, email, userID, want string
+		}{
+			{name: "empty userID returns empty"},
+			{name: "trim-only userID returns empty", userID: "  "},
+			{name: "name+email", displayName: "Alice", email: "a@example.com", userID: "u1", want: "Alice <a@example.com> (id=u1)"},
+			{name: "name only", displayName: "Alice", userID: "u1", want: "Alice (id=u1)"},
+			{name: "email only", email: "a@example.com", userID: "u1", want: "a@example.com (id=u1)"},
+			{name: "bare ID fallback", userID: "u1", want: "u1"},
+			{name: "trims fields", displayName: "  Alice  ", email: "  a@example.com  ", userID: "u1", want: "Alice <a@example.com> (id=u1)"},
+		}
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				if got := formatPersonLabel(tc.displayName, tc.email, tc.userID); got != tc.want {
+					t.Errorf("got %q, want %q", got, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("formatChatLabel covers all branches", func(t *testing.T) {
+		cases := []struct {
+			name, chatName, chatID, want string
+		}{
+			{name: "empty chatID returns empty"},
+			{name: "trim-only chatID returns empty", chatID: "  "},
+			{name: "named", chatName: "Engineering", chatID: "c1", want: "Engineering (id=c1)"},
+			{name: "bare ID fallback", chatID: "c1", want: "c1"},
+			{name: "trims name", chatName: "  Eng  ", chatID: "c1", want: "Eng (id=c1)"},
+		}
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				if got := formatChatLabel(tc.chatName, tc.chatID); got != tc.want {
+					t.Errorf("got %q, want %q", got, tc.want)
+				}
+			})
+		}
+	})
+
 	t.Run("name composed from first and last; type fallback for chat name", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
