@@ -159,11 +159,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	resolvedUserIDs := cfg.RC.SourceUserIDs
 	if len(cfg.RC.SourceUserIDs) > 0 {
-		lookupClient := c.bot
-		if c.private != nil {
-			lookupClient = c.private
-		}
-		resolvedUserIDs = lookupClient.ResolveUserIDs(ctx, cfg.RC.SourceUserIDs)
+		resolvedUserIDs = c.lookupClient().ResolveUserIDs(ctx, cfg.RC.SourceUserIDs)
 		slog.Info("source_user_ids resolved", "count", len(resolvedUserIDs), "ids", resolvedUserIDs)
 	}
 
@@ -184,10 +180,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// may be emails / phone numbers; ResolveUserIDs maps them to
 	// numeric IDs the monitor compares against incoming CreatorIDs.
 	if len(cfg.RC.ChatUserAllow) > 0 {
-		lookupClient := c.bot
-		if c.private != nil {
-			lookupClient = c.private
-		}
+		lookupClient := c.lookupClient()
 		resolvedChatAllow := make(map[string][]string, len(cfg.RC.ChatUserAllow))
 		total := 0
 		for chatID, list := range cfg.RC.ChatUserAllow {

@@ -140,31 +140,20 @@ func (h *Handler) AuthorizeMention(ctx context.Context, client, readClient *ring
 
 // collectAuthorizeMeta does best-effort directory lookups for the
 // chat name, user display name, and user email. Any failure is logged
-// at debug level and replaced with the raw ID so the prompt never
-// blocks on flaky network. readClient is preferred (Private App
-// credentials yield the email field); when nil the prompt falls back
-// to bare IDs.
+// at debug level (inside lookupPerson / lookupChat) and replaced with
+// the raw ID so the prompt never blocks on flaky network.
+// readClient is preferred (Private App credentials yield the email
+// field); when nil the prompt falls back to bare IDs.
 func (h *Handler) collectAuthorizeMeta(ctx context.Context, readClient *ringcentral.Client, post ringcentral.Post) authorizeMeta {
-	meta := authorizeMeta{}
 	if readClient == nil {
-		return meta
+		return authorizeMeta{}
 	}
-	if chat, err := readClient.GetChat(ctx, post.GroupID); err == nil && chat != nil {
-		name := strings.TrimSpace(chat.Name)
-		if name == "" {
-			name = strings.TrimSpace(chat.Type)
-		}
-		meta.ChatName = name
-	} else if err != nil {
-		slog.Debug("authorize-mention: chat lookup failed", "component", "handler", "chatID", post.GroupID, "error", err)
+	name, email := lookupPerson(ctx, readClient, post.CreatorID)
+	return authorizeMeta{
+		ChatName:    lookupChat(ctx, readClient, post.GroupID),
+		DisplayName: name,
+		Email:       email,
 	}
-	if p, err := readClient.GetPersonInfo(ctx, post.CreatorID); err == nil && p != nil {
-		meta.Email = strings.TrimSpace(p.Email)
-		meta.DisplayName = strings.TrimSpace(strings.TrimSpace(p.FirstName) + " " + strings.TrimSpace(p.LastName))
-	} else if err != nil {
-		slog.Debug("authorize-mention: person lookup failed", "component", "handler", "userID", post.CreatorID, "error", err)
-	}
-	return meta
 }
 
 // postAuthorizeMentionPrompt formats and sends the rich context prompt
@@ -184,20 +173,8 @@ func (h *Handler) postAuthorizeMentionPrompt(
 		return fmt.Errorf("owner DM not resolved")
 	}
 
-	chatLabel := post.GroupID
-	if meta.ChatName != "" {
-		chatLabel = fmt.Sprintf("%s (id=%s)", meta.ChatName, post.GroupID)
-	}
-
-	userLabel := post.CreatorID
-	switch {
-	case meta.DisplayName != "" && meta.Email != "":
-		userLabel = fmt.Sprintf("%s <%s> (id=%s)", meta.DisplayName, meta.Email, post.CreatorID)
-	case meta.DisplayName != "":
-		userLabel = fmt.Sprintf("%s (id=%s)", meta.DisplayName, post.CreatorID)
-	case meta.Email != "":
-		userLabel = fmt.Sprintf("%s (id=%s)", meta.Email, post.CreatorID)
-	}
+	chatLabel := formatChatLabel(meta.ChatName, post.GroupID)
+	userLabel := formatPersonLabel(meta.DisplayName, meta.Email, post.CreatorID)
 
 	mention := util.Truncate(strings.TrimSpace(post.Text), 200)
 	if mention == "" {
@@ -229,12 +206,16 @@ func (h *Handler) postAuthorizeMentionPrompt(
 // on every code path via the deferred releasePending so the next
 // @mention from the same user always either issues a new challenge
 // (after deny/expire) or is dispatched normally (after approve).
+//
+// The cached prompt-time metadata is also released centrally via
+// defer dropAuthorizeMeta so that any future early-return path (or a
+// panic in applyAuthorize) cannot leak entries into h.authorizeMeta.
 func (h *Handler) awaitAuthorizeMention(client *ringcentral.Client, c *oob.Challenge, chatID, userID, key string) {
 	defer h.releasePending(key)
+	defer h.dropAuthorizeMeta(c.ID)
 
 	mgr := h.OOBManager()
 	if mgr == nil {
-		h.dropAuthorizeMeta(c.ID)
 		return
 	}
 	timeout := time.Until(c.ExpiresAt) + 5*time.Second
@@ -250,7 +231,6 @@ func (h *Handler) awaitAuthorizeMention(client *ringcentral.Client, c *oob.Chall
 	case err == oob.ErrChallengeExpired:
 		slog.Info("authorize-mention: challenge expired",
 			"component", "handler", "challengeID", c.ID, "chatID", chatID, "userID", userID)
-		h.dropAuthorizeMeta(c.ID)
 		if ownerDM != "" {
 			logSendError(SendTextReply(ctx, client, ownerDM,
 				fmt.Sprintf("Authorization request for user `%s` in chat `%s` expired (challenge `%s`). They must @mention again to retry.",
@@ -259,17 +239,18 @@ func (h *Handler) awaitAuthorizeMention(client *ringcentral.Client, c *oob.Chall
 	case err != nil:
 		slog.Warn("authorize-mention: wait failed",
 			"component", "handler", "challengeID", c.ID, "error", err)
-		h.dropAuthorizeMeta(c.ID)
 	case !approved:
 		slog.Info("authorize-mention: denied",
 			"component", "handler", "challengeID", c.ID, "chatID", chatID, "userID", userID)
-		h.dropAuthorizeMeta(c.ID)
 		if ownerDM != "" {
 			logSendError(SendTextReply(ctx, client, ownerDM,
 				fmt.Sprintf("Denied authorization for user `%s` in chat `%s` (challenge `%s`).", userID, chatID, c.ID)))
 		}
 	default:
-		h.applyAuthorize(ctx, client, chatID, userID, c.ID)
+		// Pass the meta in directly: the deferred dropAuthorizeMeta
+		// would otherwise race with takeAuthorizeMeta inside
+		// applyAuthorize and lose the cached email.
+		h.applyAuthorize(ctx, client, chatID, userID, c.ID, h.peekAuthorizeMeta(c.ID))
 	}
 }
 
@@ -279,8 +260,11 @@ func (h *Handler) awaitAuthorizeMention(client *ringcentral.Client, c *oob.Chall
 // config.json under the human-friendly identifier (email preferred,
 // numeric extension ID fallback). Always emits a confirmation in the
 // owner DM so the operator gets unambiguous feedback.
-func (h *Handler) applyAuthorize(ctx context.Context, client *ringcentral.Client, chatID, userID, challengeID string) {
-	meta := h.takeAuthorizeMeta(challengeID)
+//
+// meta is the cached prompt-time metadata supplied by
+// awaitAuthorizeMention; the cache itself is freed by the caller's
+// deferred dropAuthorizeMeta so this function never mutates the map.
+func (h *Handler) applyAuthorize(ctx context.Context, client *ringcentral.Client, chatID, userID, challengeID string, meta authorizeMeta) {
 	identifier := userID
 	if meta.Email != "" {
 		identifier = meta.Email
@@ -357,20 +341,21 @@ func (h *Handler) storeAuthorizeMeta(challengeID string, meta authorizeMeta) {
 	h.authorizeMeta[challengeID] = meta
 }
 
-// takeAuthorizeMeta returns and removes the cached metadata for a
-// challenge. Returns the zero value if no metadata was stored.
-func (h *Handler) takeAuthorizeMeta(challengeID string) authorizeMeta {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	meta, ok := h.authorizeMeta[challengeID]
-	if ok {
-		delete(h.authorizeMeta, challengeID)
-	}
-	return meta
+// peekAuthorizeMeta returns the cached metadata for a challenge
+// without removing it. The release happens centrally via the
+// deferred dropAuthorizeMeta in awaitAuthorizeMention so all
+// resolution paths free the entry. Returns the zero value if no
+// metadata was stored.
+func (h *Handler) peekAuthorizeMeta(challengeID string) authorizeMeta {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.authorizeMeta[challengeID]
 }
 
 // dropAuthorizeMeta removes any cached metadata for a challenge
-// without returning it. Called on non-approval paths.
+// without returning it. Used by awaitAuthorizeMention's defer to
+// guarantee no entry leaks past challenge resolution, even on
+// approve / deny / expire / panic.
 func (h *Handler) dropAuthorizeMeta(challengeID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
