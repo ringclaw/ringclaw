@@ -63,6 +63,36 @@ type Handler struct {
 	trustedSenders  map[string]bool
 	allowAllSenders bool
 
+	// chatUserAllow mirrors the Monitor's per-chat allowlist for
+	// defense-in-depth. Maps chat ID -> set of numeric user IDs that
+	// may drive the bot in that specific chat. Layered ON TOP of
+	// trustedSenders: a sender is considered trusted when they
+	// appear in either set. Populated by the authorize-mention OOB
+	// flow on approval and by config.json at startup.
+	chatUserAllow map[string]map[string]bool
+
+	// authorizeMonitor is the Monitor reference used by the
+	// authorize-mention OOB flow to push approved (chat, user)
+	// grants back into the WebSocket allowlist. Nil when the
+	// authorize-mention feature is disabled.
+	authorizeMonitor authorizeMonitorIface
+
+	// authorizePersist is the persistence callback that writes a
+	// newly approved (chat, identifier) grant to config.json.
+	// identifier is the human-friendly form (email preferred,
+	// numeric ID fallback) — see handler_authorize.go.
+	authorizePersist PersistAuthorizeFunc
+
+	// pendingAuthorize is the dedupe set for outstanding
+	// authorize-mention challenges. Keys are "chatID|userID".
+	pendingAuthorize map[string]bool
+
+	// authorizeMeta caches per-challenge metadata (display name,
+	// email, chat name) captured when the prompt is built so the
+	// approval handler can persist the human-friendly identifier
+	// without a second directory lookup that may transiently fail.
+	authorizeMeta map[string]authorizeMeta
+
 	// oobManager and ownerDMChatID power the Phase 2b /approval flow.
 	// When oobManager is nil, /full-access is disabled and cross-chat
 	// actions skip the owner-DM notice (falling back to the Phase 1
@@ -85,13 +115,16 @@ type Handler struct {
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc, version string) *Handler {
 	return &Handler{
-		agents:          make(map[string]agent.Agent),
-		factory:         factory,
-		saveDefault:     saveDefault,
-		version:         version,
-		startTime:       time.Now(),
-		trustedSenders:  make(map[string]bool),
-		allowAllSenders: true, // legacy-compatible default; cmd/start.go flips this off
+		agents:           make(map[string]agent.Agent),
+		factory:          factory,
+		saveDefault:      saveDefault,
+		version:          version,
+		startTime:        time.Now(),
+		trustedSenders:   make(map[string]bool),
+		allowAllSenders:  true, // legacy-compatible default; cmd/start.go flips this off
+		chatUserAllow:    make(map[string]map[string]bool),
+		pendingAuthorize: make(map[string]bool),
+		authorizeMeta:    make(map[string]authorizeMeta),
 	}
 }
 
@@ -193,6 +226,44 @@ func (h *Handler) isTrustedSender(creatorID string) bool {
 		return false
 	}
 	return h.trustedSenders[creatorID]
+}
+
+// AddChatUserAllow grants a numeric user ID per-chat trust on the
+// handler's defense-in-depth allowlist. Used by the authorize-mention
+// OOB flow on approval and by start.go when seeding from
+// config.json's ringcentral.chat_user_allow.
+func (h *Handler) AddChatUserAllow(chatID, userID string) {
+	chatID = strings.TrimSpace(chatID)
+	userID = strings.TrimSpace(userID)
+	if chatID == "" || userID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.chatUserAllow == nil {
+		h.chatUserAllow = make(map[string]map[string]bool)
+	}
+	set, ok := h.chatUserAllow[chatID]
+	if !ok {
+		set = make(map[string]bool)
+		h.chatUserAllow[chatID] = set
+	}
+	set[userID] = true
+}
+
+// isChatUserAllowed reports whether (chatID, userID) is on the
+// per-chat allowlist.
+func (h *Handler) isChatUserAllowed(chatID, userID string) bool {
+	if chatID == "" || userID == "" {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	set, ok := h.chatUserAllow[chatID]
+	if !ok {
+		return false
+	}
+	return set[userID]
 }
 
 // cleanSeenMsgs removes entries older than 5 minutes from the dedup cache.
@@ -483,8 +554,10 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 
 	// Defense-in-depth sender allowlist. Monitor already filters at the
 	// WebSocket layer; this re-check protects callers that bypass Monitor
-	// (cron jobs, /api/send, tests) from spoofing CreatorID.
-	if !h.isTrustedSender(post.CreatorID) {
+	// (cron jobs, /api/send, tests) from spoofing CreatorID. The
+	// per-chat allowlist (chat_user_allow + authorize-mention OOB
+	// approvals) is layered on top of the global allowlist.
+	if !h.isTrustedSender(post.CreatorID) && !h.isChatUserAllowed(chatID, post.CreatorID) {
 		slog.Warn("dropping message from untrusted sender",
 			"component", "handler", "creatorID", post.CreatorID, "chatID", chatID)
 		return
@@ -556,7 +629,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		logSendError(SendTextReply(ctx, client, chatID, h.handleCwd(text)))
 		return
 	} else if IsFullAccessCommand(text) {
-		h.handleFullAccess(ctx, client, chatID, post.CreatorID, text)
+		h.handleFullAccess(ctx, client, readClient, chatID, post.CreatorID, text)
 		return
 	} else if text == "/help" {
 		cardJSON := buildHelpCard()

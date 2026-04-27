@@ -110,6 +110,62 @@ type RCConfig struct {
 
 	GroupSummaryGroupID      string `json:"group_summary_group_id,omitempty"`
 	GroupSummaryMessageLimit int    `json:"group_summary_message_limit,omitempty"`
+
+	// AllowGroupMentionAuthorize, when true, enables the OOB approval
+	// flow for non-trusted group mentions. When a user not on the
+	// sender allowlist @mentions the bot in an allowed group chat,
+	// instead of silently dropping the message the bot posts a
+	// `/approval` challenge to the owner DM. On approval the
+	// requester is added to ChatUserAllow for that chat only and
+	// persisted to config.json.
+	//
+	// Requires Private App + resolved owner DM. Without those the
+	// feature is disabled at startup with an ERROR log.
+	AllowGroupMentionAuthorize *bool `json:"allow_group_mention_authorize,omitempty"`
+
+	// ChatUserAllow maps chat ID -> additional trusted user
+	// identifiers allowed to drive the bot in THAT chat only.
+	// Entries may be numeric extension IDs, email addresses, or
+	// E.164 phone numbers; non-numeric forms are resolved to numeric
+	// IDs at startup via the Private App directory (same path used
+	// by SourceUserIDs). Populated automatically by the
+	// authorize-mention OOB flow; operators may also pre-seed it by
+	// hand. Empty (or absent chat key) means "no per-chat
+	// exception".
+	ChatUserAllow map[string][]string `json:"chat_user_allow,omitempty"`
+}
+
+// IsAuthorizeMentionEnabled reports whether
+// allow_group_mention_authorize is opted-in. Defaults to false when
+// unset.
+func (rc RCConfig) IsAuthorizeMentionEnabled() bool {
+	return rc.AllowGroupMentionAuthorize != nil && *rc.AllowGroupMentionAuthorize
+}
+
+// AddChatUserAllow appends a trusted identifier (email / numeric ID /
+// phone number) to ChatUserAllow[chatID], deduplicating by
+// case-insensitive equality. Returns true when a new entry was
+// appended, false when the identifier was already present.
+//
+// Initializes the map lazily so callers can use the helper on a
+// freshly loaded zero-value Config. The caller is responsible for
+// calling Save afterwards if persistence is desired.
+func (rc *RCConfig) AddChatUserAllow(chatID, identifier string) bool {
+	chatID = strings.TrimSpace(chatID)
+	identifier = strings.TrimSpace(identifier)
+	if chatID == "" || identifier == "" {
+		return false
+	}
+	if rc.ChatUserAllow == nil {
+		rc.ChatUserAllow = make(map[string][]string)
+	}
+	for _, e := range rc.ChatUserAllow[chatID] {
+		if strings.EqualFold(e, identifier) {
+			return false
+		}
+	}
+	rc.ChatUserAllow[chatID] = append(rc.ChatUserAllow[chatID], identifier)
+	return true
 }
 
 // LogValue implements slog.LogValuer to redact sensitive fields.

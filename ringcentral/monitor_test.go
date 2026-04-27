@@ -1101,3 +1101,102 @@ func TestMonitor_CalcBackoff_Progression(t *testing.T) {
 		}
 	}
 }
+
+// TestMonitor_ChatUserAllow_AdmitsNonSourceUser confirms that a user
+// not on source_user_ids but listed in chat_user_allow for the
+// destination chat is dispatched normally.
+func TestMonitor_ChatUserAllow_AdmitsNonSourceUser(t *testing.T) {
+	var mu sync.Mutex
+	var called bool
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-1")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		called = true
+		mu.Unlock()
+	}, []string{"chat-A"}, []string{"trusted-1"}, false)
+	m.SetAllowAllSenders(false)
+	m.SetChatUserAllow(map[string][]string{"chat-A": {"guest-1"}})
+
+	msg := makeWSMessage(Post{
+		ID: "p1", GroupID: "chat-A", Type: "TextMessage",
+		Text: "hi", CreatorID: "guest-1", EventType: "PostAdded",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !called {
+		t.Errorf("chat_user_allow entry should admit a non-source_user_ids sender")
+	}
+}
+
+// TestMonitor_MentionAuthorize_RoutedAndNotDispatched verifies that a
+// non-trusted user's @mention in a group chat triggers the
+// authorize-mention callback INSTEAD of the regular handler.
+func TestMonitor_MentionAuthorize_RoutedAndNotDispatched(t *testing.T) {
+	var mu sync.Mutex
+	var dispatched bool
+	var authorized bool
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-1")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		dispatched = true
+		mu.Unlock()
+	}, []string{"chat-A"}, []string{"trusted-1"}, true)
+	m.SetAllowAllSenders(false)
+	m.SetMentionAuthorize(func(ctx context.Context, replyClient *Client, readClient *Client, post Post) {
+		mu.Lock()
+		authorized = true
+		mu.Unlock()
+	})
+
+	msg := makeWSMessage(Post{
+		ID: "p1", GroupID: "chat-A", Type: "TextMessage",
+		Text: "@bot hi", CreatorID: "guest-1", EventType: "PostAdded",
+		Mentions: []Mention{{ID: "bot-1", Type: "Person"}},
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(80 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if dispatched {
+		t.Errorf("normal handler must NOT be called for a non-trusted mention while authorize-mention is enabled")
+	}
+	if !authorized {
+		t.Errorf("authorize-mention callback should have been invoked")
+	}
+}
+
+// TestMonitor_MentionAuthorize_DisabledFallsBackToDeny verifies that
+// without an authorize hook a non-trusted mention is silently dropped
+// (current strict-allowlist behavior).
+func TestMonitor_MentionAuthorize_DisabledFallsBackToDeny(t *testing.T) {
+	var mu sync.Mutex
+	var dispatched bool
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-1")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		dispatched = true
+		mu.Unlock()
+	}, []string{"chat-A"}, []string{"trusted-1"}, true)
+	m.SetAllowAllSenders(false)
+
+	msg := makeWSMessage(Post{
+		ID: "p1", GroupID: "chat-A", Type: "TextMessage",
+		Text: "@bot hi", CreatorID: "guest-1", EventType: "PostAdded",
+		Mentions: []Mention{{ID: "bot-1", Type: "Person"}},
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if dispatched {
+		t.Errorf("non-trusted mention must be dropped when authorize hook is not installed")
+	}
+}

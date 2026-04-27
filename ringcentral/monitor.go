@@ -28,6 +28,14 @@ const (
 // readClient is always the private app for reading any chat's messages.
 type MessageHandler func(ctx context.Context, replyClient *Client, readClient *Client, post Post)
 
+// MentionAuthorizeFunc is called when a non-trusted sender @mentions
+// the bot in an allowed group chat AND the authorize-mention feature
+// is enabled. Implementations should issue an OOB approval challenge
+// and, on approval, add the user to the per-chat allowlist via
+// AddChatUserAllow. The original post is dropped — implementations
+// MUST NOT dispatch it to the agent.
+type MentionAuthorizeFunc func(ctx context.Context, replyClient *Client, readClient *Client, post Post)
+
 // Monitor manages the WebSocket connection for receiving messages.
 // The bot client is required and used for WS connection and replies.
 // The private client is optional and used for reading other chats.
@@ -39,10 +47,21 @@ type Monitor struct {
 	allowedUserIDs  map[string]bool
 	allowAllSenders bool // when true, empty allowedUserIDs means "allow all"; default false = mandatory allowlist
 	handler         MessageHandler
-	failures        int
-	sentPosts       map[string]time.Time // post ID -> timestamp
-	lastEvict       time.Time
-	mu              sync.Mutex
+	// chatUserAllow maps chat ID -> set of numeric user IDs that may
+	// drive the bot in that specific chat. Layered ON TOP of
+	// allowedUserIDs: a sender is considered trusted when they appear
+	// in either set. Populated by the authorize-mention OOB flow and
+	// by config.json's ringcentral.chat_user_allow at startup.
+	chatUserAllow map[string]map[string]bool
+	// mentionAuthorize, when non-nil, is called for non-trusted
+	// senders that @mention the bot in an allowed group chat. The
+	// original post is NOT dispatched to the message handler; the
+	// callback owns the post.
+	mentionAuthorize MentionAuthorizeFunc
+	failures         int
+	sentPosts        map[string]time.Time // post ID -> timestamp
+	lastEvict        time.Time
+	mu               sync.Mutex
 }
 
 const (
@@ -114,8 +133,99 @@ func NewMonitor(botClient *Client, handler MessageHandler, chatIDs []string, sou
 		allowedChatIDs:  allowed,
 		allowedUserIDs:  allowedUsers,
 		allowAllSenders: true, // legacy-compatible default; cmd/start.go flips this off
+		chatUserAllow:   make(map[string]map[string]bool),
 		sentPosts:       make(map[string]time.Time),
 	}
+}
+
+// SetChatUserAllow installs the per-chat user allowlist resolved at
+// startup. Pre-existing in-memory entries (e.g. from runtime
+// AddChatUserAllow calls) are NOT preserved — callers should call this
+// once during startup and then rely on AddChatUserAllow for runtime
+// additions.
+func (m *Monitor) SetChatUserAllow(byChat map[string][]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.chatUserAllow = make(map[string]map[string]bool, len(byChat))
+	for chatID, ids := range byChat {
+		chatID = strings.TrimSpace(chatID)
+		if chatID == "" {
+			continue
+		}
+		set := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			set[id] = true
+		}
+		if len(set) > 0 {
+			m.chatUserAllow[chatID] = set
+		}
+	}
+}
+
+// AddChatUserAllow grants a numeric user ID per-chat trust. Used by
+// the authorize-mention OOB flow on approval so the very next message
+// from that user (in that chat) is dispatched normally.
+func (m *Monitor) AddChatUserAllow(chatID, userID string) {
+	chatID = strings.TrimSpace(chatID)
+	userID = strings.TrimSpace(userID)
+	if chatID == "" || userID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.chatUserAllow == nil {
+		m.chatUserAllow = make(map[string]map[string]bool)
+	}
+	set, ok := m.chatUserAllow[chatID]
+	if !ok {
+		set = make(map[string]bool)
+		m.chatUserAllow[chatID] = set
+	}
+	set[userID] = true
+}
+
+// SetMentionAuthorize installs the callback invoked when a
+// non-trusted sender @mentions the bot in an allowed group chat.
+// Pass nil to disable the authorize-mention path (the legacy
+// silent-drop behavior is restored).
+func (m *Monitor) SetMentionAuthorize(fn MentionAuthorizeFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mentionAuthorize = fn
+}
+
+// isChatUserAllowed reports whether the given (chat, user) pair is on
+// the per-chat allowlist.
+func (m *Monitor) isChatUserAllowed(chatID, userID string) bool {
+	if chatID == "" || userID == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set, ok := m.chatUserAllow[chatID]
+	if !ok {
+		return false
+	}
+	return set[userID]
+}
+
+// hasAnyChatUserAllow reports whether any chat has at least one entry
+// on the per-chat allowlist. Used to keep the empty-allowlist startup
+// guard from blocking deployments that authorize all senders via
+// chat_user_allow only.
+func (m *Monitor) hasAnyChatUserAllow() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, set := range m.chatUserAllow {
+		if len(set) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // SetPrivateClient configures an optional private app client for reading
@@ -392,12 +502,34 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 	// list means deny all (effectively disabling remote control). Tests and
 	// explicit opt-in deployments can call SetAllowAllSenders(true) to restore
 	// the legacy "empty = allow all" behavior.
-	if !m.allowAllSenders && len(m.allowedUserIDs) == 0 {
+	if !m.allowAllSenders && len(m.allowedUserIDs) == 0 && !m.hasAnyChatUserAllow() {
 		slog.Warn("dropping message: sender allowlist is empty (set ringcentral.source_user_ids or configure a Private App owner)",
 			"component", "monitor", "userID", event.Body.CreatorID, "chatID", event.Body.GroupID)
 		return
 	}
-	if len(m.allowedUserIDs) > 0 && !m.allowedUserIDs[event.Body.CreatorID] {
+	senderTrusted := len(m.allowedUserIDs) == 0 || m.allowedUserIDs[event.Body.CreatorID]
+	if !senderTrusted {
+		// Per-chat allowlist (set by config.json's chat_user_allow and
+		// by the authorize-mention OOB approval flow) is layered on
+		// top of the global source_user_ids allowlist.
+		if m.isChatUserAllowed(event.Body.GroupID, event.Body.CreatorID) {
+			senderTrusted = true
+		}
+	}
+	if !senderTrusted {
+		// Authorize-mention path: when the operator opted into
+		// allow_group_mention_authorize, a non-trusted user that
+		// @mentions the bot in an allowed group chat triggers the OOB
+		// approval flow. The original post is consumed (dropped) by
+		// the callback, NOT dispatched to the message handler.
+		if m.mentionAuthorize != nil &&
+			!m.client.IsBotDM(event.Body.GroupID) &&
+			m.isBotMentioned(event.Body.Mentions) {
+			slog.Info("authorize-mention: routing non-trusted group mention",
+				"component", "monitor", "userID", event.Body.CreatorID, "chatID", event.Body.GroupID, "postID", event.Body.ID)
+			go m.mentionAuthorize(ctx, m.client, m.readClient(), event.Body)
+			return
+		}
 		slog.Debug("ignoring message from non-allowed user", "component", "monitor", "userID", event.Body.CreatorID)
 		return
 	}
