@@ -21,6 +21,22 @@ type clients struct {
 	private *ringcentral.Client
 }
 
+// lookupClient returns the preferred client for directory lookups
+// (resolving emails / phone numbers to numeric IDs, fetching person
+// info, etc.): the Private App client when configured, otherwise
+// the bot client. Centralizes the "private if available, else bot"
+// pattern that initSenders / initChatUserAllow / API server bootstrap
+// all repeated inline.
+func (c *clients) lookupClient() *ringcentral.Client {
+	if c == nil {
+		return nil
+	}
+	if c.private != nil {
+		return c.private
+	}
+	return c.bot
+}
+
 // initClients creates bot and optional private app clients.
 func initClients(ctx context.Context, cfg *config.Config) (*clients, error) {
 	slog.Info("initializing bot client...")
@@ -203,10 +219,7 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 	if apiAddrFlag != "" {
 		apiAddr = apiAddrFlag
 	}
-	apiClient := c.bot
-	if c.private != nil {
-		apiClient = c.private
-	}
+	apiClient := c.lookupClient()
 	apiToken, err := api.LoadOrCreateToken()
 	if err != nil {
 		slog.Warn("failed to load API token, API will be unauthenticated", "component", "api", "error", err)

@@ -498,11 +498,24 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 		return
 	}
 
+	// Snapshot the racy Layer 0 fields once under m.mu so concurrent
+	// SetMentionAuthorize / Set/AddChatUserAllow / AddTrustedSender /
+	// SetAllowAllSenders calls cannot race with the reads below. The
+	// chat_user_allow lookup (and the empty-set scan) are still routed
+	// through the thread-safe helpers, which take their own lock — that
+	// keeps the snapshot focused on the fields that have no helper.
+	m.mu.Lock()
+	allowAll := m.allowAllSenders
+	nGlobal := len(m.allowedUserIDs)
+	globalHit := m.allowedUserIDs[event.Body.CreatorID]
+	authorizeFn := m.mentionAuthorize
+	m.mu.Unlock()
+
 	// Filter by source user IDs. The allowlist is mandatory by default: empty
 	// list means deny all (effectively disabling remote control). Tests and
 	// explicit opt-in deployments can call SetAllowAllSenders(true) to restore
 	// the legacy "empty = allow all" behavior.
-	if !m.allowAllSenders && len(m.allowedUserIDs) == 0 && !m.hasAnyChatUserAllow() {
+	if !allowAll && nGlobal == 0 && !m.hasAnyChatUserAllow() {
 		slog.Warn("dropping message: sender allowlist is empty (set ringcentral.source_user_ids or configure a Private App owner)",
 			"component", "monitor", "userID", event.Body.CreatorID, "chatID", event.Body.GroupID)
 		return
@@ -515,16 +528,12 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 	//      by the authorize-mention OOB approval flow).
 	// In strict mode (allowAllSenders=false, set by EnforceSenderAllowlist),
 	// an empty global allowlist does NOT short-circuit to trusted —
-	// the per-chat path remains the only way in. Bug fix: previously
-	// `senderTrusted := len(m.allowedUserIDs) == 0 || ...` collapsed
-	// the empty-global-list case to "trust everyone" even in strict
-	// mode, which silently widened Layer 0 whenever the operator
-	// configured chat_user_allow without any source_user_ids.
+	// the per-chat path remains the only way in.
 	senderTrusted := false
 	switch {
-	case m.allowAllSenders && len(m.allowedUserIDs) == 0:
+	case allowAll && nGlobal == 0:
 		senderTrusted = true
-	case m.allowedUserIDs[event.Body.CreatorID]:
+	case globalHit:
 		senderTrusted = true
 	case m.isChatUserAllowed(event.Body.GroupID, event.Body.CreatorID):
 		senderTrusted = true
@@ -535,12 +544,12 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 		// @mentions the bot in an allowed group chat triggers the OOB
 		// approval flow. The original post is consumed (dropped) by
 		// the callback, NOT dispatched to the message handler.
-		if m.mentionAuthorize != nil &&
+		if authorizeFn != nil &&
 			!m.client.IsBotDM(event.Body.GroupID) &&
 			m.isBotMentioned(event.Body.Mentions) {
 			slog.Info("authorize-mention: routing non-trusted group mention",
 				"component", "monitor", "userID", event.Body.CreatorID, "chatID", event.Body.GroupID, "postID", event.Body.ID)
-			go m.mentionAuthorize(ctx, m.client, m.readClient(), event.Body)
+			go authorizeFn(ctx, m.client, m.readClient(), event.Body)
 			return
 		}
 		slog.Debug("ignoring message from non-allowed user", "component", "monitor", "userID", event.Body.CreatorID)
