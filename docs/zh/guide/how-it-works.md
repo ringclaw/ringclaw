@@ -26,8 +26,10 @@ RingClaw 通过 WebSocket 连接 RingCentral Team Messaging 实时接收消息�
 flowchart TD
     Msg[收到消息] --> Dedup{去重检查}
     Dedup -->|重复| Drop[丢弃]
-    Dedup -->|新消息| TS{可信发送者?<br/>Phase 1 allowlist}
-    TS -->|否| Drop2[丢弃]
+    Dedup -->|新消息| TS{可信发送者?<br/>source_user_ids ∪ chat_user_allow}
+    TS -->|否| Mention{群聊 @bot &<br/>allow_group_mention_authorize?}
+    Mention -->|是| OOBA[向 owner 私聊发<br/>authorize-mention OOB challenge]
+    Mention -->|否| Drop2[丢弃]
     TS -->|是| Approval{Bot 私聊里的 /approval 回复?}
     Approval -->|是| OOB[交给 OOB manager 处理]
     Approval -->|否| Strip[去除 @mention + 转发前缀]
@@ -99,3 +101,17 @@ graph LR
 ```
 
 用户数字 ID 可以从 RingClaw 日志中获取：收到消息时会打印 `creatorID=XXXXXXXX`。
+
+`chat_user_allow` 是叠加在 `source_user_ids` 之上的**按群**白名单。可手工预置，也可让 [authorize-mention OOB 流程](../security/index.md#phase-2-authorize-mention-oob-授权流程-可选开关) 在运维批准后自动写入。批准的条目会持久化到 `config.json`（能解析到邮箱时优先存邮箱）。
+
+```json
+"ringcentral": {
+  "allow_group_mention_authorize": true,
+  "chat_user_allow": {
+    "chat-engineering-7": ["alice@example.com"],
+    "chat-design-9": ["3061708020"]
+  }
+}
+```
+
+`chat_user_allow` **仅放宽该群的发信人白名单**。特权 Layer 1 命令（`/cwd`、`/cron`、`/new`、`/reload`、`/full-access`、总结自然语言触发）仍要求 Private-App-owner 身份——见 [安全 › 权限矩阵](../security/index.md#permission-matrix)。

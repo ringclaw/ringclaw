@@ -24,7 +24,7 @@ sequenceDiagram
     loop 每个 ACTION
         R->>R: 解析类型、参数、chatid
         alt 指定了 chatid 且发送者不在可信列表 且 OOB 已配置
-            R->>O: Challenge 提示<br/>"待审批 (challenge id).<br/>在主机运行: ringclaw approval id"
+            R->>O: 富信息 challenge 提示<br/>action / requester / origin / target<br/>+ 可选 Title/Subject/Assignee<br/>+ body 预览（200 字符）<br/>+ 主机审批命令
             Note over O,R: Owner 在主机执行 `ringclaw approval id`
             R->>R: 异步等待终端审批
             alt 批准
@@ -75,7 +75,26 @@ END_ACTION
 
 ACTION 可通过 `chatid=<id>` 参数定向到其他聊天。
 
-- **非 owner 发送者**：OOB 已配置时（Private App + owner 私聊已解析），系统向 owner 私聊发送 challenge 提示，owner 需在主机上执行 `ringclaw approval <id>` 批准。批准后 action 异步在目标聊天执行。OOB 未配置时回退为静默丢弃（强制回到 origin chat）。
+- **非 owner 发送者**：OOB 已配置时（Private App + owner 私聊已解析），系统向 owner 私聊发送富信息 challenge 提示（action 类型、requester 身份、origin / target 聊天名、可选 `Title:` / `Subject:` / `Assignee:`、≤200 字符的 body 预览、效果说明、主机审批命令）。owner 需在主机上执行 `ringclaw approval <id>` 批准。批准后 action 异步在目标聊天执行。OOB 未配置时回退为静默丢弃（强制回到 origin chat）。owner 私聊收到的提示示例：
+
+  ```text
+  Pending approval (challenge `def67890`).
+  Action: Cross-chat NOTE
+  Requester: Alice Cross <alice@example.com> (id=user-7)
+  Origin chat: Engineering (id=origin-1)
+  Target chat: Customer Support (id=target-9)
+  Title: Quarterly review notes
+  Body: Highlights for the next quarter ...
+
+  Effect: bot will write a NOTE into the target chat on the requester's behalf.
+
+  Run on the host:
+    ringclaw approval def67890        (approve)
+    ringclaw approval deny def67890   (deny)
+
+  Expires in 5m.
+  ```
+
 - **owner 发起的跨聊天**：派发前经过**同步 fail-closed audit notice**（通过 owner 私聊确认）——完整门控规则见 [安全 › 第二层](../security/index.md#第二层-ai-驱动的-action-派发)。
 
 无需额外配置 — ACTION 提示词会自动注入。

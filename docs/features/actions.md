@@ -24,7 +24,7 @@ sequenceDiagram
     loop Each ACTION
         R->>R: Parse type, params, chatid
         alt chatid set & sender NOT on trusted allowlist & OOB configured
-            R->>O: Challenge prompt<br/>"Pending approval (challenge id).<br/>Run: ringclaw approval id"
+            R->>O: Rich challenge prompt<br/>action / requester / origin / target<br/>+ optional Title/Subject/Assignee<br/>+ body preview (200 chars)<br/>+ host approve/deny commands
             Note over O,R: Owner runs `ringclaw approval id` on host
             R->>R: Await terminal approval (async goroutine)
             alt Approved
@@ -75,7 +75,26 @@ END_ACTION
 
 Actions may target a different chat via the `chatid=<id>` parameter.
 
-- **Non-owner senders**: when OOB is configured (Private App + owner DM resolved), a challenge prompt is posted to the owner DM and the owner must run `ringclaw approval <id>` on the host machine to approve. On approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured.
+- **Non-owner senders**: when OOB is configured (Private App + owner DM resolved), a context-rich challenge prompt is posted to the owner DM (action type, requester label with email, origin / target chat names, optional `Title:` / `Subject:` / `Assignee:` lines, a body preview capped at 200 characters, effect description, and host approve / deny commands). The owner must run `ringclaw approval <id>` on the host machine to approve. On approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. Example owner DM prompt:
+
+  ```text
+  Pending approval (challenge `def67890`).
+  Action: Cross-chat NOTE
+  Requester: Alice Cross <alice@example.com> (id=user-7)
+  Origin chat: Engineering (id=origin-1)
+  Target chat: Customer Support (id=target-9)
+  Title: Quarterly review notes
+  Body: Highlights for the next quarter ...
+
+  Effect: bot will write a NOTE into the target chat on the requester's behalf.
+
+  Run on the host:
+    ringclaw approval def67890        (approve)
+    ringclaw approval deny def67890   (deny)
+
+  Expires in 5m.
+  ```
+
 - **Owner-initiated cross-chat**: passes a **synchronous fail-closed audit notice** through the owner DM before dispatching — see [Security › Layer 2](../security/index.md#layer-2-ai-driven-action-dispatch) for the full gating rules.
 
 No configuration needed — the action prompt is injected automatically.

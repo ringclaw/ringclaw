@@ -45,10 +45,17 @@ the approval without host machine access.
 
 ### Phase 2 surfaces — added
 
-Phase 2 introduces **no new `config.json` fields** and adds no
-on-disk state. All OOB state is in-memory and cleared on restart,
-so a crash-restart naturally re-locks the bot until the operator
-explicitly re-grants.
+The base Phase 2 surface (cross-chat audit notice, `/full-access`,
+terminal `/approval`) introduces **no new `config.json` fields** and
+adds no on-disk state — all OOB state is in-memory and cleared on
+restart, so a crash-restart naturally re-locks the bot until the
+operator explicitly re-grants.
+
+The **authorize-mention OOB flow** (added later as a Phase 2
+extension; see [Phase 2 — Authorize-mention OOB flow](#phase-2-authorize-mention-oob-flow-opt-in))
+*does* add two opt-in fields, `ringcentral.allow_group_mention_authorize`
+and `ringcentral.chat_user_allow`. Both default to off / empty, so an
+operator who does not opt in sees no behavioral change.
 
 | Surface | Type | Where | Phase 1 behavior | Phase 2 behavior | Operator override |
 |---|---|---|---|---|---|
@@ -56,6 +63,7 @@ explicitly re-grants.
 | `/full-access` slash command | runtime command | bot DM with the owner | _did not exist_ | **New.** `status` / `grant [duration]` / `revoke`. `grant` is a two-step confirmation: the bot issues a short-lived challenge ID, posts a plain-text `/approval` prompt to the owner DM, and only activates the grant after the owner replies `/approval <id>`. While a grant is active, each newly-created ACP session is flipped into `session/set_mode "full-access"`. When the grant is revoked (explicitly or by TTL expiry), **every live ACP session is also demoted back to `set_mode "default"`** via a revoke hook — sessions whose demote call fails are dropped from the session map so the next prompt rebuilds them in the locked-down mode. | **Default grant 1 day**, hard cap **30 days**. Oversized inputs are silently clamped. Durations are parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`). Restricted to the owner DM; group-chat invocations are refused. |
 | `/approval <id>` / `/approval deny <id>` | slash command | bot DM with the owner | _did not exist_ | **New, terminal-only.** Any `/approval ...` message in the bot DM is consumed and the sender is redirected to the terminal CLI: `ringclaw approval <id>` (approve) or `ringclaw approval deny <id>` (deny). Chat-based approval is **disabled for security** — approval requires running the CLI on the host machine, decoupling the approval authority from the RC account. Replies never reach the AI agent. | n/a |
 | `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` honored at startup when the top-level `full_access_ack: true` is also set in `config.json`; otherwise downgraded with a `WARN` | **Unchanged** for the static path. In addition, an active `/full-access` grant overlays it dynamically — new ACP sessions read the TTL state on every creation, so a grant takes effect without restarting and naturally drops back to guarded mode when it expires. The per-session log line now carries a `source` field (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`) for audit. | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
+| `ringcentral.allow_group_mention_authorize` + `ringcentral.chat_user_allow` | `bool` + `map[string][]string` | `config.json` (top-level `ringcentral`) | _did not exist_ — non-trusted `@bot` in an allowed group chat was silently dropped at the WebSocket monitor | **New, opt-in.** When `allow_group_mention_authorize: true`, a non-trusted user's `@bot` in an allowed group chat triggers an authorize-mention OOB challenge to the owner DM. On approval the requester is added to `chat_user_allow[<chatID>]` (chat-scoped only) and persisted to `config.json` (email preferred). The original message is **dropped** — the user must `@bot` again after approval. Pending challenges are deduped per `(chat, user)`. Requires Private App + resolved owner DM; otherwise the feature is disabled at startup with an `ERROR` log and the legacy silent-drop is preserved. See [Phase 2 — Authorize-mention OOB flow](#phase-2-authorize-mention-oob-flow-opt-in). | Toggle off via `allow_group_mention_authorize: false` (default). Operators may also pre-seed `chat_user_allow` by hand without enabling the OOB flow at all. |
 
 ### Before / after impact for operators
 
@@ -85,7 +93,8 @@ small amount of in-memory conversation context may be lost).
 |---|---|---|
 | Owner asks AI for a cross-chat MESSAGE / CARD / TASK / NOTE | Action runs immediately; `WARN action: owner cross-chat dispatch` audit log only | Bot first posts `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` to the owner DM (when target ≠ origin and target ≠ owner DM). Only if that pre-notice succeeds does the action run on the target chat. |
 | Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | Refused (unchanged). |
-| Operator wants ACP full-access for one task | Must ship `full_access: true` + `full_access_ack: true` in `config.json` and restart, then remember to revert | Leave `full_access: false`. In the bot DM, run `/full-access grant 30m` — bot replies `Full-access grant requested. Confirm via terminal.` and posts `Pending approval (challenge <id>). Run on the host machine: ringclaw approval <id>`. Owner runs `ringclaw approval <id>` on the host. Bot confirms `Full-access granted until <RFC3339 expiry>.` and the ACP agent runs unlocked for 30 min. |
+| Operator wants ACP full-access for one task | Must ship `full_access: true` + `full_access_ack: true` in `config.json` and restart, then remember to revert | Leave `full_access: false`. In the bot DM, run `/full-access grant 30m` — bot replies `Full-access grant requested. Confirm via terminal.` and posts a context-rich prompt to the owner DM (challenge ID, requester label, requested duration, effect description, host commands). Owner runs `ringclaw approval <id>` on the host. Bot confirms `Full-access granted until <RFC3339 expiry>.` and the ACP agent runs unlocked for 30 min. |
+| Non-trusted user @bot in an allowed group chat | Silently dropped at the WebSocket monitor | _Opt-in._ When `allow_group_mention_authorize: true`, the bot issues an authorize-mention challenge, posts the rich prompt to the owner DM (chat label, user label with email, mention preview, scope explanation, host commands), and drops the original post. On `ringclaw approval <id>` the user is added to `chat_user_allow[<chat>]` (chat-scoped only, persisted) — the user must `@bot` again to continue. |
 | Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | **OOB challenge issued** (when OOB configured): bot posts challenge prompt to owner DM; owner runs `ringclaw approval <id>` on host; on approval action executes in target chat. Falls back to silent drop when OOB not configured. |
 | Operator wants default-length full-access | n/a | `/full-access grant` → **24 h** (1 day). Cap is 30 days. |
 | Operator wants to revoke | n/a | `/full-access revoke` — clears the grant AND immediately demotes every live session back to `set_mode "default"`. |
@@ -108,6 +117,13 @@ small amount of in-memory conversation context may be lost).
 | Live session demotion failed | `WARN acp demote: set_mode default failed, session dropped from map` (with `error`) | The session is removed from the session map; the next prompt on that conversation creates a fresh (default-mode) session. |
 | Cross-chat notice sent (pre-dispatch) | `INFO action: cross-chat notice sent (pre-dispatch)` (`type`, `from`, `to`, `ownerDMChat`, `requesterID`) | Confirms the heads-up reached the owner DM; the action is then dispatched. |
 | Cross-chat action refused | `WARN action: cross-chat ACTION refused (fail-closed on pre-notice)` (with `error`) | Fires when the audit channel is missing or the notice send fails; the action is NOT dispatched. |
+| Authorize-mention routing (monitor) | `INFO authorize-mention: routing non-trusted group mention` (`chatID`, `userID`) | Confirms the WebSocket monitor handed a non-trusted group `@bot` to the OOB flow instead of dropping it. |
+| Authorize-mention challenge issued | `INFO oob: challenge issued` (`intent` starts with `authorize user … in chat …`) | Same `INFO oob: challenge issued` line as `/full-access` and cross-chat OOB; the `intent` field disambiguates. |
+| Authorize-mention granted | `INFO authorize-mention: granted` (`challengeID`, `chatID`, `userID`, `identifier`) | Fired after `applyAuthorize` updates the in-memory monitor + handler allowlists and (best-effort) persists the identifier to `chat_user_allow`. |
+| Authorize-mention denied / expired | `INFO authorize-mention: denied` or `INFO authorize-mention: challenge expired` | Counterparts to the granted line. The pending `(chat, user)` dedupe is released so the next `@bot` re-issues a fresh challenge. |
+| Authorize-mention persist failure | `ERROR authorize-mention: persist failed` (with `error`) | The in-memory grant succeeded but writing `config.json` did not — the grant survives the current process but is lost on restart. |
+| Authorize-mention prompt failure | `ERROR authorize-mention: post prompt failed` (with `error`) | The owner DM post failed; the challenge is auto-denied and the `(chat, user)` pending lock released so the user can retry. |
+| Authorize-mention email unavailable | `WARN authorize-mention: no email available, persisting numeric ID` | Directory lookup did not yield an email; the numeric extension ID is persisted instead (still chat-scoped). |
 
 ## Phase 1 Hardening: Configuration Changes
 
@@ -154,14 +170,19 @@ After upgrading, operators who relied on the legacy "empty
 
 When the `start` command boots, the WebSocket monitor and message handler
 both switch into **strict sender mode**: only the user IDs on the trusted
-allowlist may drive the AI agent. The allowlist is built from two sources:
+allowlist may drive the AI agent. The allowlist is built from three sources
+(union):
 
 - The Private App owner's user ID (auto-injected when a Private App is
   configured).
 - All entries in `ringcentral.source_user_ids` (resolved to numeric user IDs
   on startup).
+- All entries in `ringcentral.chat_user_allow[<chatID>]` for the destination
+  chat (resolved on startup the same way as `source_user_ids`). This is a
+  **per-chat layered exception**, not a global widening — `chat_user_allow`
+  only admits the listed users in the listed chats.
 
-If both sources are empty, the bot logs a startup error and **drops every
+If all three sources are empty, the bot logs a startup error and **drops every
 incoming message** until the operator adds at least one trusted sender. This
 prevents the "any user in an allowed chat can run my AI agent" foot-gun
 called out as Finding #1 in the Remote Control security review.
@@ -271,8 +292,25 @@ The grant flow is a two-step confirmation requiring host machine access:
 
 1. Owner sends `/full-access grant [duration]`. Bot replies
    immediately with `Full-access grant requested. Confirm via terminal.`
-   and posts a prompt to the owner DM with a short-lived challenge ID:
-   `Pending approval (challenge <id>). Run on the host machine: ringclaw approval <id>`.
+   and posts a context-rich prompt to the owner DM:
+
+   ```text
+   Pending approval (challenge `abc12345`).
+   Action: Grant ACP full-access for 30m
+   Requester: Owen Owner <owen@example.com> (id=user-owner)
+   Effect: agents with `full_access:true` will run MCP tool calls without per-call approval until the grant expires or `/full-access revoke` is used.
+
+   Run on the host:
+     ringclaw approval abc12345        (approve)
+     ringclaw approval deny abc12345   (deny)
+
+   Expires in 5m. Grant TTL: 30m.
+   ```
+
+   The requester label is a best-effort directory lookup
+   (`<displayName> <email> (id=<numeric>)`); on lookup failure the
+   prompt falls back to the bare numeric ID and still ships.
+
 2. Owner runs `ringclaw approval <id>` on the host machine (or
    `ringclaw approval deny <id>` to reject). On approval the bot
    responds `Full-access granted until <RFC3339 expiry>.`; on denial
@@ -325,18 +363,33 @@ dropped:
 ```text
 Non-owner user @bot → AI reply includes ACTION: MESSAGE chatid=<other-chat>
   ↓
-Bot posts challenge prompt to owner DM:
-  "Pending approval (challenge abc12345).
-   Run on the host machine:
-     ringclaw approval abc12345
-     ringclaw approval deny abc12345
-   Expires in 5m."
+Bot posts a context-rich challenge prompt to the owner DM:
+
+  Pending approval (challenge `def67890`).
+  Action: Cross-chat MESSAGE
+  Requester: Alice Cross <alice@example.com> (id=user-7)
+  Origin chat: Engineering (id=origin-1)
+  Target chat: Customer Support (id=target-9)
+  Body: Highlights for the next quarter ...
+
+  Effect: bot will write a MESSAGE into the target chat on the requester's behalf.
+
+  Run on the host:
+    ringclaw approval def67890        (approve)
+    ringclaw approval deny def67890   (deny)
+
+  Expires in 5m.
   ↓
-Owner runs: ringclaw approval abc12345
+Owner runs: ringclaw approval def67890
   ↓
 Approved → action executes asynchronously in target chat → origin chat notified
 Denied / expired → origin chat notified
 ```
+
+The prompt body is capped at 200 characters (truncated with `…` when
+longer); `Title:` / `Subject:` / `Assignee:` lines appear when those
+ACTION params are present. No content beyond what the action itself
+will write is leaked into the owner DM.
 
 **Fallback**: when OOB is not configured (no Private App, no owner DM
 resolved, or `OwnerID` empty), the legacy silent-override behavior is
@@ -346,6 +399,117 @@ preserved — `chatid=` is dropped and the action runs in the origin chat.
 owner knows a request is pending, but the approval itself requires running
 `ringclaw approval <id>` on the host machine. A compromised RC account can
 see the challenge ID but cannot approve without host access.
+
+### Phase 2 — Authorize-mention OOB flow (opt-in)
+
+A separate OOB surface, layered on the same challenge / terminal-approval
+infrastructure, lets operators authorize **per-chat** non-trusted senders
+without restarting or hand-editing `config.json`. It is gated behind a
+single opt-in field (`ringcentral.allow_group_mention_authorize: true`)
+and is **off by default** — operators who do not opt in see the legacy
+silent-drop behavior unchanged.
+
+The trigger is narrow: a user who is **not** on the global
+`source_user_ids` allowlist and **not** in the destination chat's
+`chat_user_allow` entry sends a message with `@bot` (a true mention) in
+an allowed group chat. Plain text from the same user, or `@bot` in a
+non-allowed chat, still drops as before.
+
+```mermaid
+sequenceDiagram
+    participant U as Non-trusted user
+    participant G as Group chat
+    participant M as Monitor (ringcentral)
+    participant H as Handler (messaging)
+    participant O as Owner DM
+    participant CLI as ringclaw approval (host)
+
+    U->>G: @bot help me
+    G->>M: PostAdded event
+    M->>M: trusted? (source_user_ids ∪ chat_user_allow[G])
+    Note over M: NO → group + @bot + opt-in flag set
+    M->>H: AuthorizeMention(post)
+    H->>H: dedupe (G,U) — already pending? then drop
+    H->>H: OOB.Issue(challenge, ttl=5m)
+    H->>O: Pending authorization (challenge `<id>`)\nChat / User / Mention preview\nhost commands
+    Note over H,G: Original message dropped (not replayed)
+    O->>CLI: ringclaw approval <id>
+    CLI->>H: Approve(id)
+    H->>H: chat_user_allow[G] += email (or numeric ID)
+    H->>H: Monitor.AddChatUserAllow(G, U) — live allowlist push
+    H->>H: persist callback → config.json Save()
+    H->>O: Authorized `<email>` in chat `<G>`. Saved to chat_user_allow.
+    U->>G: @bot help me (second time, manual re-mention)
+    G->>M: PostAdded event
+    M->>M: trusted now? YES (chat_user_allow[G] ∋ U)
+    M->>H: dispatch normally
+    H->>G: AI reply
+```
+
+**Key invariants:**
+
+- **Original message dropped.** The first `@bot` that triggered the
+  challenge is **not** replayed on approval. The user must `@bot` again
+  to actually drive the AI. This avoids accidental side-effects from
+  prompts that were authored before the operator approved them.
+- **Per-chat scope only.** The grant is recorded under
+  `chat_user_allow[<chatID>]`, never in the global `source_user_ids`.
+  Approving a user in chat A does not authorize them in chat B.
+- **Privileged commands NOT unlocked.** `chat_user_allow` only widens
+  Layer 0. Non-owner privileged Layer 1 commands (`/cwd`, `/cron`,
+  `/new`, `/reload`, `/full-access`, summarize NL trigger) still
+  require Private-App-owner identity. See the [Permission Matrix](#permission-matrix).
+- **Pending dedupe.** A pending challenge for a `(chatID, userID)` pair
+  blocks new challenges from the same pair for the challenge TTL. The
+  pending lock is released on approve / deny / expire / prompt-post
+  failure, so the user can retry on the next `@bot` after any
+  resolution.
+- **Persistence is best-effort.** The in-memory monitor + handler
+  allowlists are updated synchronously on approval; the
+  `config.json` Save is fired afterwards. A persist failure is logged
+  as `ERROR authorize-mention: persist failed` but the user remains
+  authorized for the current process lifetime — operators relying on
+  durable persistence should monitor that log line.
+- **Email preferred for persistence.** The persisted identifier is the
+  resolved email when the directory lookup succeeds; the numeric
+  extension ID otherwise (with a `WARN authorize-mention: no email
+  available` line). Hand-edited entries may use any of the three
+  forms `source_user_ids` accepts (numeric / email / E.164 phone) —
+  they are resolved on the next startup.
+- **No new approval verb.** The same `ringclaw approval <id>` /
+  `ringclaw approval deny <id>` CLI handles authorize-mention,
+  `/full-access`, and cross-chat OOB challenges uniformly. The
+  challenge `intent` field disambiguates them in audit logs.
+
+**Failure modes:**
+
+| Condition | Behavior |
+|---|---|
+| `allow_group_mention_authorize` not set / `false` | Feature disabled — non-trusted `@bot` falls back to legacy silent drop. |
+| Private App not configured (no owner DM resolvable) | Feature disabled at startup with `ERROR allow_group_mention_authorize requires Private App + resolved owner DM; feature disabled`; legacy silent drop. |
+| Owner DM not yet resolved at runtime | The single message that hits this race is dropped with `WARN authorize-mention: OOB or owner DM unconfigured; dropping`. Subsequent messages succeed once the DM resolves. |
+| Owner denies the challenge | Pending lock released; challenge expires immediately; owner DM notified. The user's next `@bot` issues a fresh challenge. |
+| Challenge expires (5 min TTL) | Pending lock released; owner DM notified that the request expired. The user's next `@bot` issues a fresh challenge. |
+| Owner DM post fails (transient RC error) | Challenge auto-denied; pending lock released. The user's next `@bot` retries the post. |
+| Persist callback fails (e.g. config write error) | In-memory grant survives the current process; `ERROR authorize-mention: persist failed` is logged. Restart re-locks the user. |
+
+**Pre-seeding without OOB.** Operators who want to authorize a known
+user without enabling the OOB flow at all can hand-edit
+`chat_user_allow` directly:
+
+```jsonc
+{
+  "ringcentral": {
+    "allow_group_mention_authorize": false,  // OOB flow off
+    "chat_user_allow": {
+      "chat-engineering-7": ["alice@example.com"]
+    }
+  }
+}
+```
+
+This admits Alice in `chat-engineering-7` and only there; no challenge
+is ever issued. The two fields are independent.
 
 ### Phase 2 — Terminal approval CLI
 
@@ -481,6 +645,12 @@ on the socket and
 on the handler). Senders outside the allowlist are dropped before any
 layer below applies.
 
+The Layer 0 set is the **union** of `ringcentral.source_user_ids`,
+the auto-injected Private App owner ID, and the destination chat's
+`ringcentral.chat_user_allow[<chatID>]` entry (when present).
+Authorize-mention approvals land in `chat_user_allow` — they widen
+Layer 0 only, never any of the layers below.
+
 ::: warning DM is the trust boundary, not "owner only"
 Layer 1's owner-only gate for privileged commands (`/cwd`, `/cron`,
 `/new`, `/reload`, summarize NL triggers) fires in **group chats**.
@@ -521,7 +691,7 @@ see the "DM is the trust boundary" warning above.
 | Summarize (NL trigger, e.g. "总结", "summarize") | ✅ (needs Private App) | ❌ | ⚠️ configured group only | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
 | Summarize without Private App | ❌ disabled | n/a | ❌ disabled | ❌ disabled | `handler_summarize.go:76` |
 | `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌ (owner-only, DM-only) | ❌ (DM-only) | ❌ (DM-only) | `handler_fullaccess.go:62-67` |
-| `/approval <id>` / `/approval deny <id>` | ✅ consumed; redirected to terminal (`ringclaw approval <id>`) | ✅ consumed; redirected to terminal | ❌ refused with explanatory message | ❌ refused with explanatory message | `handler.go:603-628` + `oob/authorize.go:118-132` |
+| `/approval <id>` / `/approval deny <id>` | ✅ consumed; redirected to terminal (`ringclaw approval <id>`) — same CLI resolves `/full-access`, cross-chat, and authorize-mention challenges | ✅ consumed; redirected to terminal | ❌ refused with explanatory message | ❌ refused with explanatory message | `handler.go:603-628` + `oob/authorize.go:118-132` |
 | `/mem add [user\|chat\|global] <text>` | ✅ | ❌ | ✅ | ❌ | `handler_persona.go` + `handler_commands.go` privileged gate |
 | `/mem del [scope] [confirm]` | ✅ | ❌ | ✅ | ❌ | same as `/mem add`; two-phase confirmation |
 | `/mem show [scope]` | ✅ | ✅ | ✅ | ✅ | read-only, unprivileged |
@@ -572,7 +742,7 @@ User: "这个讨论的摘要发到 #engineering 频道"
 | Scenario | Behavior | Gate |
 |---|---|---|
 | ACTION in the origin chat (any sender) | ✅ always allowed | `actions.go:166-310` |
-| `chatid=` override; requester is **not** on the trusted-sender allowlist | ⚠️ **OOB challenge issued** when OOB is configured (Private App + owner DM resolved): bot posts a challenge prompt to the owner DM; owner approves via `ringclaw approval <id>` on the host; on approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. | `actions.go:177-193`; `crossChatOOBChallenge` at `actions.go:401` |
+| `chatid=` override; requester is **not** on the trusted-sender allowlist | ⚠️ **OOB challenge issued** when OOB is configured (Private App + owner DM resolved): bot posts a context-rich challenge prompt to the owner DM (action type, requester label, origin / target chat names, optional Title / Subject / Assignee, body preview ≤200 chars, effect description, host commands); owner approves via `ringclaw approval <id>` on the host; on approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. | `actions.go:177-193`; `crossChatOOBChallenge` at `actions.go:401` |
 | `chatid=` override by owner; target = origin chat | ✅ allowed (same as row 1) | — |
 | `chatid=` override by owner; target = owner's own DM | ✅ allowed without audit notice | `actions.go:195` (guard) |
 | `chatid=` override by owner; target ≠ origin AND target ≠ owner DM | 🔒 **fail-closed**: bot first posts `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` to the owner DM; if the notice succeeds within `crossChatNoticeTimeout` (5 s) the action dispatches, otherwise it is **refused** with `Refused cross-chat <TYPE>: …` | `actions.go:195-203`; `announceCrossChatOrRefuse` at `actions.go:329-357` |
