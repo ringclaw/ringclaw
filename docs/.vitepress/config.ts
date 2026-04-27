@@ -23,6 +23,7 @@ export default withMermaid(defineConfig({
           { text: 'API', link: '/zh/api/rest' },
           { text: '部署', link: '/zh/deployment/background' },
           { text: '架构', link: '/zh/architecture/prompt-evolution' },
+          { text: '贡献', link: '/zh/contributing' },
         ],
         sidebar: {
           '/zh/guide/': [
@@ -104,6 +105,7 @@ export default withMermaid(defineConfig({
       { text: 'API', link: '/api/rest' },
       { text: 'Deployment', link: '/deployment/background' },
       { text: 'Architecture', link: '/architecture/prompt-evolution' },
+      { text: 'Contributing', link: '/contributing' },
     ],
 
     sidebar: {
