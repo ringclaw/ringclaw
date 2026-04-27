@@ -179,11 +179,60 @@ func runStart(cmd *cobra.Command, args []string) error {
 	for _, id := range resolvedUserIDs {
 		handler.AddTrustedSender(id)
 	}
+
+	// Resolve & seed chat_user_allow (per-chat trusted users). Entries
+	// may be emails / phone numbers; ResolveUserIDs maps them to
+	// numeric IDs the monitor compares against incoming CreatorIDs.
+	if len(cfg.RC.ChatUserAllow) > 0 {
+		lookupClient := c.bot
+		if c.private != nil {
+			lookupClient = c.private
+		}
+		resolvedChatAllow := make(map[string][]string, len(cfg.RC.ChatUserAllow))
+		total := 0
+		for chatID, list := range cfg.RC.ChatUserAllow {
+			ids := lookupClient.ResolveUserIDs(ctx, list)
+			if len(ids) == 0 {
+				continue
+			}
+			resolvedChatAllow[chatID] = ids
+			total += len(ids)
+			for _, uid := range ids {
+				handler.AddChatUserAllow(chatID, uid)
+			}
+		}
+		monitor.SetChatUserAllow(resolvedChatAllow)
+		slog.Info("chat_user_allow resolved", "component", "start", "chats", len(resolvedChatAllow), "users", total)
+	}
+
+	// Wire the authorize-mention OOB flow when opted in. Requires
+	// Private App + resolved owner DM; without those the feature is
+	// disabled with an ERROR log so operators see why their config
+	// flag isn't taking effect.
+	if cfg.RC.IsAuthorizeMentionEnabled() {
+		ownerDM := handler.OwnerDMChatID()
+		if c.private == nil || ownerDM == "" {
+			slog.Error("allow_group_mention_authorize requires Private App + resolved owner DM; feature disabled",
+				"component", "start", "hasPrivateApp", c.private != nil, "ownerDMChatID", ownerDM)
+		} else {
+			persist := func(chatID, identifier string) error {
+				if cfg.RC.AddChatUserAllow(chatID, identifier) {
+					return config.Save(cfg)
+				}
+				return nil
+			}
+			handler.SetAuthorizeMention(persist, monitor)
+			monitor.SetMentionAuthorize(handler.AuthorizeMention)
+			slog.Info("authorize-mention OOB flow active",
+				"component", "start", "ownerDMChatID", ownerDM)
+		}
+	}
+
 	// Mandatory sender allowlist: monitor and handler both deny anyone not on
 	// the trusted set. Findings #1 and #7 from the security review.
 	monitor.EnforceSenderAllowlist()
 	handler.EnforceSenderAllowlist()
-	if !monitor.HasTrustedSenders() {
+	if !monitor.HasTrustedSenders() && len(cfg.RC.ChatUserAllow) == 0 {
 		slog.Error("sender allowlist is empty: no source_user_ids configured and no Private App owner detected; the bot will drop ALL incoming messages until you add ringcentral.source_user_ids or configure a Private App",
 			"component", "start")
 	}

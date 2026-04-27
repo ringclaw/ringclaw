@@ -52,8 +52,10 @@ func IsFullAccessCommand(text string) bool {
 // The function only acts when invoked from the bot's DM with the
 // trusted owner — the same chat that receives the `/approval`
 // challenge text. Group-chat invocations are refused with an
-// explanatory message.
-func (h *Handler) handleFullAccess(ctx context.Context, client *ringcentral.Client, chatID, requesterID, text string) {
+// explanatory message. readClient is the directory-capable client
+// (Private App when configured) used to resolve the requester's
+// display name and email for the operator-DM prompt.
+func (h *Handler) handleFullAccess(ctx context.Context, client, readClient *ringcentral.Client, chatID, requesterID, text string) {
 	mgr := h.OOBManager()
 	if mgr == nil {
 		logSendError(SendTextReply(ctx, client, chatID, "OOB approval is not configured; /full-access is disabled."))
@@ -80,7 +82,7 @@ func (h *Handler) handleFullAccess(ctx context.Context, client *ringcentral.Clie
 			logSendError(SendTextReply(ctx, client, chatID, "Invalid duration: "+err.Error()))
 			return
 		}
-		h.startFullAccessGrant(ctx, client, chatID, requesterID, dur)
+		h.startFullAccessGrant(ctx, client, readClient, chatID, requesterID, dur)
 	default:
 		logSendError(SendTextReply(ctx, client, chatID,
 			"Usage: `/full-access status` | `/full-access grant [duration]` | `/full-access revoke`"))
@@ -92,7 +94,7 @@ func (h *Handler) handleFullAccess(ctx context.Context, client *ringcentral.Clie
 // loop asynchronously. The activation itself happens when the
 // approval reply resolves the challenge — see awaitFullAccessGrant
 // below.
-func (h *Handler) startFullAccessGrant(ctx context.Context, client *ringcentral.Client, chatID, requesterID string, dur time.Duration) {
+func (h *Handler) startFullAccessGrant(ctx context.Context, client, readClient *ringcentral.Client, chatID, requesterID string, dur time.Duration) {
 	mgr := h.OOBManager()
 	if mgr == nil {
 		logSendError(SendTextReply(ctx, client, chatID, "OOB manager went away before approval; aborted."))
@@ -107,7 +109,7 @@ func (h *Handler) startFullAccessGrant(ctx context.Context, client *ringcentral.
 			fmt.Sprintf("Full-access grant aborted: %v", err)))
 		return
 	}
-	if err := oob.PostChallengePrompt(ctx, newOOBClient(client), c, dur.String()); err != nil {
+	if err := postFullAccessPrompt(ctx, client, readClient, c, requesterID, dur); err != nil {
 		slog.Error("full-access: post challenge prompt failed",
 			"component", "handler", "challengeID", c.ID, "error", err)
 		// Best-effort cleanup: resolve the challenge as denied so the
@@ -122,6 +124,36 @@ func (h *Handler) startFullAccessGrant(ctx context.Context, client *ringcentral.
 		"Full-access grant requested. Confirm via /approval in owner DM."))
 
 	go h.awaitFullAccessGrant(client, chatID, c, dur)
+}
+
+// postFullAccessPrompt posts the rich /full-access challenge prompt
+// to the operator's DM. Surfaces who is requesting the grant, the
+// requested duration, and an explicit description of what
+// full-access actually unlocks so the operator approves with full
+// context. Best-effort directory lookups for the requester's
+// display name + email; on failure the prompt falls back to the
+// bare numeric ID and still ships.
+func postFullAccessPrompt(ctx context.Context, client, readClient *ringcentral.Client, c *oob.Challenge, requesterID string, dur time.Duration) error {
+	requesterLabel := resolveRequesterLabel(ctx, readClient, requesterID)
+	if requesterLabel == "" {
+		requesterLabel = requesterID
+	}
+	expiresIn := time.Until(c.ExpiresAt).Round(time.Second)
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+	msg := fmt.Sprintf(
+		"Pending approval (challenge `%s`).\n"+
+			"Action: Grant ACP full-access for %s\n"+
+			"Requester: %s\n"+
+			"Effect: agents with `full_access:true` will run MCP tool calls without per-call approval until the grant expires or `/full-access revoke` is used.\n\n"+
+			"Run on the host:\n"+
+			"  ringclaw approval %s        (approve)\n"+
+			"  ringclaw approval deny %s   (deny)\n\n"+
+			"Expires in %s. Grant TTL: %s.",
+		c.ID, dur, requesterLabel, c.ID, c.ID, expiresIn, dur,
+	)
+	return SendTextReply(ctx, client, c.OwnerDMChat, msg)
 }
 
 // awaitFullAccessGrant blocks on the challenge resolution and, on

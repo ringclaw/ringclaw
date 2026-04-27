@@ -414,8 +414,7 @@ func crossChatOOBChallenge(ctx context.Context, actionClient *ringcentral.Client
 			"type", a.Type, "requester", opts.RequesterID, "error", err)
 		return fmt.Sprintf("Cross-chat %s failed: challenge error", a.Type)
 	}
-	oobClient := newOOBClient(actionClient)
-	if err := oob.PostChallengePrompt(ctx, oobClient, challenge, ""); err != nil {
+	if err := postCrossChatPrompt(ctx, actionClient, challenge, a, originChat, targetChat, opts); err != nil {
 		slog.Error("action: cross-chat OOB challenge prompt failed",
 			"challengeID", challenge.ID, "error", err)
 		opts.OOB.Deny(challenge.ID)
@@ -423,6 +422,66 @@ func crossChatOOBChallenge(ctx context.Context, actionClient *ringcentral.Client
 	}
 	go awaitCrossChatOOB(actionClient, challenge, a, originChat, targetChat, opts)
 	return fmt.Sprintf("Cross-chat %s pending approval (challenge %s).", a.Type, challenge.ID)
+}
+
+// postCrossChatPrompt posts the rich cross-chat ACTION challenge
+// prompt to the operator's DM. Surfaces the action type, requester
+// identity, origin and target chat names, the most relevant action
+// param (Title/Subject), and a body preview so the operator can
+// audit the request without opening the chat. Best-effort lookups
+// for human-readable labels — the prompt always ships even when the
+// directory API is flaky.
+func postCrossChatPrompt(ctx context.Context, actionClient *ringcentral.Client, c *oob.Challenge, a AgentAction, originChat, targetChat string, opts ActionContext) error {
+	requesterLabel := resolveRequesterLabel(ctx, actionClient, opts.RequesterID)
+	if requesterLabel == "" {
+		requesterLabel = opts.RequesterID
+	}
+	originLabel := resolveChatLabel(ctx, actionClient, originChat)
+	if originLabel == "" {
+		originLabel = originChat
+	}
+	targetLabel := resolveChatLabel(ctx, actionClient, targetChat)
+	if targetLabel == "" {
+		targetLabel = targetChat
+	}
+
+	var paramLine string
+	if title := strings.TrimSpace(a.Params["title"]); title != "" {
+		paramLine = "Title: " + title + "\n"
+	}
+	if subject := strings.TrimSpace(a.Params["subject"]); subject != "" {
+		paramLine += "Subject: " + subject + "\n"
+	}
+	if assignee := strings.TrimSpace(a.Params["assignee"]); assignee != "" {
+		paramLine += "Assignee: " + assignee + "\n"
+	}
+
+	body := util.Truncate(strings.TrimSpace(a.Body), 200)
+	if body == "" {
+		body = "(empty)"
+	}
+
+	expiresIn := time.Until(c.ExpiresAt).Round(time.Second)
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+
+	msg := fmt.Sprintf(
+		"Pending approval (challenge `%s`).\n"+
+			"Action: Cross-chat %s\n"+
+			"Requester: %s\n"+
+			"Origin chat: %s\n"+
+			"Target chat: %s\n"+
+			"%sBody: %s\n\n"+
+			"Effect: bot will write a %s into the target chat on the requester's behalf.\n\n"+
+			"Run on the host:\n"+
+			"  ringclaw approval %s        (approve)\n"+
+			"  ringclaw approval deny %s   (deny)\n\n"+
+			"Expires in %s.",
+		c.ID, a.Type, requesterLabel, originLabel, targetLabel,
+		paramLine, body, a.Type, c.ID, c.ID, expiresIn,
+	)
+	return SendTextReply(ctx, actionClient, c.OwnerDMChat, msg)
 }
 
 // awaitCrossChatOOB blocks on the challenge resolution. On approval

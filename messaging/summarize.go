@@ -24,9 +24,11 @@ func extractDateViaAgent(ctx context.Context, ag agent.Agent, text string) time.
 	// Fast path: try the deterministic regex parser first. It handles
 	// canonical phrases like "最近一周", "过去 7 天", "last 3 days",
 	// "4月10日", "2026-04-10", "昨天/last week/上个月" with zero LLM tokens
-	// and zero network latency. parseTimeRange only returns todayStart()
-	// when nothing matches, which is our signal to consult the LLM.
-	if parsed := parseTimeRange(text); !parsed.Equal(todayStart()) {
+	// and zero network latency. parseTimeRangeOK distinguishes
+	// "matched and resolved to today" (e.g. "this monday" on a
+	// Monday) from "no rule matched", so we don't bounce a
+	// successful match into the LLM just because it lands on today.
+	if parsed, ok := parseTimeRangeOK(text); ok {
 		slog.Debug("date resolved via regex (LLM skipped)", "component", "summarize", "resolved", parsed.Format(time.RFC3339))
 		return parsed
 	}

@@ -101,7 +101,7 @@ func TestHandleFullAccess_NoOOBManager(t *testing.T) {
 	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
 
 	h := newTestHandler()
-	h.handleFullAccess(context.Background(), bot, "dm-1", "user-1", "/full-access status")
+	h.handleFullAccess(context.Background(), bot, bot, "dm-1", "user-1", "/full-access status")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -117,7 +117,7 @@ func TestHandleFullAccess_RejectsOutsideOwnerDM(t *testing.T) {
 
 	h := newTestHandler()
 	h.SetOOBManager(oob.New(oob.Options{}), "dm-1")
-	h.handleFullAccess(context.Background(), bot, "group-99", "user-1", "/full-access status")
+	h.handleFullAccess(context.Background(), bot, bot, "group-99", "user-1", "/full-access status")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -148,9 +148,9 @@ func TestHandleFullAccess_StatusAndRevoke(t *testing.T) {
 	})
 
 	mgr.GrantFullAccess(time.Minute)
-	h.handleFullAccess(context.Background(), bot, "dm-1", "user-1", "/full-access status")
-	h.handleFullAccess(context.Background(), bot, "dm-1", "user-1", "/full-access revoke")
-	h.handleFullAccess(context.Background(), bot, "dm-1", "user-1", "/full-access")
+	h.handleFullAccess(context.Background(), bot, bot, "dm-1", "user-1", "/full-access status")
+	h.handleFullAccess(context.Background(), bot, bot, "dm-1", "user-1", "/full-access revoke")
+	h.handleFullAccess(context.Background(), bot, bot, "dm-1", "user-1", "/full-access")
 
 	mu.Lock()
 	got := append([]string(nil), (*bodies)...)
@@ -194,7 +194,7 @@ func TestHandleFullAccess_GrantPathActivatesOnApproval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	h.handleFullAccess(ctx, bot, "dm-1", "user-1", "/full-access grant 30s")
+	h.handleFullAccess(ctx, bot, bot, "dm-1", "user-1", "/full-access grant 30s")
 
 	pending := waitForPending(t, mgr, "user-1", 1, 2*time.Second)
 	// Approve via terminal path (Manager.Approve directly).
@@ -252,7 +252,7 @@ func TestHandleFullAccess_GrantPathDenialKeepsLocked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	h.handleFullAccess(ctx, bot, "dm-1", "user-1", "/full-access grant 1m")
+	h.handleFullAccess(ctx, bot, bot, "dm-1", "user-1", "/full-access grant 1m")
 
 	pending := waitForPending(t, mgr, "user-1", 1, 2*time.Second)
 	if !h.routeOOBApprovalReply(ctx, bot, "dm-1", "user-1", "/approval deny "+pending[0].ID) {
@@ -285,7 +285,7 @@ func TestHandleFullAccess_GrantPromptIsTextOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	h.handleFullAccess(ctx, bot, "dm-1", "user-1", "/full-access grant 30s")
+	h.handleFullAccess(ctx, bot, bot, "dm-1", "user-1", "/full-access grant 30s")
 
 	// Wait for the pending challenge to appear so we know the grant
 	// path executed and posted its prompt.
@@ -312,5 +312,60 @@ func waitForPending(t *testing.T, mgr *oob.Manager, requesterID string, n int, t
 			t.Fatalf("waitForPending: expected %d pending for %s, have %d", n, requesterID, len(pending))
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestHandleFullAccess_GrantPromptIsRich verifies that the
+// /full-access challenge prompt sent to the owner DM includes the
+// requester's display name + email, the requested grant TTL, and a
+// description of what full-access actually unlocks.
+func TestHandleFullAccess_GrantPromptIsRich(t *testing.T) {
+	srv, bodies, mu := authorizeFakeServer(t,
+		ringcentral.PersonInfo{ID: "user-owner", FirstName: "Owen", LastName: "Owner", Email: "owen@example.com"},
+		ringcentral.Chat{ID: "dm-1", Name: "Owner DM", Type: "Direct"})
+	bot := ringcentral.NewBotClient(srv.URL, "bot-token")
+	bot.SetDMChatID("dm-1")
+	bot.Auth().SetTokenForTest("bot-token", time.Now().Add(time.Hour))
+
+	h := newTestHandler()
+	mgr := oob.New(oob.Options{})
+	h.SetOOBManager(mgr, "dm-1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	h.handleFullAccess(ctx, bot, bot, "dm-1", "user-owner", "/full-access grant 30m")
+	_ = waitForPending(t, mgr, "user-owner", 1, 2*time.Second)
+
+	// Find the prompt (skip the "Confirm via /approval" reply).
+	deadline := time.Now().Add(2 * time.Second)
+	var prompt string
+	for time.Now().Before(deadline) && prompt == "" {
+		mu.Lock()
+		for _, b := range *bodies {
+			if strings.Contains(b, "Pending approval") {
+				prompt = b
+				break
+			}
+		}
+		mu.Unlock()
+		if prompt == "" {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if prompt == "" {
+		t.Fatalf("did not see Pending approval prompt: %v", *bodies)
+	}
+	for _, want := range []string{
+		"Action: Grant ACP full-access",
+		"30m",
+		"Owen Owner",
+		"owen@example.com",
+		"Effect: agents with `full_access:true`",
+		"ringclaw approval",
+		"Grant TTL:",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("full-access prompt missing %q\nbody:\n%s", want, prompt)
+		}
 	}
 }
