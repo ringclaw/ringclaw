@@ -22,7 +22,7 @@ export default withMermaid(defineConfig({
           { text: '功能', link: '/zh/features/summarize' },
           { text: 'API', link: '/zh/api/rest' },
           { text: '部署', link: '/zh/deployment/background' },
-          { text: '架构', link: '/zh/architecture/prompt-evolution' },
+          { text: '架构', link: '/zh/architecture/overview' },
           { text: '贡献', link: '/zh/contributing' },
         ],
         sidebar: {
@@ -55,6 +55,7 @@ export default withMermaid(defineConfig({
             {
               text: '架构',
               items: [
+                { text: '架构概览', link: '/zh/architecture/overview' },
                 { text: 'Prompt 自进化', link: '/zh/architecture/prompt-evolution' },
               ],
             },
@@ -104,7 +105,7 @@ export default withMermaid(defineConfig({
       { text: 'Features', link: '/features/summarize' },
       { text: 'API', link: '/api/rest' },
       { text: 'Deployment', link: '/deployment/background' },
-      { text: 'Architecture', link: '/architecture/prompt-evolution' },
+      { text: 'Architecture', link: '/architecture/overview' },
       { text: 'Contributing', link: '/contributing' },
     ],
 
@@ -138,6 +139,7 @@ export default withMermaid(defineConfig({
         {
           text: 'Architecture',
           items: [
+            { text: 'Overview', link: '/architecture/overview' },
             { text: 'Prompt Self-Evolution', link: '/architecture/prompt-evolution' },
           ],
         },
