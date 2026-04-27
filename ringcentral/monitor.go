@@ -507,14 +507,27 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 			"component", "monitor", "userID", event.Body.CreatorID, "chatID", event.Body.GroupID)
 		return
 	}
-	senderTrusted := len(m.allowedUserIDs) == 0 || m.allowedUserIDs[event.Body.CreatorID]
-	if !senderTrusted {
-		// Per-chat allowlist (set by config.json's chat_user_allow and
-		// by the authorize-mention OOB approval flow) is layered on
-		// top of the global source_user_ids allowlist.
-		if m.isChatUserAllowed(event.Body.GroupID, event.Body.CreatorID) {
-			senderTrusted = true
-		}
+	// Trust sources, in priority order:
+	//   1. Legacy "allow all" mode with no global allowlist configured.
+	//   2. Sender appears on the global source_user_ids allowlist.
+	//   3. Sender appears on the per-chat chat_user_allow set for
+	//      this destination chat (seeded from config.json or pushed
+	//      by the authorize-mention OOB approval flow).
+	// In strict mode (allowAllSenders=false, set by EnforceSenderAllowlist),
+	// an empty global allowlist does NOT short-circuit to trusted —
+	// the per-chat path remains the only way in. Bug fix: previously
+	// `senderTrusted := len(m.allowedUserIDs) == 0 || ...` collapsed
+	// the empty-global-list case to "trust everyone" even in strict
+	// mode, which silently widened Layer 0 whenever the operator
+	// configured chat_user_allow without any source_user_ids.
+	senderTrusted := false
+	switch {
+	case m.allowAllSenders && len(m.allowedUserIDs) == 0:
+		senderTrusted = true
+	case m.allowedUserIDs[event.Body.CreatorID]:
+		senderTrusted = true
+	case m.isChatUserAllowed(event.Body.GroupID, event.Body.CreatorID):
+		senderTrusted = true
 	}
 	if !senderTrusted {
 		// Authorize-mention path: when the operator opted into

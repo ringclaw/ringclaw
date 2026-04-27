@@ -1200,3 +1200,136 @@ func TestMonitor_MentionAuthorize_DisabledFallsBackToDeny(t *testing.T) {
 		t.Errorf("non-trusted mention must be dropped when authorize hook is not installed")
 	}
 }
+
+// TestMonitor_StrictMode_EmptySourceUsers_OnlyChatAllow_ScopesPerChat
+// is a regression test for the empty-allowlist Layer 0 bypass. With
+// strict mode enabled (allowAllSenders=false), no entries on
+// source_user_ids, and a single (chat-A, guest-1) pair on
+// chat_user_allow:
+//
+//   - guest-1 in chat-A      → dispatch (per-chat allowed)
+//   - guest-1 in chat-B      → drop (per-chat allowlist is per-chat)
+//   - other-user in chat-A   → drop (not on any allowlist)
+//
+// Before the fix, `senderTrusted := len(allowedUserIDs) == 0 || …`
+// short-circuited to true whenever the global allowlist was empty,
+// silently widening Layer 0 even in strict mode.
+func TestMonitor_StrictMode_EmptySourceUsers_OnlyChatAllow_ScopesPerChat(t *testing.T) {
+	dispatchCases := []struct {
+		name           string
+		chat           string
+		creator        string
+		wantDispatched bool
+	}{
+		{name: "trusted user in trusted chat", chat: "chat-A", creator: "guest-1", wantDispatched: true},
+		{name: "trusted user in different chat", chat: "chat-B", creator: "guest-1", wantDispatched: false},
+		{name: "untrusted user in trusted chat", chat: "chat-A", creator: "rando", wantDispatched: false},
+	}
+	for _, tc := range dispatchCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var dispatched bool
+			bot := NewBotClient("", "fake-bot-token")
+			bot.SetOwnerID("bot-1")
+			m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+				mu.Lock()
+				dispatched = true
+				mu.Unlock()
+			}, []string{"chat-A", "chat-B"}, nil, false)
+			m.EnforceSenderAllowlist()
+			m.SetChatUserAllow(map[string][]string{"chat-A": {"guest-1"}})
+
+			msg := makeWSMessage(Post{
+				ID: "p-" + tc.creator + "-" + tc.chat, GroupID: tc.chat, Type: "TextMessage",
+				Text: "hi", CreatorID: tc.creator, EventType: "PostAdded",
+			})
+			m.handleWSMessage(context.Background(), msg)
+			time.Sleep(50 * time.Millisecond)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if dispatched != tc.wantDispatched {
+				t.Errorf("dispatched=%v, want %v (chat=%s creator=%s)", dispatched, tc.wantDispatched, tc.chat, tc.creator)
+			}
+		})
+	}
+}
+
+// TestMonitor_StrictMode_EmptySourceUsers_AuthorizeMentionStillFires
+// is a companion regression test: when source_user_ids is empty AND
+// chat_user_allow is non-empty (so the empty-allowlist startup guard
+// does not drop), a non-trusted user's @mention in a group chat that
+// is in chat_ids must still hit the authorize-mention OOB callback —
+// not be silently dispatched as "trusted".
+//
+// Before the fix, `senderTrusted` evaluated to true for every sender
+// in this configuration, so the authorize-mention branch (gated on
+// !senderTrusted) was unreachable.
+func TestMonitor_StrictMode_EmptySourceUsers_AuthorizeMentionStillFires(t *testing.T) {
+	var mu sync.Mutex
+	var dispatched bool
+	var authorized bool
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-1")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		dispatched = true
+		mu.Unlock()
+	}, []string{"chat-A"}, nil, true)
+	m.EnforceSenderAllowlist()
+	m.SetChatUserAllow(map[string][]string{"chat-A": {"guest-1"}})
+	m.SetMentionAuthorize(func(ctx context.Context, replyClient *Client, readClient *Client, post Post) {
+		mu.Lock()
+		authorized = true
+		mu.Unlock()
+	})
+
+	// rando is NOT on chat_user_allow; @mention should route to OOB.
+	msg := makeWSMessage(Post{
+		ID: "p1", GroupID: "chat-A", Type: "TextMessage",
+		Text: "@bot hi", CreatorID: "rando", EventType: "PostAdded",
+		Mentions: []Mention{{ID: "bot-1", Type: "Person"}},
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(80 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if dispatched {
+		t.Errorf("non-trusted sender must NOT bypass to dispatch when only chat_user_allow is configured")
+	}
+	if !authorized {
+		t.Errorf("authorize-mention callback should have fired for the non-trusted mention")
+	}
+}
+
+// TestMonitor_LegacyAllowAll_EmptyAllowlistsTrustEveryone confirms the
+// legacy semantic is preserved: when allowAllSenders=true (the default
+// before EnforceSenderAllowlist), an empty source_user_ids and empty
+// chat_user_allow trust every sender. This is the path used by tests
+// and by deployments that explicitly opt out of strict mode.
+func TestMonitor_LegacyAllowAll_EmptyAllowlistsTrustEveryone(t *testing.T) {
+	var mu sync.Mutex
+	var dispatched bool
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-1")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		dispatched = true
+		mu.Unlock()
+	}, []string{"chat-A"}, nil, false)
+	// allowAllSenders=true is the constructor default.
+
+	msg := makeWSMessage(Post{
+		ID: "p1", GroupID: "chat-A", Type: "TextMessage",
+		Text: "hi", CreatorID: "anyone", EventType: "PostAdded",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !dispatched {
+		t.Errorf("legacy allowAllSenders=true with empty allowlists must trust every sender")
+	}
+}
