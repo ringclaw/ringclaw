@@ -26,8 +26,10 @@ Every incoming message goes through deduplication, permission checks, and a mult
 flowchart TD
     Msg[Incoming message] --> Dedup{Dedup check}
     Dedup -->|Duplicate| Drop[Drop]
-    Dedup -->|New| TS{Trusted sender?<br/>Phase 1 allowlist}
-    TS -->|No| Drop2[Drop]
+    Dedup -->|New| TS{Trusted sender?<br/>source_user_ids ∪ chat_user_allow}
+    TS -->|No| Mention{Group @bot &<br/>allow_group_mention_authorize?}
+    Mention -->|Yes| OOBA[Issue authorize-mention<br/>OOB challenge to owner DM]
+    Mention -->|No| Drop2[Drop]
     TS -->|Yes| Approval{/approval reply in bot DM?}
     Approval -->|Yes| OOB[Consume via OOB manager]
     Approval -->|No| Strip[Strip @mention + forwarded prefix]
@@ -99,3 +101,17 @@ If `group_summary_group_id` is set, in-group summarize is enabled automatically.
 ```
 
 Find a user's numeric ID in RingClaw logs: `creatorID=XXXXXXXX` appears on every received message.
+
+`chat_user_allow` is a **per-chat** allowlist layered on top of `source_user_ids`. Pre-seed it by hand, or let the [authorize-mention OOB flow](../security/index.md#phase-2-authorize-mention-oob-flow-opt-in) populate it on operator approval. Approved entries are persisted to `config.json` (email preferred when resolvable).
+
+```json
+"ringcentral": {
+  "allow_group_mention_authorize": true,
+  "chat_user_allow": {
+    "chat-engineering-7": ["alice@example.com"],
+    "chat-design-9": ["3061708020"]
+  }
+}
+```
+
+Only widens the **sender** allowlist for the listed chat. Privileged Layer 1 commands (`/cwd`, `/cron`, `/new`, `/reload`, `/full-access`, summarize NL trigger) still require Private-App-owner identity — see [Security › Permission Matrix](../security/index.md#permission-matrix).

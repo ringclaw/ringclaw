@@ -113,6 +113,8 @@ title: 配置
 | `bot_token` | string | — | **必填。** RingCentral Public Bot 的访问 token。 |
 | `chat_ids` | string[] | `[]` | **必填。** Bot 允许接收消息的 chat ID 列表。 |
 | `source_user_ids` | string[] | `[]` | 受信任的发信人。可填数字 extension ID、邮箱、E.164 电话号码。空且已配置 Private App → 仅机主；空且未配置 Private App → 全部拒绝。 |
+| `allow_group_mention_authorize` | bool（可空） | `false` | 设为 `true` 时，非授信用户在允许的群聊中 `@bot` 不再静默丢弃，而是触发 OOB 审批 challenge 发到 owner 私聊。批准后该用户被加入 `chat_user_allow[<chatID>]`（仅作用于该群）并持久化到 `config.json`。需要 Private App + 可解析的 owner 私聊；否则启动时打 `ERROR` 日志并禁用该功能。详见 [安全 › Authorize-mention OOB 授权流程](../security/index.md#phase-2-authorize-mention-oob-授权流程-可选开关)。 |
+| `chat_user_allow` | map[string][]string | `{}` | 在 `source_user_ids` 之上叠加的**按群**白名单：`{"<chatID>": ["alice@example.com", "3061708020"]}`。条目可为数字 extension ID、邮箱或 E.164 电话号码（启动时通过 Private App directory 解析为数字 ID）。authorize-mention 流程批准后会自动写入；运维也可手工预置。空 / 该群无该 key = 无按群例外。**仅放宽 Layer 0 发信人白名单**，不会解锁特权 Layer 1 命令（`/cwd`、`/cron`、`/new`、`/reload`、`/full-access`、总结自然语言触发）—— 这些仍要求 Private-App-owner 身份。 |
 | `group_mention_only` | bool（可空） | `true` | `true` 群聊中必须 `@bot`（Bot 私聊不受影响）；`false` 在允许的群聊中对所有消息响应。 |
 | `bot_mention_only` | bool（可空） | — | **已废弃**，`group_mention_only` 的旧名。仍会被读取（向后兼容），`Load()` 会把它迁移到新字段并打 `WARN`。未来版本将移除。 |
 | `server_url` | string | SDK 默认（`https://platform.ringcentral.com`） | RingCentral API 地址。 |
