@@ -151,38 +151,48 @@ var timeRules = []timeRule{
 }
 
 func parseTimeRange(text string) time.Time {
+	t, _ := parseTimeRangeOK(text)
+	return t
+}
+
+// parseTimeRangeOK is the underlying parser that exposes whether any
+// rule actually matched, so callers (e.g. extractDateViaAgent's
+// regex fast-path) can distinguish "matched and resolved to today"
+// from "no match → fall back to today". Returning ok=false signals
+// the caller may want to consult an LLM extractor.
+func parseTimeRangeOK(text string) (time.Time, bool) {
 	lower := strings.ToLower(text)
 	now := time.Now()
 
 	// Absolute dates (most specific, check first)
 	if t, ok := parseAbsoluteDate(lower, now); ok {
-		return t
+		return t, true
 	}
 
 	// "最近 N 天/周/星期/个月" / "last N days/weeks/months" — must run before
 	// the bare-keyword loop so "最近一周" doesn't get swallowed by the broad
 	// "最近 → -3d" rule below.
 	if t, ok := parseRelativeDuration(lower, now); ok {
-		return t
+		return t, true
 	}
 	if t, ok := parseRelativeHours(lower, now); ok {
-		return t
+		return t, true
 	}
 
 	// Weekday names ("周五", "上周五", "Friday", "last Friday"). Must run
 	// before the timeRules loop so "上周五" is not swallowed by the broader
 	// "上周 → start of last week" rule.
 	if t, ok := parseWeekday(lower, now); ok {
-		return t
+		return t, true
 	}
 
 	for _, r := range timeRules {
 		if containsAny(lower, r.keywords...) {
-			return r.resolve(now)
+			return r.resolve(now), true
 		}
 	}
 
-	return todayStart()
+	return todayStart(), false
 }
 
 // parseWeekday matches "周X" / "上周X" / "下周X" / "本周X" and the English
@@ -272,9 +282,14 @@ func enWeekdayPrefix(s string) weekdayPrefix {
 // agreed semantics:
 //   - bare ("周五" / "Friday"): most recent past occurrence; today if today
 //     is that weekday.
-//   - "上周X" / "last X" / "past X": the X of the previous calendar week
-//     (always between 7 and 13 days back).
-//   - "下周X" / "next X": the X of the next calendar week (1–7 days forward).
+//   - "上周X" / "last X" / "past X": always at least one full week back,
+//     i.e. the most-recent past X minus 7 days. This guarantees a
+//     7–13-day-back range regardless of today's weekday so the phrase
+//     reads as "the X from a week ago" rather than colloquially
+//     swallowing "this past X" (e.g. on a Monday, "上周五" must not
+//     resolve to last Friday's 3-days-back date).
+//   - "下周X" / "next X": the X of the next calendar week (1–13 days
+//     forward, depending on today's position).
 //   - "本周X" / "这周X" / "this X": the X of the current calendar week
 //     (may be past, today, or future).
 //
@@ -285,16 +300,22 @@ func resolveWeekday(prefix weekdayPrefix, target int, now time.Time) time.Time {
 		wd = 7 // Sunday → 7 to match ISO numbering
 	}
 
+	// barePast is the bare-weekday delta: the most recent past
+	// occurrence of `target`, including today (range −6..0).
+	barePast := -((wd - target + 7) % 7)
+
 	var deltaDays int
 	switch prefix {
 	case wkpLast:
-		deltaDays = -(wd - target + 7)
+		// One full week earlier than the bare delta → range −13..−7,
+		// matching the "always at least 7 days back" contract above.
+		deltaDays = barePast - 7
 	case wkpNext:
 		deltaDays = target - wd + 7
 	case wkpThis:
 		deltaDays = target - wd
 	default: // wkpNone
-		deltaDays = -((wd - target + 7) % 7)
+		deltaDays = barePast
 	}
 
 	d := now.AddDate(0, 0, deltaDays)
