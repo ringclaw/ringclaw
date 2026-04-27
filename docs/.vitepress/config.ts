@@ -138,6 +138,13 @@ export default withMermaid(defineConfig({
           text: 'Security',
           items: [
             { text: 'Overview', link: '/security/' },
+            { text: 'Sender Allowlist (Layer 0)', link: '/security/sender-allowlist' },
+            { text: 'Command Authorization (Layer 1)', link: '/security/command-authorization' },
+            { text: 'Cross-Chat Actions (Layer 2)', link: '/security/cross-chat-actions' },
+            { text: 'ACP Full-Access (Layer 3)', link: '/security/full-access' },
+            { text: 'Approval CLI', link: '/security/approval-cli' },
+            { text: 'Workspace Allowlist', link: '/security/workspace-allowlist' },
+            { text: 'API & Clients', link: '/security/api-and-clients' },
           ],
         },
       ],

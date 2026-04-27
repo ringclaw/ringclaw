@@ -4,603 +4,69 @@ title: Security
 
 # Security
 
-## Local API Authentication
-
-The HTTP API server (default `127.0.0.1:18011`) requires token authentication. A random token is generated on first startup and stored in `~/.ringclaw/api_token`.
-
-All API requests (except `/health`) must include the `X-RingClaw-Token` header:
-
-```bash
-curl -H "X-RingClaw-Token: $(cat ~/.ringclaw/api_token)" \
-  http://127.0.0.1:18011/api/send -d '{"text":"hello"}'
-```
-
-The server also validates the `Host` header to prevent DNS rebinding attacks — only `localhost`, `127.0.0.1`, and `::1` are accepted.
-
-::: danger
-Do not bind `api_addr` in `config.json` to `0.0.0.0`. This would expose an authenticated but unencrypted gateway to your corporate RingCentral account on the local network. The default `127.0.0.1` binding is sufficient for all normal use cases.
-:::
-
-## Phase 2 Hardening: `/approval` + Cross-Chat Notices
-
-Phase 2 layers two owner-DM-scoped surfaces on top of the Phase 1
-trusted-sender allowlist: a two-step `/approval` confirmation for
-ACP full-access grants, and a **fail-closed** metadata-only heads-up
-notice that must land in the owner DM **before** an owner-initiated
-ACTION dispatches into a chat other than the origin or the owner's
-own DM. If that pre-dispatch notice cannot be delivered (no owner DM
-resolved, or RC transport failure), the cross-chat action is refused
-— a silent cross-chat write with no audit record is not an
-acceptable failure mode.
-
-Trust assumption: an attacker with a foothold inside RingCentral
-(account compromise, prompt injection in a bot DM, malicious
-teammate impersonating the owner) does **not** simultaneously have
-shell access to the host running RingClaw. All OOB approvals
-(`/full-access grant` and non-owner cross-chat ACTIONs) require
-running `ringclaw approval <id>` on the host machine — approval
-authority is decoupled from the RC account. A compromised RC account
-can see the challenge ID in the DM notification but cannot execute
-the approval without host machine access.
-
-### Phase 2 surfaces — added
-
-The base Phase 2 surface (cross-chat audit notice, `/full-access`,
-terminal `/approval`) introduces **no new `config.json` fields** and
-adds no on-disk state — all OOB state is in-memory and cleared on
-restart, so a crash-restart naturally re-locks the bot until the
-operator explicitly re-grants.
-
-The **authorize-mention OOB flow** (added later as a Phase 2
-extension; see [Phase 2 — Authorize-mention OOB flow](#phase-2-authorize-mention-oob-flow-opt-in))
-*does* add two opt-in fields, `ringcentral.allow_group_mention_authorize`
-and `ringcentral.chat_user_allow`. Both default to off / empty, so an
-operator who does not opt in sees no behavioral change.
-
-| Surface | Type | Where | Phase 1 behavior | Phase 2 behavior | Operator override |
-|---|---|---|---|---|---|
-| Owner cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` | runtime behavior | `messaging/actions.go` | Honored unconditionally; `WARN action: owner cross-chat dispatch` audit log only | **Synchronous fail-closed pre-dispatch notice.** Before the action is dispatched, a metadata-only heads-up is posted to the owner DM when the target chat differs from the origin AND from the owner's own DM. The notice carries `TYPE`, `requesterID`, RFC3339 timestamp, `originChatID`, `targetChatID` — no body, title, or content preview. If the owner DM is not configured or the notice send fails, **the cross-chat action is refused** (caller receives `Refused cross-chat <TYPE>: …`). | Tune `crossChatNoticeTimeout` in `messaging/actions.go` (currently 5 s). The notice target (`OwnerDMChat`) is derived from the bot DM; it cannot be pointed elsewhere. |
-| `/full-access` slash command | runtime command | bot DM with the owner | _did not exist_ | **New.** `status` / `grant [duration]` / `revoke`. `grant` is a two-step confirmation: the bot issues a short-lived challenge ID, posts a plain-text `/approval` prompt to the owner DM, and only activates the grant after the owner replies `/approval <id>`. While a grant is active, each newly-created ACP session is flipped into `session/set_mode "full-access"`. When the grant is revoked (explicitly or by TTL expiry), **every live ACP session is also demoted back to `set_mode "default"`** via a revoke hook — sessions whose demote call fails are dropped from the session map so the next prompt rebuilds them in the locked-down mode. | **Default grant 1 day**, hard cap **30 days**. Oversized inputs are silently clamped. Durations are parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`). Restricted to the owner DM; group-chat invocations are refused. |
-| `/approval <id>` / `/approval deny <id>` | slash command | bot DM with the owner | _did not exist_ | **New, terminal-only.** Any `/approval ...` message in the bot DM is consumed and the sender is redirected to the terminal CLI: `ringclaw approval <id>` (approve) or `ringclaw approval deny <id>` (deny). Chat-based approval is **disabled for security** — approval requires running the CLI on the host machine, decoupling the approval authority from the RC account. Replies never reach the AI agent. | n/a |
-| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` honored at startup when the top-level `full_access_ack: true` is also set in `config.json`; otherwise downgraded with a `WARN` | **Unchanged** for the static path. In addition, an active `/full-access` grant overlays it dynamically — new ACP sessions read the TTL state on every creation, so a grant takes effect without restarting and naturally drops back to guarded mode when it expires. The per-session log line now carries a `source` field (`config:full_access`, `oob:/full-access`, or `config:full_access+oob`) for audit. | Operators wanting only ad-hoc unlocks can leave `full_access: false` and rely on `/full-access grant` exclusively. |
-| `ringcentral.allow_group_mention_authorize` + `ringcentral.chat_user_allow` | `bool` + `map[string][]string` | `config.json` (top-level `ringcentral`) | _did not exist_ — non-trusted `@bot` in an allowed group chat was silently dropped at the WebSocket monitor | **New, opt-in.** When `allow_group_mention_authorize: true`, a non-trusted user's `@bot` in an allowed group chat triggers an authorize-mention OOB challenge to the owner DM. On approval the requester is added to `chat_user_allow[<chatID>]` (chat-scoped only) and persisted to `config.json` (email preferred). The original message is **dropped** — the user must `@bot` again after approval. Pending challenges are deduped per `(chat, user)`. Requires Private App + resolved owner DM; otherwise the feature is disabled at startup with an `ERROR` log and the legacy silent-drop is preserved. See [Phase 2 — Authorize-mention OOB flow](#phase-2-authorize-mention-oob-flow-opt-in). | Toggle off via `allow_group_mention_authorize: false` (default). Operators may also pre-seed `chat_user_allow` by hand without enabling the OOB flow at all. |
-
-### Before / after impact for operators
-
-::: warning
-**Owner cross-chat behavior change.** Phase 1 always honored owner
-cross-chat ACTIONs and only warned. Phase 2 gates them on a
-synchronous pre-dispatch audit notice to the owner DM. If the
-owner DM is not configured, or the notice send fails, **the
-cross-chat action is refused** — nothing lands on the target chat
-and the caller sees a `Refused cross-chat <TYPE>` entry. Operators
-running without a resolvable bot DM must either resolve it or keep
-all owner-driven actions in the origin chat.
-:::
-
-::: warning
-**`/full-access` revoke demotes live sessions.** In Phase 2
-`/full-access revoke` (and TTL expiry) not only prevent NEW sessions
-from entering full-access but also proactively send
-`session/set_mode "default"` to every live ACP session that was
-unlocked during the grant window. Sessions whose demote call fails
-are dropped from the session map; the next prompt in that
-conversation rebuilds a fresh session in the locked-down mode (so a
-small amount of in-memory conversation context may be lost).
-:::
-
-| Scenario | Phase 1 behavior | Phase 2 behavior |
-|---|---|---|
-| Owner asks AI for a cross-chat MESSAGE / CARD / TASK / NOTE | Action runs immediately; `WARN action: owner cross-chat dispatch` audit log only | Bot first posts `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` to the owner DM (when target ≠ origin and target ≠ owner DM). Only if that pre-notice succeeds does the action run on the target chat. |
-| Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | Refused (unchanged). |
-| Operator wants ACP full-access for one task | Must ship `full_access: true` + `full_access_ack: true` in `config.json` and restart, then remember to revert | Leave `full_access: false`. In the bot DM, run `/full-access grant 30m` — bot replies `Full-access grant requested. Confirm via terminal.` and posts a context-rich prompt to the owner DM (challenge ID, requester label, requested duration, effect description, host commands). Owner runs `ringclaw approval <id>` on the host. Bot confirms `Full-access granted until <RFC3339 expiry>.` and the ACP agent runs unlocked for 30 min. |
-| Non-trusted user @bot in an allowed group chat | Silently dropped at the WebSocket monitor | _Opt-in._ When `allow_group_mention_authorize: true`, the bot issues an authorize-mention challenge, posts the rich prompt to the owner DM (chat label, user label with email, mention preview, scope explanation, host commands), and drops the original post. On `ringclaw approval <id>` the user is added to `chat_user_allow[<chat>]` (chat-scoped only, persisted) — the user must `@bot` again to continue. |
-| Non-owner asks AI for a cross-chat ACTION | Refused (Phase 1 lock) | **OOB challenge issued** (when OOB configured): bot posts challenge prompt to owner DM; owner runs `ringclaw approval <id>` on host; on approval action executes in target chat. Falls back to silent drop when OOB not configured. |
-| Operator wants default-length full-access | n/a | `/full-access grant` → **24 h** (1 day). Cap is 30 days. |
-| Operator wants to revoke | n/a | `/full-access revoke` — clears the grant AND immediately demotes every live session back to `set_mode "default"`. |
-| OOB not configured (owner DM cannot be resolved) | n/a | `/full-access` returns "OOB approval is not configured". **Owner cross-chat actions are refused** with `Refused cross-chat <TYPE>: no owner DM audit channel configured` (logged as `WARN action: cross-chat ACTION refused (fail-closed on pre-notice)`). |
-| Suspected compromise / want to drop state | n/a | Restart the bot — all in-memory state (pending challenges, active `/full-access` grant) is cleared. |
-
-### Phase 2 audit-log additions
-
-| Event | Log line | Purpose |
-|---|---|---|
-| Challenge issued (e.g. `/full-access grant`, non-owner cross-chat ACTION) | `INFO oob: challenge issued` (`challengeID`, `requesterID`, `intent`, `ttl`) | Track every approval prompt, including ones that timed out unanswered. |
-| Challenge approved (via terminal) | `INFO oob: challenge approved via terminal` (`challengeID`) | Audit who approved what and when. |
-| Challenge denied (via terminal) | `INFO oob: challenge denied via terminal` (`challengeID`) | Counterpart to approval log line. |
-| Chat `/approval` intercepted (redirected to terminal) | `INFO oob: chat approval intercepted, redirected to terminal` | Defense-in-depth — chat-based approval is disabled; any attempt is logged and redirected. |
-| Cross-chat OOB approved — action executed | `INFO action: cross-chat OOB approved - <created note/task/message/…>` (`chatID`, details) | Confirms the action ran after terminal approval. |
-| Full-access granted | `WARN oob: ACP full-access granted` (`ttl`, `expiresAt`) | Separate from the per-session `WARN ACP session granted full-access` line. |
-| Full-access revoked | `WARN oob: ACP full-access revoked` | Triggered by `/full-access revoke` or by re-grant. |
-| Full-access expired (TTL) | `WARN oob: ACP full-access expired (TTL reached)` | Fires proactively when the grant's `expiresAt` is reached, before any caller polls `FullAccessActive`. |
-| Live session demoted | `INFO acp demote: session returned to default mode` (`session`, `conversation`) | Confirms `session/set_mode "default"` landed on a live session after revoke / expiry. |
-| Live session demotion failed | `WARN acp demote: set_mode default failed, session dropped from map` (with `error`) | The session is removed from the session map; the next prompt on that conversation creates a fresh (default-mode) session. |
-| Cross-chat notice sent (pre-dispatch) | `INFO action: cross-chat notice sent (pre-dispatch)` (`type`, `from`, `to`, `ownerDMChat`, `requesterID`) | Confirms the heads-up reached the owner DM; the action is then dispatched. |
-| Cross-chat action refused | `WARN action: cross-chat ACTION refused (fail-closed on pre-notice)` (with `error`) | Fires when the audit channel is missing or the notice send fails; the action is NOT dispatched. |
-| Authorize-mention routing (monitor) | `INFO authorize-mention: routing non-trusted group mention` (`chatID`, `userID`) | Confirms the WebSocket monitor handed a non-trusted group `@bot` to the OOB flow instead of dropping it. |
-| Authorize-mention challenge issued | `INFO oob: challenge issued` (`intent` starts with `authorize user … in chat …`) | Same `INFO oob: challenge issued` line as `/full-access` and cross-chat OOB; the `intent` field disambiguates. |
-| Authorize-mention granted | `INFO authorize-mention: granted` (`challengeID`, `chatID`, `userID`, `identifier`) | Fired after `applyAuthorize` updates the in-memory monitor + handler allowlists and (best-effort) persists the identifier to `chat_user_allow`. |
-| Authorize-mention denied / expired | `INFO authorize-mention: denied` or `INFO authorize-mention: challenge expired` | Counterparts to the granted line. The pending `(chat, user)` dedupe is released so the next `@bot` re-issues a fresh challenge. |
-| Authorize-mention persist failure | `ERROR authorize-mention: persist failed` (with `error`) | The in-memory grant succeeded but writing `config.json` did not — the grant survives the current process but is lost on restart. |
-| Authorize-mention prompt failure | `ERROR authorize-mention: post prompt failed` (with `error`) | The owner DM post failed; the challenge is auto-denied and the `(chat, user)` pending lock released so the user can retry. |
-| Authorize-mention email unavailable | `WARN authorize-mention: no email available, persisting numeric ID` | Directory lookup did not yield an email; the numeric extension ID is persisted instead (still chat-scoped). |
-
-## Phase 1 Hardening: Configuration Changes
-
-Phase 1 of the Remote Control hardening review introduces **two new
-top-level `config.json` fields** (`agent_allow_workspace_list` and
-`full_access_ack`) and otherwise reuses fields that already existed in
-the schema, changing how they are interpreted at startup. Operators
-upgrading from a previous release should review the table below —
-defaults marked "**new**" may change behavior even when `config.json`
-is left untouched.
-
-All configuration lives in `~/.ringclaw/config.json`; the previously
-supported `RC_*` / `RINGCLAW_*` / `OPENCLAW_GATEWAY_*` env-var
-fallbacks have been removed and are silently ignored.
-
-| Setting | Type | Where | Old default | New default | Operator override |
-|---------|------|-------|-------------|-------------|-------------------|
-| `ringcentral.source_user_ids` | `[]string` | `config.json` | Empty list = **allow every sender** in any allowed chat | Empty list + Private App = **owner-only** (auto-injected). Empty list + no Private App = **deny all** with startup error | List numeric IDs / emails / phone numbers to add additional trusted senders. Email and phone require Private App with `ReadAccounts`. |
-| `agent_workspace` | `string` | `config.json` | Default cwd for agents (no allowlist enforcement) | **Unchanged behavior** as the default cwd, AND implicitly added to the cwd allowlist so the agent can chdir into it | Continues to control the initial cwd. To widen the allowlist, prefer the dedicated `agent_allow_workspace_list` field below. |
-| `agent_allow_workspace_list` | `[]string` | `config.json` | _did not exist_ | **new** — explicit list of directories that `/cwd` and `Agent.SetCwd` may target. Always merged with `~/.ringclaw/workspace` and (if set) `agent_workspace`; duplicates are dropped | List every subtree the AI agents are allowed to enter. Anything outside every entry is rejected at runtime. |
-| `agents.<name>.full_access` | `bool` | `config.json` (per ACP agent) | `true` immediately enabled `session/set_mode "full-access"` on every new ACP session | `true` is **ignored** unless the top-level `full_access_ack: true` also appears in `config.json`; otherwise downgraded with a `WARN` log | Set `full_access_ack: true` in `config.json`. |
-| `full_access_ack` | `*bool` | `config.json` (top-level) | _did not exist_ | **new** — `true` honors `full_access`, `false` or unset refuses | Version-controlled alongside the agent that needs it. |
-
-Behaviors implied by Phase 1 that have **no config knob** (intentionally
-not exposed yet):
-
-- The cross-chat `ACTION` lock is unconditional for non-owner senders.
-  There is no opt-out.
-- `cli_agent.Chat` always rejects empty `conversationID`.
-- The `/cwd` denylist (`.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`,
-  `.config/gcloud`) is hard-coded as a secondary check, even when the
-  `agent_workspace` allowlist would otherwise admit the path.
-
-::: warning
-After upgrading, operators who relied on the legacy "empty
-`source_user_ids` = allow everyone" behavior will see the bot drop
-**every** incoming message until they either (a) configure a Private App
-(the owner is auto-trusted) or (b) populate
-`ringcentral.source_user_ids`. The startup log line
-`sender allowlist is empty: ...` is the canonical signal for this case.
-:::
-
-## Mandatory Sender Allowlist
-
-When the `start` command boots, the WebSocket monitor and message handler
-both switch into **strict sender mode**: only the user IDs on the trusted
-allowlist may drive the AI agent. The allowlist is built from three sources
-(union):
-
-- The Private App owner's user ID (auto-injected when a Private App is
-  configured).
-- All entries in `ringcentral.source_user_ids` (resolved to numeric user IDs
-  on startup).
-- All entries in `ringcentral.chat_user_allow[<chatID>]` for the destination
-  chat (resolved on startup the same way as `source_user_ids`). This is a
-  **per-chat layered exception**, not a global widening — `chat_user_allow`
-  only admits the listed users in the listed chats.
-
-If all three sources are empty, the bot logs a startup error and **drops every
-incoming message** until the operator adds at least one trusted sender. This
-prevents the "any user in an allowed chat can run my AI agent" foot-gun
-called out as Finding #1 in the Remote Control security review.
-
-```yaml
-ringcentral:
-  source_user_ids:
-    - "+15551234567"       # phone number, resolved at boot
-    - alice@example.com    # email address, resolved via Private App directory
-    - "987654321"          # bare numeric extensionId / user ID
-```
-
-::: tip
-Email and phone-number entries require a Private App with the `ReadAccounts`
-permission so they can be resolved to numeric IDs. Without the Private App,
-list the numeric extensionIds directly.
-:::
-
-## Cross-Chat Action Lock
-
-`ACTION` blocks emitted by the AI may carry a `chatid=` parameter that
-targets a different chat than the one the message arrived in. To prevent
-"summarize chat A in chat B" style data exfiltration, this is now allowed
-only when the originating sender is on the trusted allowlist (the machine
-owner). For any other sender, `chatid=` is ignored with a warning log and
-the action runs in the origin chat.
-
-For owner-initiated cross-chat dispatches, Phase 2 adds a
-**synchronous fail-closed pre-dispatch gate**:
-
-- **Owner DM resolved**: before the cross-chat `MESSAGE` / `CARD` /
-  `TASK` / `NOTE` is dispatched, the bot posts a metadata-only notice
-  to the owner DM (when target ≠ origin and target ≠ owner DM):
-  `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>`.
-  No body, title, or content preview is leaked into the owner DM. The
-  notice send is capped at `crossChatNoticeTimeout` (5 s). Only after
-  the notice succeeds does the action run on the target chat.
-- **Notice delivery fails** (transport error, 5xx, timeout): the
-  cross-chat action is **refused**. Caller sees
-  `Refused cross-chat <TYPE>: audit notice delivery failed: …` and
-  nothing lands on the target chat.
-- **Owner DM not resolved** (OOB not configured): the cross-chat
-  action is **refused** with
-  `Refused cross-chat <TYPE>: no owner DM audit channel configured`.
-  Operators who run without a resolvable bot DM must either resolve
-  it or keep all owner-driven actions in the origin chat.
-
-## ACP Agent File Permissions
-
-By default, ACP agents are granted **read-only** file access. To allow file writes, set `allow_write: true` in the agent config:
-
-```json
-"claude-acp": {
-  "type": "acp",
-  "command": "claude-agent-acp",
-  "allow_write": true
-}
-```
-
-## ACP Full-Access Mode
-
-Setting `full_access: true` on an ACP agent calls `session/set_mode
-"full-access"` and disables RingClaw's per-call MCP tool-call approval. This
-is dangerous: a prompt-injected agent could read or destroy any file the
-process can reach.
-
-To prevent silent activation through a stolen or copy-pasted config,
-RingClaw now requires an explicit acknowledgement in `config.json`:
-
-```jsonc
-{
-  // Explicit, version-controlled acknowledgement.
-  "full_access_ack": true
-}
-```
-
-Resolution:
-
-1. `full_access_ack: true` in `config.json` → honor `full_access`.
-2. Anything else (omitted or `false`) → refuse `full_access` with a
-   loud warning.
-
-The legacy `RINGCLAW_FULL_ACCESS_ACK` environment variable is silently
-ignored — a stray shell export cannot re-enable full access.
-
-When the request is downgraded, the session keeps the default guarded
-mode. When honored, every freshly created ACP session emits an additional
-`WARN ACP session granted full-access` log line for audit (the `source`
-field distinguishes the static `config:full_access` path from the
-dynamic `oob:/full-access` Phase 2 grant described below).
-
-### Phase 2 — `/full-access` two-step `/approval` grant
-
-Phase 2 layers a dynamic, time-boxed unlock on top of the static
-`full_access` toggle. The static config is still honored when set; the
-new flow is **additive** and lets operators leave `full_access: false`
-in `config.json` and unlock full-access on demand from the bot DM:
-
-```text
-/full-access status         # show current grant state
-/full-access grant           # request a 24h unlock (default)
-/full-access grant 30m      # request a 30-minute unlock
-/full-access revoke         # immediately lock again
-```
-
-The grant flow is a two-step confirmation requiring host machine access:
-
-1. Owner sends `/full-access grant [duration]`. Bot replies
-   immediately with `Full-access grant requested. Confirm via terminal.`
-   and posts a context-rich prompt to the owner DM:
-
-   ```text
-   Pending approval (challenge `abc12345`).
-   Action: Grant ACP full-access for 30m
-   Requester: Owen Owner <owen@example.com> (id=user-owner)
-   Effect: agents with `full_access:true` will run MCP tool calls without per-call approval until the grant expires or `/full-access revoke` is used.
-
-   Run on the host:
-     ringclaw approval abc12345        (approve)
-     ringclaw approval deny abc12345   (deny)
-
-   Expires in 5m. Grant TTL: 30m.
-   ```
-
-   The requester label is a best-effort directory lookup
-   (`<displayName> <email> (id=<numeric>)`); on lookup failure the
-   prompt falls back to the bare numeric ID and still ships.
-
-2. Owner runs `ringclaw approval <id>` on the host machine (or
-   `ringclaw approval deny <id>` to reject). On approval the bot
-   responds `Full-access granted until <RFC3339 expiry>.`; on denial
-   or expiry the grant does not take effect.
-
-**Chat-based `/approval` is disabled.** Any `/approval ...` message
-in the bot DM is consumed and redirected to the terminal CLI. This
-decouples approval authority from the RC account — a compromised
-account cannot approve without host machine access.
-
-Constraints:
-
-- Only the bot's DM with the trusted owner accepts `/full-access`.
-  Group-chat invocations are refused with an explanatory message so
-  the round-trip stays on the secured channel.
-- Default grant duration is **24 hours**; the maximum is capped at
-  **30 days**. Oversized inputs are silently clamped. Durations are
-  parsed with `time.ParseDuration` (e.g. `30m`, `2h`, `168h`).
-- **Approval requires host machine access.** `ringclaw approval <id>`
-  calls the local API server (`127.0.0.1:18011`, loopback-only,
-  token-authenticated). A compromised RC account can see the challenge
-  ID in the DM but cannot approve without SSH or physical access to
-  the host.
-- Once granted, every newly-created ACP session is flipped into
-  `session/set_mode "full-access"` until the grant expires or
-  `/full-access revoke` is called. All OOB state is in-memory and is
-  cleared on restart, so a crash-restart re-locks the bot until the
-  operator explicitly re-grants.
-- **Live sessions are also demoted on revoke / TTL expiry.** When a
-  grant ends (explicit `/full-access revoke` OR the TTL elapses),
-  the manager fires a revoke hook wired to
-  `agent.DemoteAllACPFullAccess`. That walker iterates every live
-  ACP session created during the grant window and sends
-  `session/set_mode "default"` to each. Sessions whose demote call
-  fails are dropped from the session map so the next prompt rebuilds
-  them fresh in default mode (a small amount of in-memory
-  conversation context may be lost, but the session cannot linger
-  in full-access). A narrow race between grant-and-revoke landing
-  during session creation is also closed by a double-read in
-  `getOrCreateSession`; if revoke lands while the initial
-  `set_mode "full-access"` call is in flight, the agent immediately
-  compensates with `set_mode "default"`.
-
-### Phase 2 — Non-owner cross-chat OOB challenge
-
-Non-owner senders who trigger a cross-chat ACTION (with `chatid=` targeting
-a different chat) now enter an OOB approval flow instead of being silently
-dropped:
-
-```text
-Non-owner user @bot → AI reply includes ACTION: MESSAGE chatid=<other-chat>
-  ↓
-Bot posts a context-rich challenge prompt to the owner DM:
-
-  Pending approval (challenge `def67890`).
-  Action: Cross-chat MESSAGE
-  Requester: Alice Cross <alice@example.com> (id=user-7)
-  Origin chat: Engineering (id=origin-1)
-  Target chat: Customer Support (id=target-9)
-  Body: Highlights for the next quarter ...
-
-  Effect: bot will write a MESSAGE into the target chat on the requester's behalf.
-
-  Run on the host:
-    ringclaw approval def67890        (approve)
-    ringclaw approval deny def67890   (deny)
-
-  Expires in 5m.
-  ↓
-Owner runs: ringclaw approval def67890
-  ↓
-Approved → action executes asynchronously in target chat → origin chat notified
-Denied / expired → origin chat notified
-```
-
-The prompt body is capped at 200 characters (truncated with `…` when
-longer); `Title:` / `Subject:` / `Assignee:` lines appear when those
-ACTION params are present. No content beyond what the action itself
-will write is leaked into the owner DM.
-
-**Fallback**: when OOB is not configured (no Private App, no owner DM
-resolved, or `OwnerID` empty), the legacy silent-override behavior is
-preserved — `chatid=` is dropped and the action runs in the origin chat.
-
-**Terminal-only approval**: the challenge ID is delivered via DM so the
-owner knows a request is pending, but the approval itself requires running
-`ringclaw approval <id>` on the host machine. A compromised RC account can
-see the challenge ID but cannot approve without host access.
-
-### Phase 2 — Authorize-mention OOB flow (opt-in)
-
-A separate OOB surface, layered on the same challenge / terminal-approval
-infrastructure, lets operators authorize **per-chat** non-trusted senders
-without restarting or hand-editing `config.json`. It is gated behind a
-single opt-in field (`ringcentral.allow_group_mention_authorize: true`)
-and is **off by default** — operators who do not opt in see the legacy
-silent-drop behavior unchanged.
-
-The trigger is narrow: a user who is **not** on the global
-`source_user_ids` allowlist and **not** in the destination chat's
-`chat_user_allow` entry sends a message with `@bot` (a true mention) in
-an allowed group chat. Plain text from the same user, or `@bot` in a
-non-allowed chat, still drops as before.
-
-```mermaid
-sequenceDiagram
-    participant U as Non-trusted user
-    participant G as Group chat
-    participant M as Monitor (ringcentral)
-    participant H as Handler (messaging)
-    participant O as Owner DM
-    participant CLI as ringclaw approval (host)
-
-    U->>G: @bot help me
-    G->>M: PostAdded event
-    M->>M: trusted? (source_user_ids ∪ chat_user_allow[G])
-    Note over M: NO → group + @bot + opt-in flag set
-    M->>H: AuthorizeMention(post)
-    H->>H: dedupe (G,U) — already pending? then drop
-    H->>H: OOB.Issue(challenge, ttl=5m)
-    H->>O: Pending authorization (challenge `<id>`)\nChat / User / Mention preview\nhost commands
-    Note over H,G: Original message dropped (not replayed)
-    O->>CLI: ringclaw approval <id>
-    CLI->>H: Approve(id)
-    H->>H: chat_user_allow[G] += email (or numeric ID)
-    H->>H: Monitor.AddChatUserAllow(G, U) — live allowlist push
-    H->>H: persist callback → config.json Save()
-    H->>O: Authorized `<email>` in chat `<G>`. Saved to chat_user_allow.
-    U->>G: @bot help me (second time, manual re-mention)
-    G->>M: PostAdded event
-    M->>M: trusted now? YES (chat_user_allow[G] ∋ U)
-    M->>H: dispatch normally
-    H->>G: AI reply
-```
-
-**Key invariants:**
-
-- **Original message dropped.** The first `@bot` that triggered the
-  challenge is **not** replayed on approval. The user must `@bot` again
-  to actually drive the AI. This avoids accidental side-effects from
-  prompts that were authored before the operator approved them.
-- **Per-chat scope only.** The grant is recorded under
-  `chat_user_allow[<chatID>]`, never in the global `source_user_ids`.
-  Approving a user in chat A does not authorize them in chat B.
-- **Privileged commands NOT unlocked.** `chat_user_allow` only widens
-  Layer 0. Non-owner privileged Layer 1 commands (`/cwd`, `/cron`,
-  `/new`, `/reload`, `/full-access`, summarize NL trigger) still
-  require Private-App-owner identity. See the [Permission Matrix](#permission-matrix).
-- **Pending dedupe.** A pending challenge for a `(chatID, userID)` pair
-  blocks new challenges from the same pair for the challenge TTL. The
-  pending lock is released on approve / deny / expire / prompt-post
-  failure, so the user can retry on the next `@bot` after any
-  resolution.
-- **Persistence is best-effort.** The in-memory monitor + handler
-  allowlists are updated synchronously on approval; the
-  `config.json` Save is fired afterwards. A persist failure is logged
-  as `ERROR authorize-mention: persist failed` but the user remains
-  authorized for the current process lifetime — operators relying on
-  durable persistence should monitor that log line.
-- **Email preferred for persistence.** The persisted identifier is the
-  resolved email when the directory lookup succeeds; the numeric
-  extension ID otherwise (with a `WARN authorize-mention: no email
-  available` line). Hand-edited entries may use any of the three
-  forms `source_user_ids` accepts (numeric / email / E.164 phone) —
-  they are resolved on the next startup.
-- **No new approval verb.** The same `ringclaw approval <id>` /
-  `ringclaw approval deny <id>` CLI handles authorize-mention,
-  `/full-access`, and cross-chat OOB challenges uniformly. The
-  challenge `intent` field disambiguates them in audit logs.
-
-**Failure modes:**
-
-| Condition | Behavior |
+RingClaw is a remote-control bridge from RingCentral Team Messaging
+into a host machine that runs AI agents with broad filesystem and
+shell access. The threat model and defense layers below describe how
+the project keeps that power scoped to the right people through
+config, command authorization, OOB approvals, and process-local
+state.
+
+## Quick navigation
+
+| If you want to … | Read |
 |---|---|
-| `allow_group_mention_authorize` not set / `false` | Feature disabled — non-trusted `@bot` falls back to legacy silent drop. |
-| Private App not configured (no owner DM resolvable) | Feature disabled at startup with `ERROR allow_group_mention_authorize requires Private App + resolved owner DM; feature disabled`; legacy silent drop. |
-| Owner DM not yet resolved at runtime | The single message that hits this race is dropped with `WARN authorize-mention: OOB or owner DM unconfigured; dropping`. Subsequent messages succeed once the DM resolves. |
-| Owner denies the challenge | Pending lock released; challenge expires immediately; owner DM notified. The user's next `@bot` issues a fresh challenge. |
-| Challenge expires (5 min TTL) | Pending lock released; owner DM notified that the request expired. The user's next `@bot` issues a fresh challenge. |
-| Owner DM post fails (transient RC error) | Challenge auto-denied; pending lock released. The user's next `@bot` retries the post. |
-| Persist callback fails (e.g. config write error) | In-memory grant survives the current process; `ERROR authorize-mention: persist failed` is logged. Restart re-locks the user. |
+| Decide who can drive the bot at all | [Sender Allowlist](./sender-allowlist) |
+| See which slash commands each user may run | [Command Authorization](./command-authorization) |
+| Understand the cross-chat ACTION gate | [Cross-Chat Actions](./cross-chat-actions) |
+| Use `full_access` or `/full-access grant` | [ACP Full-Access](./full-access) |
+| Approve an OOB challenge from the host | [Approval CLI](./approval-cli) |
+| Pin the agent's working directory | [Workspace Allowlist](./workspace-allowlist) |
+| Lock down the local HTTP API or compare Bot vs Private App | [API & Clients](./api-and-clients) |
 
-**Pre-seeding without OOB.** Operators who want to authorize a known
-user without enabling the OOB flow at all can hand-edit
-`chat_user_allow` directly:
+## Threat model
 
-```jsonc
-{
-  "ringcentral": {
-    "allow_group_mention_authorize": false,  // OOB flow off
-    "chat_user_allow": {
-      "chat-engineering-7": ["alice@example.com"]
-    }
-  }
-}
-```
+The trust assumption underpinning every defense layer is that an
+attacker with a foothold inside RingCentral — account compromise,
+prompt injection in the bot DM, or a malicious teammate
+impersonating the owner — does **not** simultaneously have shell
+access to the host running RingClaw.
 
-This admits Alice in `chat-engineering-7` and only there; no challenge
-is ever issued. The two fields are independent.
+That single assumption is what makes the OOB approval design
+defensible:
 
-### Phase 2 — Terminal approval CLI
+- All approvals (`/full-access grant`, non-owner cross-chat ACTIONs,
+  authorize-mention) require running `ringclaw approval <id>` on the
+  host.
+- A compromised RC account can read the challenge ID from the owner
+  DM but cannot execute the approval without SSH or physical access
+  to the box.
+- All OOB state is in-memory and cleared on restart, so a
+  crash-restart naturally re-locks the bot until the operator
+  explicitly re-grants.
 
-```bash
-ringclaw approval <id>          # approve a pending challenge
-ringclaw approval deny <id>     # deny a pending challenge
-ringclaw approval list          # list all pending challenges
-```
+If the host machine is compromised at the OS level, RingClaw cannot
+help — the API token, the config file, and any agent secrets are
+already accessible. The relevant question is whether RingClaw adds
+new attack surface beyond what an attacker would already have on a
+compromised box; the layered model below answers "no" by keeping
+every privileged surface either config-only or gated on host
+access.
 
-Reads `~/.ringclaw/api_token`, calls `127.0.0.1:18011` (loopback-only,
-token-authenticated). Requires access to the host machine running ringclaw.
+## Four entry points (not one)
 
-Owner-initiated cross-chat `MESSAGE` / `CARD` / `TASK` / `NOTE` actions
-are gated on a **synchronous pre-dispatch notice**. When the target
-chat differs from both the origin chat and the owner's own DM, the
-bot posts a **metadata-only** heads-up to the owner DM **before** the
-action runs, and refuses the action if that notice cannot be
-delivered:
-
-```text
-[notice] MESSAGE by 12345 at 2026-04-17T10:15:00Z: origin=chat-7 target=chat-42
-```
-
-The notice carries `TYPE`, `requesterID`, an RFC3339 timestamp,
-`originChatID`, and `targetChatID` — no body, title, or content
-preview leaks into the owner DM. The send is capped at
-`crossChatNoticeTimeout` (5 s) so a stuck RC endpoint cannot wedge
-the prompt pipeline; when that cap triggers, the cross-chat action
-is refused rather than dispatched without an audit record.
-
-Refusal paths (the cross-chat action does NOT land on the target
-chat):
-
-- `OwnerDMChat` is empty (bot DM with the owner not yet resolved, or
-  OOB not wired): the caller sees `Refused cross-chat <TYPE>: no
-  owner DM audit channel configured`.
-- Notice send returns an error (timeout, 5xx, transport error):
-  `Refused cross-chat <TYPE>: audit notice delivery failed: <cause>`.
-
-Non-owner cross-chat actions remain **unconditionally refused** by
-the Phase 1 trusted-sender lock — the fail-closed notice path only
-applies to owner-initiated dispatches (non-owner `chatid=` overrides
-are ignored earlier in the dispatch loop).
-
-## Workspace Path Restrictions
-
-`/cwd` and the underlying `Agent.SetCwd` are pinned to an **allowlist of
-directory roots**. Any attempt to switch the working directory to a path
-outside every configured root is denied with an error like
-`Denied: path "/etc" escapes configured workspace allowlist [/home/alice/code /home/alice/.ringclaw/workspace]`.
-
-The effective allowlist is the union of (deduplicated, symlink-resolved):
-
-1. Every entry in `agent_allow_workspace_list` from `config.json`.
-2. The legacy `agent_workspace` (continues to be the default cwd).
-3. `~/.ringclaw/workspace` — always implicitly trusted so the built-in
-   default cwd is never rejected.
-
-A denylist is kept as a defense-in-depth secondary check: even when the
-allowlist would admit a path, `/cwd` still refuses any of the sensitive
-directories `.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`.
-
-```jsonc
-{
-  // Default cwd (initial directory the agent starts in).
-  "agent_workspace": "/home/alice/projects/main",
-
-  // Additional directories the agent may chdir into via /cwd.
-  "agent_allow_workspace_list": [
-    "/home/alice/projects/secondary",
-    "/home/alice/scratch"
-  ]
-}
-```
-
-## Permission Matrix
-
-### Before you read — four entry points, not one
-
-RingClaw can act on RingCentral via **four distinct entry points**. The
-three-layer model below only applies to the WebSocket message path;
-each of the other entries has its own gate and is listed here so
-operators do not mistake "non-owner cannot use `/cwd` in a group" for
-"non-owner cannot make the bot do anything":
+RingClaw can act on RingCentral via **four distinct entry points**.
+The three-layer permission model in the next section only applies to
+the WebSocket message path; each of the other entries has its own
+gate and is listed here so operators do not mistake "non-owner
+cannot use `/cwd` in a group" for "non-owner cannot make the bot do
+anything":
 
 | Entry point | Layer 0 (sender) | Layer 1 (commands) | Layer 2 (ACTION fan-out) | Layer 3 (ACP mode) | What actually gates it |
 |---|---|---|---|---|---|
-| WebSocket message | ✅ | ✅ | ✅ | ✅ | Chat allowlist + Phase 1 sender allowlist + handler checks |
-| HTTP API (`/api/send`, `/api/tasks`, `/api/notes`, `/api/events`, `/api/cards`) | ❌ | ❌ | ❌ | n/a | **API token + loopback Host only** (`api/auth.go`) |
-| Cron job | ❌ | job is created via `/cron add` (Layer 1); execution has no human sender | ❌ **ACTION blocks are NOT executed** — reply is posted verbatim | ✅ | Job config in `~/.ringclaw/cron/jobs.json` |
-| Heartbeat | ❌ | n/a (config-driven) | ❌ **ACTION blocks are NOT executed** | ✅ | `heartbeat.enabled` + `HEARTBEAT.md` |
+| WebSocket message | YES | YES | YES | YES | Chat allowlist + sender allowlist + handler checks |
+| HTTP API (`/api/send`, `/api/tasks`, `/api/notes`, `/api/events`, `/api/cards`) | NO | NO | NO | n/a | **API token + loopback Host only** (`api/auth.go`); see [API & Clients](./api-and-clients) |
+| Cron job | NO | job is created via `/cron add` (Layer 1); execution has no human sender | NO — **ACTION blocks are NOT executed**; reply is posted verbatim | YES | Job config in `~/.ringclaw/cron/jobs.json` |
+| Heartbeat | NO | n/a (config-driven) | NO — **ACTION blocks are NOT executed** | YES | `heartbeat.enabled` + `HEARTBEAT.md` |
 
 ::: danger API token equals machine operator
 Anyone with read access to `~/.ringclaw/api_token` **bypasses Layers
@@ -614,205 +80,89 @@ processes on the same host.
 ::: tip Chat allowlist is the outermost ring
 **Layer -1**: messages from chats **not** in `ringcentral.chat_ids`
 are dropped by the WebSocket monitor before Layer 0 even applies
-(`ringcentral/monitor.go:380-383`). If a message silently disappears,
+(`ringcentral/monitor.go`). If a message silently disappears,
 check the chat allowlist first — the log line reads
 `ignoring message from non-allowed chat`.
 :::
 
-### The three WebSocket-path layers
+## Permission Matrix
 
-RingClaw gates incoming WebSocket messages through three orthogonal
-layers. They compose bottom-up: a message must clear every applicable
-layer before it takes effect.
+The WebSocket message path is gated through three orthogonal layers
+that compose bottom-up. A message must clear every applicable layer
+before it takes effect.
 
-1. **Layer 1 — Chat command authorization**: who may trigger each slash command in each chat shape.
-2. **Layer 2 — AI-driven ACTION dispatch**: whether an AI-emitted `ACTION:` block may fan out (especially cross-chat).
-3. **Layer 3 — ACP session capabilities**: what an ACP agent can read, write, or execute inside a session.
+| Layer | Question it answers | Detail page |
+|---|---|---|
+| 0 | Can this sender drive the bot at all? | [Sender Allowlist](./sender-allowlist) |
+| 1 | Can this sender run this slash command? | [Command Authorization](./command-authorization) |
+| 2 | Can this AI-emitted ACTION fan out (especially cross-chat)? | [Cross-Chat Actions](./cross-chat-actions) |
+| 3 | What can the ACP session read, write, or execute? | [ACP Full-Access](./full-access) |
 
 ::: tip Full access only affects Layer 3
-The `/full-access` grant (and the static `full_access: true` config) only
-changes ACP **session mode**. It does not unlock any chat command — a
-non-owner still cannot use `/cwd` in a group, and `/full-access` itself
-is still DM-only. It also does not relax the Layer 2 cross-chat
-fail-closed notice.
+The `/full-access` grant (and the static `full_access: true` config)
+only changes ACP **session mode**. It does not unlock any chat
+command — a non-owner still cannot use `/cwd` in a group, and
+`/full-access` itself is still DM-only. It also does not relax the
+Layer 2 cross-chat fail-closed notice.
 :::
 
-**Layer 0 reminder** — every message first passes through the Phase 1
-trusted-sender allowlist, enforced **twice**
-([`ringcentral/monitor.go:395-403`](https://github.com/ringclaw/ringclaw/blob/main/ringcentral/monitor.go#L395)
+::: warning DM is the trust boundary, not "owner only"
+Layer 1's owner-only gate for privileged commands (`/cwd`, `/cron`,
+`/new`, `/reload`, summarize NL triggers) fires in **group chats**.
+In **bot DMs**, the gate applies only when a Private App is
+configured — in that case privileged commands are restricted to the
+Private App owner even in DM. Without a Private App, RingClaw has no
+way to tell "owner" from "another trusted sender in their own DM",
+so every trusted sender gets full privileged-command power in their
+own DM with the bot. If you list multiple people in
+`ringcentral.source_user_ids` without a Private App, you are
+trusting all of them equally — including with `/cron add`, which can
+keep running arbitrary prompts after the sender walks away.
+:::
+
+### Layer 0 reminder
+
+Every message first passes through the trusted-sender allowlist,
+enforced **twice**
+([`ringcentral/monitor.go`](https://github.com/ringclaw/ringclaw/blob/main/ringcentral/monitor.go)
 on the socket and
-[`messaging/handler.go:444-448`](https://github.com/ringclaw/ringclaw/blob/main/messaging/handler.go#L444)
-on the handler). Senders outside the allowlist are dropped before any
-layer below applies.
+[`messaging/handler.go`](https://github.com/ringclaw/ringclaw/blob/main/messaging/handler.go)
+on the handler). Senders outside the allowlist are dropped before
+any layer below applies.
 
 The Layer 0 set is the **union** of `ringcentral.source_user_ids`,
 the auto-injected Private App owner ID, and the destination chat's
 `ringcentral.chat_user_allow[<chatID>]` entry (when present).
 Authorize-mention approvals land in `chat_user_allow` — they widen
-Layer 0 only, never any of the layers below.
+Layer 0 only, never any of the layers below. See
+[Sender Allowlist](./sender-allowlist) for the full picture.
 
-::: warning DM is the trust boundary, not "owner only"
-Layer 1's owner-only gate for privileged commands (`/cwd`, `/cron`,
-`/new`, `/reload`, summarize NL triggers) fires in **group chats**.
-In **bot DMs**, the gate applies only when a Private App is configured
-— in that case privileged commands are restricted to the Private App
-owner even in DM. Without a Private App, RingClaw has no way to tell
-"owner" from "another trusted sender in their own DM", so every
-trusted sender gets full privileged-command power in their own DM
-with the bot. If you list multiple people in
-`ringcentral.source_user_ids` without a Private App, you are trusting
-all of them equally — including with `/cron add`, which can keep
-running arbitrary prompts after the sender walks away.
-:::
+## Configuration changes worth flagging at upgrade time
 
-### Layer 1 — Chat command authorization
+Operators upgrading from an old release should confirm the following
+before restarting:
 
-Column legend: ✅ allowed; ❌ blocked (bot replies with an explicit
-refusal or silently drops); ⚠️ allowed with an extra check.
-
-"Owner" means the Private App owner when one is configured (the true
-machine operator). The "Bot DM (non-owner trusted sender)" column only
-applies when `ringcentral.source_user_ids` lists more than one person;
-see the "DM is the trust boundary" warning above.
-
-| Command / Message Shape | Bot DM (owner) | Bot DM (other trusted sender, Private App configured) | Bot Group (owner) | Bot Group (others) | Gate |
-|---|---|---|---|---|---|
-| Plain text with no `/` prefix (→ default agent) | ✅ | ✅ | ✅ | ✅ | `handler.go:528-530` |
-| `/help` | ✅ | ✅ | ✅ | ✅ | `handler.go:491` |
-| `/info` / `/status` | ✅ | ✅ | ✅ | ✅ | `handler.go:475` |
-| `/chatinfo [id]` | ✅ | ✅ | ✅ | ✅ | `handler.go:505` |
-| `/task` / `/note` / `/event` / `/card` | ✅ | ✅ | ✅ | ✅ | `actions_commands.go:30` |
-| `/<agent> <msg>` (send / broadcast) | ✅ | ✅ | ✅ | ✅ | `handler.go:562` |
-| `/<agent>` (switch default agent) | ✅ | ✅ | ✅ | ❌ | `handler.go:537-539` |
-| `/new` / `/clear` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:248` |
-| `/cwd [path]` | ✅ ⚠️ | ❌ | ✅ ⚠️ | ❌ | `handler_commands.go:19` (allowlist + denylist) |
-| `/cron add\|list\|delete` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:254` |
-| `/reload` | ✅ | ❌ | ✅ | ❌ | `handler.go:462-496` + `handler_commands.go:257` |
-| Summarize (NL trigger, e.g. "总结", "summarize") | ✅ (needs Private App) | ❌ | ⚠️ configured group only | ❌ | `handler_summarize.go:57-82` + `handler_commands.go:245` |
-| Summarize without Private App | ❌ disabled | n/a | ❌ disabled | ❌ disabled | `handler_summarize.go:76` |
-| `/full-access status\|grant\|revoke` | ✅ ⚠️ | ❌ (owner-only, DM-only) | ❌ (DM-only) | ❌ (DM-only) | `handler_fullaccess.go:62-67` |
-| `/approval <id>` / `/approval deny <id>` | ✅ consumed; redirected to terminal (`ringclaw approval <id>`) — same CLI resolves `/full-access`, cross-chat, and authorize-mention challenges | ✅ consumed; redirected to terminal | ❌ refused with explanatory message | ❌ refused with explanatory message | `handler.go:603-628` + `oob/authorize.go:118-132` |
-| `/mem add [user\|chat\|global] <text>` | ✅ | ❌ | ✅ | ❌ | `handler_persona.go` + `handler_commands.go` privileged gate |
-| `/mem del [scope] [confirm]` | ✅ | ❌ | ✅ | ❌ | same as `/mem add`; two-phase confirmation |
-| `/mem show [scope]` | ✅ | ✅ | ✅ | ✅ | read-only, unprivileged |
-| `/persona` | ✅ | ✅ | ✅ | ✅ | read-only, unprivileged |
-
-Extra checks:
-
-- `/cwd` — the absolute path must land inside `agent_allow_workspace_list ∪ agent_workspace ∪ ~/.ringclaw/workspace` AND must not contain any of the denylisted directories (`.ssh`, `.gnupg`, `.ringclaw`, `.aws`, `.kube`, `.config/gcloud`). Both checks run regardless of full-access state.
-- `/full-access grant [duration]` — only activates after the owner replies `/approval <id>`. Challenge TTL 5 min, default grant 24 h, max 30 d.
-- `/approval` — any `/approval ...` message in the bot DM is consumed and redirected to the terminal CLI with instructions (`oob/authorize.go:118-132`). Approval requires running `ringclaw approval <id>` on the host machine. A `/approval ...` shape posted outside the bot DM is intercepted with an explicit refusal so the syntax never leaks into a default-agent prompt.
-- Summarize in group — only the group whose ID matches `ringcentral.group_summary_group_id`; cross-group / cross-person summarize refused (`handler_summarize.go:84-115`).
-- `/mem add` and `/mem del` — Layer 1 privileged (same gate as `/cron`). All memory file writes land strictly under `persona.memory_dir`; hostile chat/user IDs cannot escape the tree because IDs go through `SanitizeID` before being used as filenames. See [Configuration › persona](../guide/configuration.md#persona) for the scope layout.
-- `/mem del` without the trailing `confirm` token never clears memory; the first call prints the resolved file path, current size and a tail preview so the operator can verify they are targeting the right scope before re-sending with `confirm`. `/mem del confirm` does **not** reset agent sessions — the persona banner is rebuilt from disk on the next message, but in-flight sessions still hold the old memory in their context. Run `/new` after a clear if you want the live agent to drop the old context too.
-- **Cron / Heartbeat / HTTP API do NOT inject the persona banner.** These non-interactive entry points have no real chat or user context; the banner is only prepended to WebSocket user messages (`dispatchToAgent` and `broadcastToAgents`).
-
-### Layer 2 — AI-driven ACTION dispatch
-
-An `ACTION: NOTE|TASK|EVENT|CARD|MESSAGE ... END_ACTION` block embedded
-in the agent's reply is parsed by `ParseAgentActions` and executed by
-`ExecuteAgentActions` (`messaging/actions.go:166`). Gating is
-**independent of full-access**.
-
-**Typical triggers** (what a user types → what the agent may emit):
-
-```text
-User: "记个笔记：本周优先级 A/B/C"
-→ Agent reply includes:
-    ACTION: NOTE title=本周优先级
-    A. …
-    B. …
-    END_ACTION
-
-User: "创建一个任务交给 Alice：跟进 PR #42"
-→ ACTION: TASK subject=跟进 PR #42 assignee=Alice END_ACTION
-
-User: "把刚才的会议要点发消息告诉 David"
-→ ACTION: MESSAGE chatid=David
-    会议要点:
-    …
-    END_ACTION
-
-User: "这个讨论的摘要发到 #engineering 频道"
-→ ACTION: MESSAGE chatid=engineering
-    …
-    END_ACTION    # ← triggers the Layer 2 cross-chat fail-closed path
-```
-
-| Scenario | Behavior | Gate |
+| Setting | Where | Behavior to confirm |
 |---|---|---|
-| ACTION in the origin chat (any sender) | ✅ always allowed | `actions.go:166-310` |
-| `chatid=` override; requester is **not** on the trusted-sender allowlist | ⚠️ **OOB challenge issued** when OOB is configured (Private App + owner DM resolved): bot posts a context-rich challenge prompt to the owner DM (action type, requester label, origin / target chat names, optional Title / Subject / Assignee, body preview ≤200 chars, effect description, host commands); owner approves via `ringclaw approval <id>` on the host; on approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. | `actions.go:177-193`; `crossChatOOBChallenge` at `actions.go:401` |
-| `chatid=` override by owner; target = origin chat | ✅ allowed (same as row 1) | — |
-| `chatid=` override by owner; target = owner's own DM | ✅ allowed without audit notice | `actions.go:195` (guard) |
-| `chatid=` override by owner; target ≠ origin AND target ≠ owner DM | 🔒 **fail-closed**: bot first posts `[notice] <TYPE> by <requesterID> at <RFC3339>: origin=<id> target=<id>` to the owner DM; if the notice succeeds within `crossChatNoticeTimeout` (5 s) the action dispatches, otherwise it is **refused** with `Refused cross-chat <TYPE>: …` | `actions.go:195-203`; `announceCrossChatOrRefuse` at `actions.go:329-357` |
-| Owner cross-chat action, but OOB not configured (no owner DM resolved) | ❌ refused with `Refused cross-chat <TYPE>: no owner DM audit channel configured` | `actions.go:330-332` |
+| `ringcentral.source_user_ids` | `config.json` | Empty list + Private App = **owner-only** (auto-injected). Empty list + no Private App = **deny all** with startup error. See [Sender Allowlist](./sender-allowlist). |
+| `agent_workspace` | `config.json` | Continues to be the default cwd, AND is implicitly added to the cwd allowlist. See [Workspace Allowlist](./workspace-allowlist). |
+| `agent_allow_workspace_list` | `config.json` | Explicit list of directories that `/cwd` and `Agent.SetCwd` may target. Always merged with `~/.ringclaw/workspace` and (if set) `agent_workspace`. |
+| `agents.<name>.full_access` | `config.json` (per ACP agent) | `true` is **ignored** unless the top-level `full_access_ack: true` also appears; otherwise downgraded with a `WARN` log. See [ACP Full-Access](./full-access). |
+| `full_access_ack` | `config.json` (top-level) | `true` honors `full_access`, `false` or unset refuses. |
+| `ringcentral.allow_group_mention_authorize` | `config.json` (under `ringcentral`) | Off by default. When `true`, non-trusted `@bot` in an allowed group chat triggers an OOB approval challenge instead of a silent drop. Requires Private App + resolvable owner DM. |
+| `ringcentral.chat_user_allow` | `config.json` (under `ringcentral`) | Per-chat trusted-sender exception. Populated by the authorize-mention OOB flow on approval, or pre-seeded by hand. Independent of `allow_group_mention_authorize`. |
 
-### Layer 3 — ACP session capabilities (full-access toggle)
+The previously supported `RC_*` / `RINGCLAW_*` /
+`OPENCLAW_GATEWAY_*` env-var fallbacks have been **removed and are
+silently ignored**. All configuration lives in
+`~/.ringclaw/config.json`.
 
-Applies **only to ACP agents** (`agent/acp_agent.go`). HTTP and CLI
-agents do not expose a `session/set_mode` equivalent.
-
-The `full_access` toggle flips newly-created ACP sessions between
-`session/set_mode "default"` and `session/set_mode "full-access"`
-(`acp_agent.go:570-620`). The effective RingClaw-side gates are:
-
-| Capability | Default mode | Full-access mode | Gate |
-|---|---|---|---|
-| `session/set_mode` parameter | `"default"` | `"full-access"` | `acp_agent.go:570-620` |
-| `session/request_permission` callbacks from the agent | **Auto-allowed by RingClaw** (the client always replies with the first `"allow"` option) — RingClaw itself does not interactively gate MCP tool calls | Agent generally stops issuing `request_permission` under full-access mode | `acp_rpc.go:230-265` |
-| `fs/read_text_file` (ACP protocol) | ✅ allowed; no path check, no sandbox | ✅ allowed (unchanged) | `acp_terminal.go:420-463` |
-| `fs/write_text_file` (ACP protocol) | ✅ iff agent config `allow_write: true`; otherwise `write permission denied: allowWrite is false` | ✅ iff `allow_write: true` — **full-access does NOT override `allow_write`** | `acp_terminal.go:472-475` |
-| `terminal/create` (shell subprocess) | ✅ arbitrary command, arbitrary `cwd`, **no `allow_write` check, no path allowlist check** | ✅ same (unchanged) | `acp_terminal.go:295-315`, `acp_terminal.go:128-187` |
-| Agent-visible tool catalog | Whatever the ACP agent exposes in `default` mode (per-agent policy) | Whatever the ACP agent exposes in `full-access` mode | ACP-agent-specific |
-| Top-level `/cwd` allowlist + denylist | Applies to `/cwd` command and `Agent.SetCwd` initial cwd only | **Unchanged** — the allowlist never applies to agent-chosen paths inside tool calls | `handler_commands.go:19-98` |
-
-::: warning ACP Layer 3 invariants worth highlighting
-- **`allow_write: false` is not airtight.** It blocks the ACP protocol path (`fs/write_text_file`). It does **not** block the agent from shelling out via `terminal/create` to run `echo … > file`, `sed -i`, `git commit`, etc. Treat `allow_write` as a hint, not a sandbox.
-- **No per-call approval in RingClaw.** `handlePermissionRequest` auto-selects the first `allow` option. A stricter gate lives in the ACP agent itself (for example, Claude's own tool-approval logic), not in RingClaw. Moving from default → full-access does not flip a RingClaw-side gate on or off; it just changes which `session/set_mode` RingClaw asks the agent to adopt.
-- **`/cwd` allowlist ≠ file-access sandbox.** The allowlist constrains where the `/cwd` command may chdir the agent's starting working directory. An ACP agent can still read/write any file it has OS permission to touch, and can open terminals in any cwd it picks.
-- **Full-access is additive on TWO axes.** Either a static `full_access: true` + top-level `full_access_ack: true` in `config.json` (`acp_agent.go:246-252`), or a runtime `/full-access grant` → `/approval <id>` handshake in the owner DM (`handler_fullaccess.go`), will flip new sessions into full-access mode. Revoke / TTL expiry also **demotes every live session** via `DemoteAllACPFullAccess` (`acp_agent.go:703-728`); sessions whose demote call fails are dropped from the session map and rebuilt fresh on the next prompt.
-:::
-
-## Client Responsibilities
-
-| Role | Client | Why |
-|------|--------|-----|
-| WebSocket connection | Bot App | Bot token drives WS |
-| Send replies & placeholders | Bot App | Bot identity in all chats |
-| Read other chats & summarize | Private App (optional) | Bot cannot access private chats |
-| `/task`, `/note`, `/event` API | Private App if available, else Bot | Broader access with Private App |
-| ACTION block execution | Private App if available, else Bot | Cross-chat access needs Private App |
-
-## Bot App vs Private App Permissions
-
-The two client types have different RingCentral API permissions. Understanding this helps you decide whether to configure a Private App.
-
-**Bot App** receives the `TeamMessaging` permission automatically. **Private App** (REST API with JWT) can be granted `TeamMessaging` + `ReadAccounts`.
-
-| Feature | API Endpoint | Required Permission | Bot App | Private App |
-|---------|-------------|---------------------|---------|-------------|
-| Send / update / delete posts | `/team-messaging/v1/chats/{chatId}/posts` | TeamMessaging | YES | YES |
-| List / manage chats | `/team-messaging/v1/chats` | TeamMessaging | YES | YES |
-| Upload files | `/team-messaging/v1/files` | TeamMessaging | YES | YES |
-| Tasks CRUD | `/team-messaging/v1/tasks` | TeamMessaging | YES | YES |
-| Notes CRUD | `/team-messaging/v1/notes` | TeamMessaging | YES | YES |
-| Calendar Events CRUD | `/team-messaging/v1/events` | TeamMessaging | YES | YES |
-| Adaptive Cards CRUD | `/team-messaging/v1/adaptive-cards` | TeamMessaging | YES | YES |
-| Get person info | `/team-messaging/v1/persons/{id}` | TeamMessaging | YES | YES |
-| Create conversation (DM) | `/team-messaging/v1/conversations` | TeamMessaging | YES | YES |
-| Get own extension info | `/restapi/v1.0/account/~/extension/~` | (self-info) | YES | YES |
-| **Search company directory** | `/restapi/v1.0/account/~/directory/entries/search` | **ReadAccounts** | **NO** | YES |
-
-### Features That Require Private App
-
-| Feature | What happens without Private App |
-|---------|--------------------------------|
-| Summarize conversations | Disabled — bot cannot read other users' chats |
-| Name resolution in ACTION blocks (`chatid=John`, `assignee=Alice`) | Fails — cannot look up person by name |
-| Email-based `source_user_ids` (`alice@example.com`) | Ignored — cannot resolve email to user ID |
-| Cross-chat actions (create tasks/notes in other chats) | Limited to chats the bot is a member of |
-
-::: tip
-If you only need basic messaging and agent interaction, Bot App alone is sufficient. Add a Private App when you need summarization, name resolution, or cross-chat features.
+::: warning
+After upgrading, operators who relied on the legacy "empty
+`source_user_ids` = allow everyone" behavior will see the bot drop
+**every** incoming message until they either (a) configure a Private
+App (the owner is auto-trusted) or (b) populate
+`ringcentral.source_user_ids`. The startup log line
+`sender allowlist is empty: ...` is the canonical signal for this
+case.
 :::

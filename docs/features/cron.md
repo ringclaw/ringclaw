@@ -42,7 +42,7 @@ Jobs are persisted to `~/.ringclaw/cron/jobs.json` and survive restarts. Each jo
 
 - **`/cron add` is a privileged command.** It is subject to the same
   owner gate as `/cwd` and `/new`. See
-  [Security › Layer 1](../security/index.md#layer-1-chat-command-authorization)
+  [Security › Command Authorization](../security/command-authorization.md)
   for where it is allowed.
 - **Cron-triggered agent replies do NOT execute `ACTION:` blocks.**
   The scheduler posts the reply text verbatim — if the agent's output

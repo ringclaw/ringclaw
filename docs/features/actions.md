@@ -95,7 +95,7 @@ Actions may target a different chat via the `chatid=<id>` parameter.
   Expires in 5m.
   ```
 
-- **Owner-initiated cross-chat**: passes a **synchronous fail-closed audit notice** through the owner DM before dispatching — see [Security › Layer 2](../security/index.md#layer-2-ai-driven-action-dispatch) for the full gating rules.
+- **Owner-initiated cross-chat**: passes a **synchronous fail-closed audit notice** through the owner DM before dispatching — see [Security › Cross-Chat Actions](../security/cross-chat-actions.md) for the full gating rules.
 
 No configuration needed — the action prompt is injected automatically.
 

@@ -102,7 +102,7 @@ If `group_summary_group_id` is set, in-group summarize is enabled automatically.
 
 Find a user's numeric ID in RingClaw logs: `creatorID=XXXXXXXX` appears on every received message.
 
-`chat_user_allow` is a **per-chat** allowlist layered on top of `source_user_ids`. Pre-seed it by hand, or let the [authorize-mention OOB flow](../security/index.md#phase-2-authorize-mention-oob-flow-opt-in) populate it on operator approval. Approved entries are persisted to `config.json` (email preferred when resolvable).
+`chat_user_allow` is a **per-chat** allowlist layered on top of `source_user_ids`. Pre-seed it by hand, or let the [authorize-mention OOB flow](../security/sender-allowlist.md#authorize-mention-oob-flow) populate it on operator approval. Approved entries are persisted to `config.json` (email preferred when resolvable).
 
 ```json
 "ringcentral": {
