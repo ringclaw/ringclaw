@@ -86,6 +86,20 @@ func (h *Handler) AuthorizeMention(ctx context.Context, client, readClient *ring
 		return
 	}
 
+	// Defense-in-depth: never issue a self-challenge for the Private
+	// App owner. Monitor's Layer 0 sender check already admits the
+	// owner (auto-injected to the global trusted set), so reaching
+	// this path with post.CreatorID == owner indicates a bug or a
+	// hostile caller — fail closed instead of pushing a "user X
+	// requesting authorization in chat Y" prompt to X themselves.
+	if readClient != nil {
+		if owner := strings.TrimSpace(readClient.OwnerID()); owner != "" && owner == strings.TrimSpace(post.CreatorID) {
+			slog.Debug("authorize-mention: skipping self-challenge for owner",
+				"component", "handler", "chatID", post.GroupID, "userID", post.CreatorID)
+			return
+		}
+	}
+
 	key := authorizePendingKey(post.GroupID, post.CreatorID)
 	if !h.tryReservePending(key) {
 		slog.Debug("authorize-mention: pending challenge already exists, dropping duplicate",

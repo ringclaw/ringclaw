@@ -440,3 +440,42 @@ func TestPostCrossChatPrompt_RichContent(t *testing.T) {
 		}
 	}
 }
+
+// TestAuthorizeMention_OwnerSelfChallengeRefused verifies the
+// defense-in-depth guard added in PR2: when post.CreatorID equals the
+// readClient owner, the OOB challenge is NOT issued and no DM is
+// posted. Monitor's Layer 0 already admits the owner so this path is
+// only reachable through a bug or hostile direct caller; failing
+// closed prevents a "user X requesting authorization in chat Y"
+// prompt from being routed to X themselves.
+func TestAuthorizeMention_OwnerSelfChallengeRefused(t *testing.T) {
+	srv, bodies, mu := authorizeFakeServer(t,
+		ringcentral.PersonInfo{ID: "owner-1", FirstName: "Owen", LastName: "Owner", Email: "owen@example.com"},
+		ringcentral.Chat{ID: "group-1", Name: "Eng", Type: "Team"})
+	bot := newAuthorizeBotClient(srv.URL)
+	read := newAuthorizeBotClient(srv.URL)
+	read.SetOwnerID("owner-1")
+
+	h := newTestHandler()
+	mgr := oob.New(oob.Options{})
+	h.SetOOBManager(mgr, "dm-1")
+
+	post := ringcentral.Post{ID: "p1", GroupID: "group-1", CreatorID: "owner-1", Text: "@bot something"}
+	h.AuthorizeMention(context.Background(), bot, read, post)
+
+	// Allow any in-flight goroutine to settle, then assert nothing
+	// was posted and no challenge is pending.
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	got := append([]string(nil), (*bodies)...)
+	mu.Unlock()
+	if len(got) != 0 {
+		t.Fatalf("expected no DM posts for owner self-challenge, got %v", got)
+	}
+	if pending := mgr.Pending(); len(pending) != 0 {
+		t.Fatalf("expected no pending challenges, got %d", len(pending))
+	}
+	if h.isChatUserAllowed("group-1", "owner-1") {
+		t.Errorf("owner must not be added to chat_user_allow via this path")
+	}
+}
