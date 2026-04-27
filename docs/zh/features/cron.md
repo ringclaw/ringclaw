@@ -41,7 +41,7 @@ title: 定时任务
 ## 安全注意事项
 
 - **`/cron add` 是特权命令**，与 `/cwd`、`/new` 适用同一套 owner 门控。
-  允许范围见 [安全 › 第一层](../security/index.md#第一层-聊天命令授权)。
+  允许范围见 [安全 › 命令授权](../security/command-authorization.md)。
 - **Cron 触发的 Agent 回复不会执行 `ACTION:` 块。** 调度器把回复原样
   发回聊天——如果 Agent 输出含 `ACTION: NOTE/TASK/EVENT/CARD/MESSAGE`，
   它会以纯文本形式进入聊天，不会调用 RC API 执行。这是刻意设计：定时

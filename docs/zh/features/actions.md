@@ -95,7 +95,7 @@ ACTION 可通过 `chatid=<id>` 参数定向到其他聊天。
   Expires in 5m.
   ```
 
-- **owner 发起的跨聊天**：派发前经过**同步 fail-closed audit notice**（通过 owner 私聊确认）——完整门控规则见 [安全 › 第二层](../security/index.md#第二层-ai-驱动的-action-派发)。
+- **owner 发起的跨聊天**：派发前经过**同步 fail-closed audit notice**（通过 owner 私聊确认）——完整门控规则见 [安全 › 跨聊天 Action](../security/cross-chat-actions.md)。
 
 无需额外配置 — ACTION 提示词会自动注入。
 

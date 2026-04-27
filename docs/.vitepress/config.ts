@@ -63,6 +63,13 @@ export default withMermaid(defineConfig({
               text: '安全',
               items: [
                 { text: '安全概览', link: '/zh/security/' },
+                { text: '发送者白名单（第零层）', link: '/zh/security/sender-allowlist' },
+                { text: '命令授权（第一层）', link: '/zh/security/command-authorization' },
+                { text: '跨聊天 Action（第二层）', link: '/zh/security/cross-chat-actions' },
+                { text: 'ACP Full-Access（第三层）', link: '/zh/security/full-access' },
+                { text: '审批 CLI', link: '/zh/security/approval-cli' },
+                { text: '工作目录白名单', link: '/zh/security/workspace-allowlist' },
+                { text: 'API 与客户端', link: '/zh/security/api-and-clients' },
               ],
             },
           ],
