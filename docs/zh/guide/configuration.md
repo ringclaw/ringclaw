@@ -95,7 +95,7 @@ title: 配置
 | `default_agent` | string | 自动检测 | `agents` 中任意 key；为空时按优先级 `claude, codex, cursor, kimi, gemini, opencode, openclaw, pi, copilot, droid, iflow, kiro, qwen, augment` 自动选择。 |
 | `agent_workspace` | string | — | 绝对路径。Agent 启动时的默认工作目录，会被隐式加入 cwd 白名单。 |
 | `agent_allow_workspace_list` | string[] | `[]` | 绝对路径数组。`/cwd` 与 `Agent.SetCwd` 仅能切换到此白名单内的目录。`~/.ringclaw/workspace` 与 `agent_workspace` 会自动合并。 |
-| `api_addr` | string | `127.0.0.1:18010` | `host:port`。**切勿绑定 `0.0.0.0`**，详见[安全文档](../security/index.md)。 |
+| `api_addr` | string | `127.0.0.1:18010` | `host:port`。**切勿绑定 `0.0.0.0`**，详见 [安全 › API 与客户端](../security/api-and-clients.md)。 |
 | `log_level` | string | `info` | `debug`、`info`、`warn`（别名 `warning`）、`error`。 |
 | `log_format` | string | `text` | `text`、`json`、`color`。 |
 | `full_access_ack` | bool（可空） | 未设置 | `true` 允许 ACP agent 启用 `full_access: true`；`false` 明确拒绝；未设置按 `false` 处理。 |
@@ -113,7 +113,7 @@ title: 配置
 | `bot_token` | string | — | **必填。** RingCentral Public Bot 的访问 token。 |
 | `chat_ids` | string[] | `[]` | **必填。** Bot 允许接收消息的 chat ID 列表。 |
 | `source_user_ids` | string[] | `[]` | 受信任的发信人。可填数字 extension ID、邮箱、E.164 电话号码。空且已配置 Private App → 仅机主；空且未配置 Private App → 全部拒绝。 |
-| `allow_group_mention_authorize` | bool（可空） | `false` | 设为 `true` 时，非授信用户在允许的群聊中 `@bot` 不再静默丢弃，而是触发 OOB 审批 challenge 发到 owner 私聊。批准后该用户被加入 `chat_user_allow[<chatID>]`（仅作用于该群）并持久化到 `config.json`。需要 Private App + 可解析的 owner 私聊；否则启动时打 `ERROR` 日志并禁用该功能。详见 [安全 › Authorize-mention OOB 授权流程](../security/index.md#phase-2-authorize-mention-oob-授权流程-可选开关)。 |
+| `allow_group_mention_authorize` | bool（可空） | `false` | 设为 `true` 时，非授信用户在允许的群聊中 `@bot` 不再静默丢弃，而是触发 OOB 审批 challenge 发到 owner 私聊。批准后该用户被加入 `chat_user_allow[<chatID>]`（仅作用于该群）并持久化到 `config.json`。需要 Private App + 可解析的 owner 私聊；否则启动时打 `ERROR` 日志并禁用该功能。详见 [安全 › Authorize-mention OOB 流程](../security/sender-allowlist.md#authorize-mention-oob-流程)。 |
 | `chat_user_allow` | map[string][]string | `{}` | 在 `source_user_ids` 之上叠加的**按群**白名单：`{"<chatID>": ["alice@example.com", "3061708020"]}`。条目可为数字 extension ID、邮箱或 E.164 电话号码（启动时通过 Private App directory 解析为数字 ID）。authorize-mention 流程批准后会自动写入；运维也可手工预置。空 / 该群无该 key = 无按群例外。**仅放宽 Layer 0 发信人白名单**，不会解锁特权 Layer 1 命令（`/cwd`、`/cron`、`/new`、`/reload`、`/full-access`、总结自然语言触发）—— 这些仍要求 Private-App-owner 身份。 |
 | `group_mention_only` | bool（可空） | `true` | `true` 群聊中必须 `@bot`（Bot 私聊不受影响）；`false` 在允许的群聊中对所有消息响应。 |
 | `bot_mention_only` | bool（可空） | — | **已废弃**，`group_mention_only` 的旧名。仍会被读取（向后兼容），`Load()` 会把它迁移到新字段并打 `WARN`。未来版本将移除。 |

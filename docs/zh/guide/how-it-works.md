@@ -102,7 +102,7 @@ graph LR
 
 用户数字 ID 可以从 RingClaw 日志中获取：收到消息时会打印 `creatorID=XXXXXXXX`。
 
-`chat_user_allow` 是叠加在 `source_user_ids` 之上的**按群**白名单。可手工预置，也可让 [authorize-mention OOB 流程](../security/index.md#phase-2-authorize-mention-oob-授权流程-可选开关) 在运维批准后自动写入。批准的条目会持久化到 `config.json`（能解析到邮箱时优先存邮箱）。
+`chat_user_allow` 是叠加在 `source_user_ids` 之上的**按群**白名单。可手工预置，也可让 [authorize-mention OOB 流程](../security/sender-allowlist.md#authorize-mention-oob-流程) 在运维批准后自动写入。批准的条目会持久化到 `config.json`（能解析到邮箱时优先存邮箱）。
 
 ```json
 "ringcentral": {
@@ -114,4 +114,4 @@ graph LR
 }
 ```
 
-`chat_user_allow` **仅放宽该群的发信人白名单**。特权 Layer 1 命令（`/cwd`、`/cron`、`/new`、`/reload`、`/full-access`、总结自然语言触发）仍要求 Private-App-owner 身份——见 [安全 › 权限矩阵](../security/index.md#permission-matrix)。
+`chat_user_allow` **仅放宽该群的发信人白名单**。特权 Layer 1 命令（`/cwd`、`/cron`、`/new`、`/reload`、`/full-access`、总结自然语言触发）仍要求 Private-App-owner 身份——见 [安全 › 权限矩阵](../security/index.md#权限矩阵)。
