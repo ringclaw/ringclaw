@@ -71,20 +71,40 @@ Private-App-owner 身份。详见 [命令授权](./command-authorization)。
 ## Authorize-mention OOB 流程
 
 RingClaw 在与 `/full-access`、跨聊天 OOB challenge 共用一套
+::: danger 安全公告（v0.4.2）
+OOB 审批一旦通过，被批准的用户在授权群聊中获得 bot 的**完整
+agent 能力**——包括文件系统访问（`List`、`Read`、`Write`）、
+终端命令（`Bash`）、外部 HTTP——通过 agent 工具调用通道实现。
+v0.5.0 之前 ringclaw 没有按发信者粒度的能力门控。
+
+**v0.4.2 紧急止血：**
+
+- 默认值**翻回 OFF**（v0.4.1 默认开启的改动撤回）。要启用必
+  须显式设置 `ringcentral.allow_group_mention_authorize: true`。
+- `chat_user_allow` 在**每次启动时强制清空**并打 ERROR 日志。
+  v0.4.1 OOB 审批留下的旧条目必须由运维重新评估后手工添加。
+- `source_user_ids` 不会被清空，但同样存在能力暴露面问题——
+  升级前请审查该列表。
+
+**v0.5.0（开发中）** 引入受限 agent 后端：非 owner 发信人会被
+路由到独立的 Droid 进程，能力被限制为文字回复 + RingCentral
+`ACTION:MESSAGE / TASK / NOTE / EVENT`，无文件系统、无终端、
+无外部 HTTP。
+:::
+
 challenge / 主机审批基础设施之上叠加了一条独立 OOB 入口，让
 运维可以**按群**临时把非授信用户加入信任范围而无需重启或手工
 编辑 `config.json`。开关字段是
 `ringcentral.allow_group_mention_authorize`：
 
-- **未设置**（v0.4.1 起的默认）：功能**开启**。非授信群聊
-  `@bot` 会在 owner 私聊里出现 `/approval` 审批提示。要求运行
-  时存在 Private App + 已解析的 owner 私聊；任一缺失则启动时
-  打一条 INFO 日志，回退到旧的静默丢弃。
-- **`true`**：功能开启，行为与默认完全一致。唯一差别在启动日
-  志：缺少 Private App 时按 ERROR 输出（运维显式开启了功能但
-  运行时无法投递），而非 INFO。
-- **`false`**：功能关闭。非授信 `@bot` 静默丢弃，保留 v0.4.1
-  之前的行为。希望只用第零层的部署应该显式设为 false。
+- **未设置**（v0.4.2 起的默认）：功能**关闭**。非授信群聊
+  `@bot` 静默丢弃——与 v0.4.0 行为一致。
+- **`true`**：功能开启。非授信群聊 `@bot` 会在 owner 私聊里
+  弹出 `/approval` 审批提示。要求运行时存在 Private App + 已
+  解析的 owner 私聊；缺失时启动时打 ERROR 日志并禁用功能。
+  ringclaw 还会在启动时打一条 WARN 提醒运维：被批准的用户当
+  前会获得 agent 完整能力。
+- **`false`**：功能关闭，等同未设置。
 
 触发条件很窄：用户**不在**全局 `source_user_ids` 白名单，**也
 不在**目标聊天的 `chat_user_allow` 条目中，并且在允许的群聊里
@@ -130,9 +150,17 @@ sequenceDiagram
 - **仅按群作用域。** 授权落在 `chat_user_allow[<chatID>]`，绝
   不会写入全局 `source_user_ids`。在群 A 批准的用户不会因此在
   群 B 也被信任。
-- **特权命令仍未解锁。** `chat_user_allow` 只放宽第零层。非
-  owner 的特权第一层命令仍要求 Private-App-owner 身份。详见
-  [命令授权](./command-authorization)。
+- **特权第一层命令仍未解锁。** `chat_user_allow` 只放宽第零
+  层。非 owner 的特权第一层命令仍要求 Private-App-owner 身
+  份。详见 [命令授权](./command-authorization)。
+
+::: warning 第二层（agent 工具调用）实际上被解锁
+被列入的用户可以像任何 trusted sender 一样驱动 AI agent，意味
+着他们可以请 agent 调用文件系统 / 终端 / Web 工具。这些调用
+以 bot 运维者的权限运行在主机上。在 v0.5.0 受限后端上线之前，
+请把 `chat_user_allow` 一条记录视为"在该群里把 shell 交给该用
+户"。
+:::
 - **Pending dedupe。** 同一 `(chatID, userID)` 在 challenge TTL
   内同时只能存在一个 pending challenge。批准 / 拒绝 / 过期 /
   prompt 发送失败任一收尾路径都会释放这把锁。
@@ -169,10 +197,11 @@ sequenceDiagram
 
 | 条件 | 行为 |
 |---|---|
-| `allow_group_mention_authorize` 未设置（v0.4.1 起的默认） | 功能开启，非授信 `@bot` 在 owner 私聊弹出审批 prompt。 |
-| `allow_group_mention_authorize: false` | 功能关闭，非授信 `@bot` 静默丢弃（v0.4.1 之前的行为）。 |
-| `allow_group_mention_authorize: true` | 功能开启（与默认一致）。唯一差别：启动时缺 Private App 按 ERROR 而不是 INFO 记录。 |
-| 未配置 Private App（解析不到 owner 私聊） | 启动时禁用功能；显式 `true` → ERROR，未设置 → INFO；都回退到静默丢弃。 |
+| `allow_group_mention_authorize` 未设置（v0.4.2 起的默认） | 功能关闭，非授信 `@bot` 静默丢弃（v0.4.0 基线）。 |
+| `allow_group_mention_authorize: false` | 显式关闭，行为与未设置一致。 |
+| `allow_group_mention_authorize: true` | 显式开启。ringclaw 启动时打一条 WARN 提醒运维：被批准的用户获得 agent 完整能力。 |
+| Private App 未配置（owner 私聊不可解析） | 启动时禁用功能并打 ERROR 日志；非授信 `@bot` 静默丢弃。 |
+| 磁盘上残留的 `chat_user_allow` 条目（v0.4.1 遗留） | 启动时强制清空并打 ERROR 日志，运维必须重新评估后手工添加。 |
 | 运行时 owner 私聊尚未解析 | 命中竞争窗口的那一条消息丢弃并打 `WARN authorize-mention: OOB or owner DM unconfigured; dropping`；私聊解析完成后后续消息正常。 |
 | 运维拒绝 challenge | 释放 pending 锁；owner 私聊收到通知。`(chat, user)` 进入 24 小时冷却——期间再 `@bot` 会被静默丢弃。 |
 | Challenge 过期（5 分钟 TTL） | 释放 pending 锁；owner 私聊收到过期通知。同样进入 24 小时冷却。 |

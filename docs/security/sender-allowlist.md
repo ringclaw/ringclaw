@@ -79,6 +79,31 @@ identity. See [Command Authorization](./command-authorization).
 
 ## Authorize-mention OOB flow
 
+::: danger SECURITY ADVISORY (v0.4.2)
+The OOB-approval flow gives the approved user the bot's **full
+agent capability** in their authorized chats — including
+filesystem access (`List`, `Read`, `Write`), terminal commands
+(`Bash`), and external HTTP — through the agent tool-call channel.
+ringclaw has no per-sender capability gating before v0.5.0.
+
+**v0.4.2 mitigations:**
+
+- The default is reverted to **OFF** (the v0.4.1 default-on flip is
+  withdrawn). Set `ringcentral.allow_group_mention_authorize: true`
+  explicitly to enable.
+- `chat_user_allow` is **force-cleared at every startup** with a
+  loud ERROR log. Any pre-existing entries (including those left by
+  a v0.4.1 OOB approval) must be re-added by hand.
+- `source_user_ids` is **not** cleared, but those users have the
+  same capability surface — review your list before upgrading.
+
+**v0.5.0 (in progress)** introduces a restricted agent backend:
+non-owner senders will be routed to a separate Droid process whose
+capabilities are limited to text replies plus RingCentral
+`ACTION:MESSAGE / TASK / NOTE / EVENT` blocks. No filesystem, no
+terminal, no external HTTP.
+:::
+
 A separate OOB surface, layered on the same challenge /
 terminal-approval infrastructure as `/full-access` and the
 non-owner cross-chat ACTION challenge, lets operators authorize
@@ -86,18 +111,16 @@ non-owner cross-chat ACTION challenge, lets operators authorize
 `config.json`. The feature is controlled by
 `ringcentral.allow_group_mention_authorize`:
 
-- **Unset** (default since v0.4.1): feature **on**. Non-trusted
-  group `@bot` mentions surface as a `/approval` prompt in the
-  owner DM. Requires a Private App + resolved owner DM at runtime;
-  if either is missing, ringclaw logs a single INFO line at startup
-  and falls back to the legacy silent-drop behavior.
-- **`true`**: feature on, identical to the default. The only
-  difference is the startup log: a missing Private App is logged at
-  ERROR (operator opted in but the runtime cannot deliver) instead
-  of INFO.
-- **`false`**: feature off. Non-trusted `@bot` is silently dropped,
-  preserving the pre-v0.4.1 behavior. Set this when you want a
-  Layer-0-only deployment.
+- **Unset** (default since v0.4.2): feature **off**. Non-trusted
+  group `@bot` mentions are silently dropped — same as the v0.4.0
+  baseline.
+- **`true`**: feature on. Non-trusted group `@bot` mentions
+  surface as a `/approval` prompt in the owner DM. Requires a
+  Private App + resolved owner DM at runtime; otherwise the
+  feature is disabled at startup with an ERROR log. ringclaw also
+  emits a startup WARN reminding operators that approved users
+  currently get full agent capability.
+- **`false`**: feature off, explicitly. Same behavior as unset.
 
 The trigger is narrow: a user who is **not** on the global
 `source_user_ids` allowlist and **not** in the destination chat's
@@ -147,10 +170,19 @@ sequenceDiagram
   `chat_user_allow[<chatID>]`, never in the global
   `source_user_ids`. Approving a user in chat A does not authorize
   them in chat B.
-- **Privileged commands NOT unlocked.** `chat_user_allow` only
-  widens Layer 0. Non-owner privileged Layer 1 commands still
+- **Privileged Layer 1 commands NOT unlocked.** `chat_user_allow`
+  only widens Layer 0. Non-owner privileged Layer 1 commands still
   require Private-App-owner identity. See
   [Command Authorization](./command-authorization).
+
+::: warning Layer 2 (agent tool calls) IS effectively unlocked
+Listed users can drive the AI agent like any trusted sender, which
+means they can request the agent to call filesystem / terminal /
+web tools. Those calls run with the bot operator's permissions on
+the host machine. Until v0.5.0's restricted backend ships, treat a
+`chat_user_allow` entry as if you handed the user shell access in
+that chat.
+:::
 - **Pending dedupe.** A pending challenge for a `(chatID, userID)`
   pair blocks new challenges from the same pair for the challenge
   TTL. The pending lock is released on approve / deny / expire /
@@ -195,10 +227,11 @@ sequenceDiagram
 
 | Condition | Behavior |
 |---|---|
-| `allow_group_mention_authorize` unset (default since v0.4.1) | Feature on. Non-trusted `@bot` issues a `/approval` prompt to the owner DM. |
-| `allow_group_mention_authorize: false` | Feature off. Non-trusted `@bot` falls back to silent drop (pre-v0.4.1 behavior). |
-| `allow_group_mention_authorize: true` | Feature on (same as default). The only difference is a missing Private App at startup is logged at ERROR rather than INFO. |
-| Private App not configured (no owner DM resolvable) | Feature disabled at startup. ERROR if `allow_group_mention_authorize: true`, INFO if defaulted. Either way, falls back to silent drop. |
+| `allow_group_mention_authorize` unset (default since v0.4.2) | Feature off. Non-trusted `@bot` is silently dropped (v0.4.0-style baseline). |
+| `allow_group_mention_authorize: false` | Feature off, explicitly. Same as unset. |
+| `allow_group_mention_authorize: true` | Feature on. ringclaw emits a startup WARN reminding the operator that approved users gain full agent capability. |
+| Private App not configured (no owner DM resolvable) | Feature disabled at startup with ERROR log; falls back to silent drop. |
+| Existing `chat_user_allow` entries on disk (v0.4.1 leftover) | Force-cleared at startup with ERROR log; operator must re-add by hand after re-evaluating. |
 | Owner DM not yet resolved at runtime | The single message that hits this race is dropped with `WARN authorize-mention: OOB or owner DM unconfigured; dropping`. Subsequent messages succeed once the DM resolves. |
 | Owner denies the challenge | Pending lock released; owner DM notified. The `(chat, user)` pair enters a 24h cooldown — re-mentions drop silently until the window elapses. |
 | Challenge expires (5 min TTL) | Pending lock released; owner DM notified. Same 24h cooldown as deny. |

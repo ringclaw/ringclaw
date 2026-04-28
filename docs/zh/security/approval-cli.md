@@ -53,7 +53,7 @@ Challenge 的 `intent` 字段在审计日志中区分类型：
 |---|---|---|---|
 | `/full-access` 授权 | `grant ACP full-access for <duration>` | Owner 在 bot 私聊中发送 `/full-access grant` | [ACP Full-Access](./full-access) |
 | 非 owner 跨聊天 ACTION | `cross-chat <TYPE>` | AI 为非授信发起者生成 `ACTION: ... chatid=<other>` | [跨聊天 Action](./cross-chat-actions) |
-| Authorize-mention | `authorize user <userID> in chat <chatID>` | 非授信用户在允许群聊中 `@bot`（v0.4.1 起默认开启；可通过 `allow_group_mention_authorize: false` 关闭） | [发送者白名单](./sender-allowlist#authorize-mention-oob-流程) |
+| Authorize-mention | `authorize user <userID> in chat <chatID>` | 非授信用户在允许群聊中 `@bot`（v0.4.2 起默认关闭；通过 `allow_group_mention_authorize: true` 显式开启） | [发送者白名单](./sender-allowlist#authorize-mention-oob-流程) |
 
 ## 生命周期
 

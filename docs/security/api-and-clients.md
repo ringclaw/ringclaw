@@ -105,7 +105,7 @@ App.
 | Email-based `source_user_ids` (`alice@example.com`) | Ignored — cannot resolve email to user ID |
 | Phone-number-based `source_user_ids` (`+15551234567`) | Ignored — cannot resolve phone to user ID |
 | Cross-chat actions (create tasks/notes in other chats) | Limited to chats the bot is a member of |
-| Authorize-mention OOB flow (`allow_group_mention_authorize`) | Disabled at startup. Logs `ERROR ...` when explicitly opted in (`allow_group_mention_authorize: true`); logs `INFO ...` when defaulted on (v0.4.1+). Either way, non-trusted `@bot` falls back to silent drop. |
+| Authorize-mention OOB flow (`allow_group_mention_authorize`) | Off by default in v0.4.2. When explicitly opted in (`true`) but no Private App is configured, disabled at startup with an ERROR log. Non-trusted `@bot` falls back to silent drop. |
 | Owner-only Layer 1 gate in bot DMs | Falls back to "any trusted sender" — see [Command Authorization](./command-authorization) |
 
 ::: tip

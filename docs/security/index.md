@@ -149,8 +149,8 @@ before restarting:
 | `agent_allow_workspace_list` | `config.json` | Explicit list of directories that `/cwd` and `Agent.SetCwd` may target. Always merged with `~/.ringclaw/workspace` and (if set) `agent_workspace`. |
 | `agents.<name>.full_access` | `config.json` (per ACP agent) | `true` is **ignored** unless the top-level `full_access_ack: true` also appears; otherwise downgraded with a `WARN` log. See [ACP Full-Access](./full-access). |
 | `full_access_ack` | `config.json` (top-level) | `true` honors `full_access`, `false` or unset refuses. |
-| `ringcentral.allow_group_mention_authorize` | `config.json` (under `ringcentral`) | **On by default since v0.4.1** (unset = on). Non-trusted `@bot` in an allowed group chat triggers an OOB approval challenge instead of a silent drop. Set to `false` for legacy silent-drop behavior. After deny / expire, the same `(chat, user)` pair is silenced for 24 h. Requires Private App + resolvable owner DM. |
-| `ringcentral.chat_user_allow` | `config.json` (under `ringcentral`) | Per-chat trusted-sender exception. Populated by the authorize-mention OOB flow on approval, or pre-seeded by hand. Independent of `allow_group_mention_authorize`. |
+| `ringcentral.allow_group_mention_authorize` | `config.json` (under `ringcentral`) | **Off by default since v0.4.2** (the v0.4.1 default-on flip was reverted as a security stop-gap). Set to `true` explicitly to enable. After deny / expire, the same `(chat, user)` pair is silenced for 24 h. Requires Private App + resolvable owner DM. See [Sender Allowlist › SECURITY ADVISORY](./sender-allowlist#authorize-mention-oob-flow). |
+| `ringcentral.chat_user_allow` | `config.json` (under `ringcentral`) | Per-chat trusted-sender exception. **v0.4.2 force-clears this map at startup** with an ERROR log because listed users gain the bot's full agent capability (FS / terminal / HTTP) until v0.5.0's restricted backend ships. Operators must re-add by hand after re-evaluating. |
 
 The previously supported `RC_*` / `RINGCLAW_*` /
 `OPENCLAW_GATEWAY_*` env-var fallbacks have been **removed and are
