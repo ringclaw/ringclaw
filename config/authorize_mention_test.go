@@ -3,24 +3,47 @@ package config
 import "testing"
 
 func TestRCConfig_IsAuthorizeMentionEnabled(t *testing.T) {
-	t.Run("nil pointer defaults to disabled", func(t *testing.T) {
+	t.Run("nil pointer defaults to enabled in v0.5+", func(t *testing.T) {
 		var rc RCConfig
-		if rc.IsAuthorizeMentionEnabled() {
-			t.Fatalf("zero-value RCConfig must report disabled")
+		if !rc.IsAuthorizeMentionEnabled() {
+			t.Fatalf("zero-value RCConfig must report enabled (default flipped in v0.5)")
 		}
 	})
-	t.Run("explicit false", func(t *testing.T) {
+	t.Run("explicit false disables", func(t *testing.T) {
 		f := false
 		rc := RCConfig{AllowGroupMentionAuthorize: &f}
 		if rc.IsAuthorizeMentionEnabled() {
 			t.Fatalf("AllowGroupMentionAuthorize=false must report disabled")
 		}
 	})
-	t.Run("explicit true", func(t *testing.T) {
+	t.Run("explicit true enables", func(t *testing.T) {
 		tr := true
 		rc := RCConfig{AllowGroupMentionAuthorize: &tr}
 		if !rc.IsAuthorizeMentionEnabled() {
 			t.Fatalf("AllowGroupMentionAuthorize=true must report enabled")
+		}
+	})
+}
+
+func TestRCConfig_IsAuthorizeMentionExplicit(t *testing.T) {
+	t.Run("nil pointer is implicit", func(t *testing.T) {
+		var rc RCConfig
+		if rc.IsAuthorizeMentionExplicit() {
+			t.Fatalf("nil field must report not explicit")
+		}
+	})
+	t.Run("explicit false is explicit", func(t *testing.T) {
+		f := false
+		rc := RCConfig{AllowGroupMentionAuthorize: &f}
+		if !rc.IsAuthorizeMentionExplicit() {
+			t.Fatalf("explicit false must report explicit")
+		}
+	})
+	t.Run("explicit true is explicit", func(t *testing.T) {
+		tr := true
+		rc := RCConfig{AllowGroupMentionAuthorize: &tr}
+		if !rc.IsAuthorizeMentionExplicit() {
+			t.Fatalf("explicit true must report explicit")
 		}
 	})
 }

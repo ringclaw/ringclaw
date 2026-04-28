@@ -131,7 +131,7 @@ authorize-mention 批准的用户写入 `chat_user_allow`——它**只放宽
 | `agent_allow_workspace_list` | `config.json` | 显式列出 `/cwd` 与 `Agent.SetCwd` 可以切换到的目录。始终与 `~/.ringclaw/workspace`（以及 `agent_workspace`，若有）合并。 |
 | `agents.<name>.full_access` | `config.json`（每个 ACP agent） | `true` 仅当顶层同时有 `full_access_ack: true` 才生效；否则降级并打 `WARN` 日志。详见 [ACP Full-Access](./full-access)。 |
 | `full_access_ack` | `config.json`（顶层） | `true` 才会真正接受 `full_access`，`false` 或省略均拒绝。 |
-| `ringcentral.allow_group_mention_authorize` | `config.json`（在 `ringcentral` 下） | 默认关闭。设为 `true` 后，非授信用户在允许群聊里 `@bot` 不再静默丢弃，而是触发 OOB 审批 challenge 发到 owner 私聊。需要 Private App + 可解析的 owner 私聊。 |
+| `ringcentral.allow_group_mention_authorize` | `config.json`（在 `ringcentral` 下） | **v0.5.0 起默认开启**（未设置即开启）。非授信用户在允许群聊里 `@bot` 会触发 OOB 审批 challenge 而非静默丢弃。设为 `false` 保留旧的静默丢弃行为。拒绝 / 过期后，同一 `(chat, user)` 进入 24 小时冷却期。需要 Private App + 可解析的 owner 私聊。 |
 | `ringcentral.chat_user_allow` | `config.json`（在 `ringcentral` 下） | 按群叠加的发送者白名单。authorize-mention 批准时自动写入，也可手工预置。与 `allow_group_mention_authorize` 互相独立。 |
 
 历史上支持的 `RC_*` / `RINGCLAW_*` / `OPENCLAW_GATEWAY_*` 环境

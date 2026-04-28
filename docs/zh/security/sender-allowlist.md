@@ -73,9 +73,18 @@ Private-App-owner 身份。详见 [命令授权](./command-authorization)。
 RingClaw 在与 `/full-access`、跨聊天 OOB challenge 共用一套
 challenge / 主机审批基础设施之上叠加了一条独立 OOB 入口，让
 运维可以**按群**临时把非授信用户加入信任范围而无需重启或手工
-编辑 `config.json`。它由单一开关
-（`ringcentral.allow_group_mention_authorize: true`）显式开启，
-默认**关闭**——不开启时行为与之前完全一致。
+编辑 `config.json`。开关字段是
+`ringcentral.allow_group_mention_authorize`：
+
+- **未设置**（v0.5.0 起的默认）：功能**开启**。非授信群聊
+  `@bot` 会在 owner 私聊里出现 `/approval` 审批提示。要求运行
+  时存在 Private App + 已解析的 owner 私聊；任一缺失则启动时
+  打一条 INFO 日志，回退到旧的静默丢弃。
+- **`true`**：功能开启，行为与默认完全一致。唯一差别在启动日
+  志：缺少 Private App 时按 ERROR 输出（运维显式开启了功能但
+  运行时无法投递），而非 INFO。
+- **`false`**：功能关闭。非授信 `@bot` 静默丢弃，保留 v0.5
+  之前的行为。希望只用第零层的部署应该显式设为 false。
 
 触发条件很窄：用户**不在**全局 `source_user_ids` 白名单，**也
 不在**目标聊天的 `chat_user_allow` 条目中，并且在允许的群聊里
@@ -126,8 +135,16 @@ sequenceDiagram
   [命令授权](./command-authorization)。
 - **Pending dedupe。** 同一 `(chatID, userID)` 在 challenge TTL
   内同时只能存在一个 pending challenge。批准 / 拒绝 / 过期 /
-  prompt 发送失败任一收尾路径都会释放这把锁，用户下次 `@bot`
-  可重新发起。
+  prompt 发送失败任一收尾路径都会释放这把锁。
+- **24 小时冷却（v0.5.0+）。** challenge 走完拒绝或过期路径
+  后，同一 `(chatID, userID)` 进入 24 小时静默期：期间该用户
+  在该群再次 `@bot` 会被直接丢弃，不再向 owner 私聊投递新的
+  审批提示。这能避免一个吵闹或恶意的非授信用户反复 `@bot` 把
+  owner 私聊灌爆。批准路径**不**写冷却（用户已通过
+  `chat_user_allow` 信任），瞬时错误（如 owner 私聊发送失败）
+  也**不**写冷却，让运维下次有机会再处理。冷却状态仅存在内存
+  中，进程重启会清空——这是可以接受的，因为重启本就是运维主
+  动操作。
 - **持久化是 best-effort。** 批准时同步更新 monitor + handler
   的内存白名单，再触发 `config.json` Save。Save 失败时打
   `ERROR authorize-mention: persist failed`，本进程内仍然信任，
@@ -152,12 +169,14 @@ sequenceDiagram
 
 | 条件 | 行为 |
 |---|---|
-| `allow_group_mention_authorize` 未设 / `false` | 功能关闭——非授信 `@bot` 回退为旧的静默丢弃。 |
-| 未配置 Private App（解析不到 owner 私聊） | 启动时打 `ERROR allow_group_mention_authorize requires Private App + resolved owner DM; feature disabled` 并禁用功能；保留旧的静默丢弃。 |
+| `allow_group_mention_authorize` 未设置（v0.5.0 起的默认） | 功能开启，非授信 `@bot` 在 owner 私聊弹出审批 prompt。 |
+| `allow_group_mention_authorize: false` | 功能关闭，非授信 `@bot` 静默丢弃（v0.5 之前的行为）。 |
+| `allow_group_mention_authorize: true` | 功能开启（与默认一致）。唯一差别：启动时缺 Private App 按 ERROR 而不是 INFO 记录。 |
+| 未配置 Private App（解析不到 owner 私聊） | 启动时禁用功能；显式 `true` → ERROR，未设置 → INFO；都回退到静默丢弃。 |
 | 运行时 owner 私聊尚未解析 | 命中竞争窗口的那一条消息丢弃并打 `WARN authorize-mention: OOB or owner DM unconfigured; dropping`；私聊解析完成后后续消息正常。 |
-| 运维拒绝 challenge | 释放 pending 锁；challenge 立刻终结；owner 私聊收到通知。下次 `@bot` 重新发起 challenge。 |
-| Challenge 过期（5 分钟 TTL） | 释放 pending 锁；owner 私聊收到过期通知。下次 `@bot` 重新发起 challenge。 |
-| Owner 私聊发送失败（RC 瞬时错误） | challenge 自动 deny；释放 pending 锁。下次 `@bot` 重新尝试。 |
+| 运维拒绝 challenge | 释放 pending 锁；owner 私聊收到通知。`(chat, user)` 进入 24 小时冷却——期间再 `@bot` 会被静默丢弃。 |
+| Challenge 过期（5 分钟 TTL） | 释放 pending 锁；owner 私聊收到过期通知。同样进入 24 小时冷却。 |
+| Owner 私聊发送失败（RC 瞬时错误） | challenge 自动 deny；释放 pending 锁。**不**写冷却，下次 `@bot` 重新尝试。 |
 | 持久化 callback 失败（如配置文件写错） | 内存中的授权仍然有效；打 `ERROR authorize-mention: persist failed`。重启后用户重新被锁。 |
 
 ### 不开启 OOB 直接预置授权
@@ -187,7 +206,8 @@ challenge。两个字段互相独立。
 | Authorize-mention 路由（monitor） | `INFO authorize-mention: routing non-trusted group mention`（含 `chatID`、`userID`） | 确认 WebSocket monitor 把非授信 `@bot` 交给 OOB 流程而非丢弃。 |
 | Authorize-mention challenge 发起 | `INFO oob: challenge issued`（`intent` 以 `authorize user … in chat …` 开头） | 与 `/full-access`、跨聊天 OOB 共用同一行；`intent` 字段区分类型。 |
 | 授权完成 | `INFO authorize-mention: granted`（含 `challengeID`、`chatID`、`userID`、`identifier`） | 在 `applyAuthorize` 更新内存白名单并持久化后触发。 |
-| 拒绝 / 过期 | `INFO authorize-mention: denied` 或 `INFO authorize-mention: challenge expired` | granted 行的对偶。pending dedupe 锁同时释放。 |
+| 拒绝 / 过期 | `INFO authorize-mention: denied` 或 `INFO authorize-mention: challenge expired`（含 `cooldown=24h`） | granted 行的对偶。pending dedupe 锁释放，并写入 24 小时静默窗口。 |
+| 命中冷却 | `DEBUG authorize-mention: in cooldown after recent deny/expire, dropping` | `(chat, user)` 在 24 小时静默期内的再次 `@bot` 会被静默丢弃，不再打扰 owner。 |
 | 持久化失败 | `ERROR authorize-mention: persist failed`（含 `error`） | 内存授权成功但写 `config.json` 失败——本进程内仍生效，重启会丢。 |
 | Prompt 发送失败 | `ERROR authorize-mention: post prompt failed`（含 `error`） | Owner 私聊发送失败；challenge 自动 deny，pending 锁释放，用户可重试。 |
 | 没有可用邮箱 | `WARN authorize-mention: no email available, persisting numeric ID` | 目录解析无邮箱；改存数字 extension ID（仍按群作用域）。 |

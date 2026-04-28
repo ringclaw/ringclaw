@@ -58,7 +58,7 @@ audit log:
 |---|---|---|---|
 | `/full-access` grant | `grant ACP full-access for <duration>` | Owner sends `/full-access grant` in bot DM | [ACP Full-Access](./full-access) |
 | Non-owner cross-chat ACTION | `cross-chat <TYPE>` | AI emits `ACTION: ... chatid=<other>` for a non-trusted requester | [Cross-Chat Actions](./cross-chat-actions) |
-| Authorize-mention | `authorize user <userID> in chat <chatID>` | Non-trusted user `@bot` in an allowed group chat (with `allow_group_mention_authorize: true`) | [Sender Allowlist](./sender-allowlist#authorize-mention-oob-flow) |
+| Authorize-mention | `authorize user <userID> in chat <chatID>` | Non-trusted user `@bot` in an allowed group chat (default since v0.5.0; set `allow_group_mention_authorize: false` to disable) | [Sender Allowlist](./sender-allowlist#authorize-mention-oob-flow) |
 
 ## Lifecycle
 

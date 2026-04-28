@@ -479,3 +479,214 @@ func TestAuthorizeMention_OwnerSelfChallengeRefused(t *testing.T) {
 		t.Errorf("owner must not be added to chat_user_allow via this path")
 	}
 }
+
+// withShortAuthorizeCooldown swaps authorizeCooldownTTL for the
+// duration of a test so cooldown timing logic can be exercised
+// quickly. Returns the test's t.Cleanup closure restoring the
+// original value.
+func withShortAuthorizeCooldown(t *testing.T, ttl time.Duration) {
+	t.Helper()
+	orig := authorizeCooldownTTL
+	authorizeCooldownTTL = ttl
+	t.Cleanup(func() { authorizeCooldownTTL = orig })
+}
+
+// TestAuthorizeMention_CooldownAfterDeny_DropsSilently confirms that
+// once a (chat, user) pair has been denied, a follow-up @mention
+// from the same user in the same chat is dropped with no new prompt
+// posted to the owner DM (anti-spam, Plan C in v0.5.0).
+func TestAuthorizeMention_CooldownAfterDeny_DropsSilently(t *testing.T) {
+	withShortAuthorizeCooldown(t, time.Hour) // long enough that nothing can expire mid-test
+
+	srv, bodies, mu := authorizeFakeServer(t,
+		ringcentral.PersonInfo{ID: "user-9", Email: "eve@example.com"},
+		ringcentral.Chat{ID: "group-1", Name: "Eng", Type: "Team"})
+	bot := newAuthorizeBotClient(srv.URL)
+	read := newAuthorizeBotClient(srv.URL)
+
+	h := newTestHandler()
+	mgr := oob.New(oob.Options{})
+	h.SetOOBManager(mgr, "dm-1")
+	h.SetAuthorizeMention(func(chatID, identifier string) error { return nil }, &fakeAuthorizeMonitor{})
+
+	post := ringcentral.Post{ID: "p1", GroupID: "group-1", CreatorID: "user-9", Text: "@bot hi"}
+	h.AuthorizeMention(context.Background(), bot, read, post)
+	prompt := waitForBody(t, bodies, mu, "Pending authorization", time.Second)
+	id := extractChallengeID(t, prompt)
+	if !mgr.Deny(id) {
+		t.Fatalf("Deny returned false")
+	}
+	waitForBody(t, bodies, mu, "Denied authorization", time.Second)
+
+	// pending should be released first.
+	waitFor(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return !h.pendingAuthorize[authorizePendingKey("group-1", "user-9")]
+	}, time.Second)
+
+	mu.Lock()
+	beforeRetry := len(*bodies)
+	mu.Unlock()
+
+	// Second mention while in cooldown → should be dropped silently.
+	post2 := ringcentral.Post{ID: "p2", GroupID: "group-1", CreatorID: "user-9", Text: "@bot please?"}
+	h.AuthorizeMention(context.Background(), bot, read, post2)
+
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	afterRetry := len(*bodies)
+	mu.Unlock()
+	if afterRetry != beforeRetry {
+		t.Fatalf("expected cooldown to suppress retry: before=%d after=%d", beforeRetry, afterRetry)
+	}
+	if pending := mgr.Pending(); len(pending) != 0 {
+		t.Fatalf("expected no pending challenges, got %d", len(pending))
+	}
+}
+
+// TestAuthorizeMention_CooldownAfterExpiry_DropsSilently confirms
+// that an expired challenge enters the cooldown so a re-mention by
+// the same user in the same chat does not spam a fresh prompt.
+func TestAuthorizeMention_CooldownAfterExpiry_DropsSilently(t *testing.T) {
+	withShortAuthorizeCooldown(t, time.Hour)
+
+	srv, bodies, mu := authorizeFakeServer(t,
+		ringcentral.PersonInfo{ID: "user-9", Email: "eve@example.com"},
+		ringcentral.Chat{ID: "group-1", Name: "Eng", Type: "Team"})
+	bot := newAuthorizeBotClient(srv.URL)
+
+	h := newTestHandler()
+	mgr := oob.New(oob.Options{})
+	h.SetOOBManager(mgr, "dm-1")
+	h.SetAuthorizeMention(func(chatID, identifier string) error { return nil }, &fakeAuthorizeMonitor{})
+
+	// Stand up the pending state directly so the test runs quickly.
+	c, err := mgr.Issue("user-9", "test", "group-1", "dm-1", oob.IssueOptions{TTL: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	h.tryReservePending(authorizePendingKey("group-1", "user-9"))
+	h.storeAuthorizeMeta(c.ID, authorizeMeta{Email: "eve@example.com"})
+	go h.awaitAuthorizeMention(bot, c, "group-1", "user-9", authorizePendingKey("group-1", "user-9"))
+
+	waitForBody(t, bodies, mu, "expired", 2*time.Second)
+	waitFor(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return !h.pendingAuthorize[authorizePendingKey("group-1", "user-9")]
+	}, time.Second)
+
+	// Cooldown should be set after expire.
+	if !h.inAuthorizeCooldown(authorizePendingKey("group-1", "user-9")) {
+		t.Fatalf("expected cooldown to be active after expiry")
+	}
+
+	mu.Lock()
+	beforeRetry := len(*bodies)
+	mu.Unlock()
+
+	// Second mention while in cooldown → should be dropped silently.
+	read := newAuthorizeBotClient(srv.URL)
+	post2 := ringcentral.Post{ID: "p2", GroupID: "group-1", CreatorID: "user-9", Text: "@bot ping again"}
+	h.AuthorizeMention(context.Background(), bot, read, post2)
+
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	afterRetry := len(*bodies)
+	mu.Unlock()
+	if afterRetry != beforeRetry {
+		t.Fatalf("expected cooldown to suppress retry after expiry: before=%d after=%d", beforeRetry, afterRetry)
+	}
+}
+
+// TestAuthorizeMention_NoCooldownAfterApprove confirms approve does
+// not write a cooldown entry — the user is now trusted via
+// chat_user_allow and Monitor Layer 0 short-circuits future mentions.
+// (We assert directly on the cooldown map because the trusted-user
+// path skips AuthorizeMention entirely upstream.)
+func TestAuthorizeMention_NoCooldownAfterApprove(t *testing.T) {
+	withShortAuthorizeCooldown(t, time.Hour)
+
+	srv, bodies, mu := authorizeFakeServer(t,
+		ringcentral.PersonInfo{ID: "user-9", FirstName: "Eve", LastName: "Doe", Email: "eve@example.com"},
+		ringcentral.Chat{ID: "group-1", Name: "Eng", Type: "Team"})
+	bot := newAuthorizeBotClient(srv.URL)
+	read := newAuthorizeBotClient(srv.URL)
+
+	h := newTestHandler()
+	mgr := oob.New(oob.Options{})
+	h.SetOOBManager(mgr, "dm-1")
+	h.SetAuthorizeMention(func(chatID, identifier string) error { return nil }, &fakeAuthorizeMonitor{})
+
+	post := ringcentral.Post{ID: "p1", GroupID: "group-1", CreatorID: "user-9", Text: "@bot hi"}
+	h.AuthorizeMention(context.Background(), bot, read, post)
+	prompt := waitForBody(t, bodies, mu, "Pending authorization", time.Second)
+	id := extractChallengeID(t, prompt)
+	if _, err := mgr.Approve(id); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	waitForBody(t, bodies, mu, "Authorized", time.Second)
+
+	if h.inAuthorizeCooldown(authorizePendingKey("group-1", "user-9")) {
+		t.Errorf("approve must not enter cooldown (user is now trusted via chat_user_allow)")
+	}
+}
+
+// TestAuthorizeMention_CooldownExpires verifies the silence window
+// expires after authorizeCooldownTTL elapses, allowing a fresh
+// challenge to be issued.
+func TestAuthorizeMention_CooldownExpires(t *testing.T) {
+	withShortAuthorizeCooldown(t, 50*time.Millisecond)
+
+	srv, bodies, mu := authorizeFakeServer(t,
+		ringcentral.PersonInfo{ID: "user-9", Email: "eve@example.com"},
+		ringcentral.Chat{ID: "group-1", Name: "Eng", Type: "Team"})
+	bot := newAuthorizeBotClient(srv.URL)
+	read := newAuthorizeBotClient(srv.URL)
+
+	h := newTestHandler()
+	mgr := oob.New(oob.Options{})
+	h.SetOOBManager(mgr, "dm-1")
+	h.SetAuthorizeMention(func(chatID, identifier string) error { return nil }, &fakeAuthorizeMonitor{})
+
+	// First round: deny → cooldown.
+	post := ringcentral.Post{ID: "p1", GroupID: "group-1", CreatorID: "user-9", Text: "@bot hi"}
+	h.AuthorizeMention(context.Background(), bot, read, post)
+	prompt := waitForBody(t, bodies, mu, "Pending authorization", time.Second)
+	id := extractChallengeID(t, prompt)
+	if !mgr.Deny(id) {
+		t.Fatalf("Deny returned false")
+	}
+	waitForBody(t, bodies, mu, "Denied authorization", time.Second)
+	waitFor(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return !h.pendingAuthorize[authorizePendingKey("group-1", "user-9")]
+	}, time.Second)
+
+	if !h.inAuthorizeCooldown(authorizePendingKey("group-1", "user-9")) {
+		t.Fatalf("expected cooldown to be active")
+	}
+
+	// Wait past the TTL; the next inAuthorizeCooldown call must GC
+	// and report false.
+	time.Sleep(70 * time.Millisecond)
+	if h.inAuthorizeCooldown(authorizePendingKey("group-1", "user-9")) {
+		t.Fatalf("expected cooldown to expire after TTL")
+	}
+
+	// Second round: a fresh challenge should now be issued.
+	mu.Lock()
+	before := len(*bodies)
+	mu.Unlock()
+	post2 := ringcentral.Post{ID: "p2", GroupID: "group-1", CreatorID: "user-9", Text: "@bot retry"}
+	h.AuthorizeMention(context.Background(), bot, read, post2)
+	waitForBody(t, bodies, mu, "Pending authorization", time.Second)
+	mu.Lock()
+	after := len(*bodies)
+	mu.Unlock()
+	if after <= before {
+		t.Fatalf("expected new prompt after cooldown expired: before=%d after=%d", before, after)
+	}
+}

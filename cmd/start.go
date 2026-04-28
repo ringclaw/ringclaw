@@ -198,15 +198,22 @@ func runStart(cmd *cobra.Command, args []string) error {
 		slog.Info("chat_user_allow resolved", "component", "start", "chats", len(resolvedChatAllow), "users", total)
 	}
 
-	// Wire the authorize-mention OOB flow when opted in. Requires
+	// Wire the authorize-mention OOB flow when enabled. Requires
 	// Private App + resolved owner DM; without those the feature is
-	// disabled with an ERROR log so operators see why their config
-	// flag isn't taking effect.
+	// disabled. Log level depends on whether the operator opted in
+	// explicitly (ERROR — they asked for a feature that can't run)
+	// or defaulted in (INFO — the v0.5+ default tripped over a
+	// minimal install, no need to scream about it).
 	if cfg.RC.IsAuthorizeMentionEnabled() {
 		ownerDM := handler.OwnerDMChatID()
 		if c.private == nil || ownerDM == "" {
-			slog.Error("allow_group_mention_authorize requires Private App + resolved owner DM; feature disabled",
-				"component", "start", "hasPrivateApp", c.private != nil, "ownerDMChatID", ownerDM)
+			if cfg.RC.IsAuthorizeMentionExplicit() {
+				slog.Error("allow_group_mention_authorize requires Private App + resolved owner DM; feature disabled",
+					"component", "start", "hasPrivateApp", c.private != nil, "ownerDMChatID", ownerDM)
+			} else {
+				slog.Info("authorize-mention OOB defaulted on but Private App + owner DM unavailable; non-trusted group mentions will be silently dropped (set ringcentral.allow_group_mention_authorize=false to silence this notice)",
+					"component", "start", "hasPrivateApp", c.private != nil, "ownerDMChatID", ownerDM)
+			}
 		} else {
 			persist := func(chatID, identifier string) error {
 				if cfg.RC.AddChatUserAllow(chatID, identifier) {
