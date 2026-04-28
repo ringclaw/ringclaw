@@ -19,6 +19,14 @@ import (
 // the manager.
 const authorizeMentionTTLLabel = "this chat only"
 
+// authorizeCooldownTTL is the silence window after a deny / expire so
+// a hostile or noisy non-trusted user cannot keep pushing /approval
+// prompts to the owner DM by repeatedly @mentioning the bot. Var (not
+// const) so tests can shrink it. Approve never writes the cooldown —
+// the approved user becomes trusted via chat_user_allow and Monitor
+// Layer 0 admits them before the AuthorizeMention path runs again.
+var authorizeCooldownTTL = 24 * time.Hour
+
 // PersistAuthorizeFunc persists a (chat, identifier) authorization
 // grant to config.json. identifier is the human-friendly form (email
 // preferred; numeric extension ID fallback) so the on-disk
@@ -101,6 +109,20 @@ func (h *Handler) AuthorizeMention(ctx context.Context, client, readClient *ring
 	}
 
 	key := authorizePendingKey(post.GroupID, post.CreatorID)
+
+	// Cooldown window from a recent deny / expire — drop silently so
+	// a noisy non-trusted user cannot spam the owner DM with new
+	// challenges by repeatedly @mentioning the bot. The window
+	// resets on next approve (n/a here) or after authorizeCooldownTTL
+	// has elapsed.
+	if h.inAuthorizeCooldown(key) {
+		slog.Debug("authorize-mention: in cooldown after recent deny/expire, dropping",
+			"component", "handler",
+			"chatID", post.GroupID, "userID", post.CreatorID,
+			"cooldown", authorizeCooldownTTL)
+		return
+	}
+
 	if !h.tryReservePending(key) {
 		slog.Debug("authorize-mention: pending challenge already exists, dropping duplicate",
 			"component", "handler", "chatID", post.GroupID, "userID", post.CreatorID)
@@ -229,24 +251,41 @@ func (h *Handler) awaitAuthorizeMention(client *ringcentral.Client, c *oob.Chall
 	ownerDM := h.OwnerDMChatID()
 	switch {
 	case err == oob.ErrChallengeExpired:
+		// Record cooldown so a re-mention while owner is away does
+		// not immediately re-issue another challenge.
+		h.recordAuthorizeCooldown(key)
 		slog.Info("authorize-mention: challenge expired",
-			"component", "handler", "challengeID", c.ID, "chatID", chatID, "userID", userID)
+			"component", "handler", "challengeID", c.ID, "chatID", chatID, "userID", userID,
+			"cooldown", authorizeCooldownTTL)
 		if ownerDM != "" {
 			logSendError(SendTextReply(ctx, client, ownerDM,
-				fmt.Sprintf("Authorization request for user `%s` in chat `%s` expired (challenge `%s`). They must @mention again to retry.",
-					userID, chatID, c.ID)))
+				fmt.Sprintf("Authorization request for user `%s` in chat `%s` expired (challenge `%s`). New requests from this user in this chat are silenced for %s.",
+					userID, chatID, c.ID, authorizeCooldownTTL)))
 		}
 	case err != nil:
+		// Transient wait error (e.g. context canceled): do NOT write
+		// cooldown so the owner gets another shot once whatever
+		// disrupted the wait clears.
 		slog.Warn("authorize-mention: wait failed",
 			"component", "handler", "challengeID", c.ID, "error", err)
 	case !approved:
+		// Explicit deny: enter cooldown so the same user cannot
+		// re-trigger a fresh prompt by @mentioning again.
+		h.recordAuthorizeCooldown(key)
 		slog.Info("authorize-mention: denied",
-			"component", "handler", "challengeID", c.ID, "chatID", chatID, "userID", userID)
+			"component", "handler", "challengeID", c.ID, "chatID", chatID, "userID", userID,
+			"cooldown", authorizeCooldownTTL)
 		if ownerDM != "" {
 			logSendError(SendTextReply(ctx, client, ownerDM,
-				fmt.Sprintf("Denied authorization for user `%s` in chat `%s` (challenge `%s`).", userID, chatID, c.ID)))
+				fmt.Sprintf("Denied authorization for user `%s` in chat `%s` (challenge `%s`). New requests from this user in this chat are silenced for %s.",
+					userID, chatID, c.ID, authorizeCooldownTTL)))
 		}
 	default:
+		// Approved: belt-and-suspenders clear of any historical
+		// cooldown entry. The user becomes trusted via
+		// chat_user_allow so Monitor Layer 0 will short-circuit
+		// future mentions before they reach this path anyway.
+		h.clearAuthorizeCooldown(key)
 		// Pass the meta in directly: the deferred dropAuthorizeMeta
 		// would otherwise race with takeAuthorizeMeta inside
 		// applyAuthorize and lose the cached email.
@@ -360,4 +399,53 @@ func (h *Handler) dropAuthorizeMeta(challengeID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.authorizeMeta, challengeID)
+}
+
+// inAuthorizeCooldown reports whether the (chat, user) key is still
+// inside the silence window from a recent deny / expire. Stale
+// entries are GC'd lazily here to avoid an extra goroutine — the
+// total entry count is bounded by the number of distinct
+// (chat, non-trusted-user) pairs the bot has ever interacted with
+// since process start, which is small in practice.
+func (h *Handler) inAuthorizeCooldown(key string) bool {
+	h.mu.RLock()
+	t, ok := h.authorizeCooldown[key]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	if time.Since(t) >= authorizeCooldownTTL {
+		h.mu.Lock()
+		// Re-check under the write lock in case another goroutine
+		// raced and refreshed the entry between our RLock and Lock.
+		if t2, ok2 := h.authorizeCooldown[key]; ok2 && time.Since(t2) >= authorizeCooldownTTL {
+			delete(h.authorizeCooldown, key)
+		}
+		h.mu.Unlock()
+		return false
+	}
+	return true
+}
+
+// recordAuthorizeCooldown stamps the resolution time for a
+// (chat, user) key. Called on deny and expire only — approve never
+// records here because the approved user becomes trusted via
+// chat_user_allow and Monitor Layer 0 short-circuits future mentions.
+func (h *Handler) recordAuthorizeCooldown(key string) {
+	h.mu.Lock()
+	if h.authorizeCooldown == nil {
+		h.authorizeCooldown = make(map[string]time.Time)
+	}
+	h.authorizeCooldown[key] = time.Now()
+	h.mu.Unlock()
+}
+
+// clearAuthorizeCooldown removes any historical cooldown entry for a
+// (chat, user) key. Belt-and-suspenders called on approve so a
+// previously denied user who is later allow-listed by hand and then
+// revoked again does not inherit a stale cooldown.
+func (h *Handler) clearAuthorizeCooldown(key string) {
+	h.mu.Lock()
+	delete(h.authorizeCooldown, key)
+	h.mu.Unlock()
 }

@@ -93,6 +93,17 @@ type Handler struct {
 	// without a second directory lookup that may transiently fail.
 	authorizeMeta map[string]authorizeMeta
 
+	// authorizeCooldown silences a (chat, user) pair for
+	// authorizeCooldownTTL after a deny / expire so a hostile or
+	// noisy non-trusted sender cannot keep pushing /approval prompts
+	// to the owner DM by repeatedly @mentioning the bot. Keys mirror
+	// pendingAuthorize ("chatID|userID"). Approve never writes here
+	// (the user becomes trusted via chat_user_allow and won't reach
+	// AuthorizeMention again); expire / deny do. In-memory only —
+	// process restart resets the cooldown, which is acceptable
+	// because restarts are rare and operator-driven.
+	authorizeCooldown map[string]time.Time
+
 	// oobManager and ownerDMChatID power the Phase 2b /approval flow.
 	// When oobManager is nil, /full-access is disabled and cross-chat
 	// actions skip the owner-DM notice (falling back to the Phase 1
@@ -115,16 +126,17 @@ type Handler struct {
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc, version string) *Handler {
 	return &Handler{
-		agents:           make(map[string]agent.Agent),
-		factory:          factory,
-		saveDefault:      saveDefault,
-		version:          version,
-		startTime:        time.Now(),
-		trustedSenders:   make(map[string]bool),
-		allowAllSenders:  true, // legacy-compatible default; cmd/start.go flips this off
-		chatUserAllow:    make(map[string]map[string]bool),
-		pendingAuthorize: make(map[string]bool),
-		authorizeMeta:    make(map[string]authorizeMeta),
+		agents:            make(map[string]agent.Agent),
+		factory:           factory,
+		saveDefault:       saveDefault,
+		version:           version,
+		startTime:         time.Now(),
+		trustedSenders:    make(map[string]bool),
+		allowAllSenders:   true, // legacy-compatible default; cmd/start.go flips this off
+		chatUserAllow:     make(map[string]map[string]bool),
+		pendingAuthorize:  make(map[string]bool),
+		authorizeMeta:     make(map[string]authorizeMeta),
+		authorizeCooldown: make(map[string]time.Time),
 	}
 }
 

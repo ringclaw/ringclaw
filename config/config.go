@@ -111,16 +111,22 @@ type RCConfig struct {
 	GroupSummaryGroupID      string `json:"group_summary_group_id,omitempty"`
 	GroupSummaryMessageLimit int    `json:"group_summary_message_limit,omitempty"`
 
-	// AllowGroupMentionAuthorize, when true, enables the OOB approval
-	// flow for non-trusted group mentions. When a user not on the
-	// sender allowlist @mentions the bot in an allowed group chat,
-	// instead of silently dropping the message the bot posts a
-	// `/approval` challenge to the owner DM. On approval the
-	// requester is added to ChatUserAllow for that chat only and
-	// persisted to config.json.
+	// AllowGroupMentionAuthorize controls the OOB approval flow for
+	// non-trusted group mentions. When a user not on the sender
+	// allowlist @mentions the bot in an allowed group chat, instead
+	// of silently dropping the message the bot posts a `/approval`
+	// challenge to the owner DM. On approval the requester is added
+	// to ChatUserAllow for that chat only and persisted to
+	// config.json.
+	//
+	// Defaults to true since v0.4.1 (an unset field means "on") so
+	// fresh installs get the OOB behavior without an explicit toggle.
+	// Set to false to keep the legacy silent-drop behavior.
 	//
 	// Requires Private App + resolved owner DM. Without those the
-	// feature is disabled at startup with an ERROR log.
+	// feature is disabled at startup; the log level depends on
+	// whether the operator opted in explicitly (ERROR) or relied on
+	// the default (INFO).
 	AllowGroupMentionAuthorize *bool `json:"allow_group_mention_authorize,omitempty"`
 
 	// ChatUserAllow maps chat ID -> additional trusted user
@@ -135,11 +141,34 @@ type RCConfig struct {
 	ChatUserAllow map[string][]string `json:"chat_user_allow,omitempty"`
 }
 
-// IsAuthorizeMentionEnabled reports whether
-// allow_group_mention_authorize is opted-in. Defaults to false when
-// unset.
+// IsAuthorizeMentionEnabled reports whether the authorize-mention OOB
+// flow is on. Since v0.4.1 the default is true: an unset
+// allow_group_mention_authorize field means "feature on" so non-trusted
+// group mentions surface in the owner DM instead of being silently
+// dropped. Operators who want the legacy silent-drop behavior must set
+// the field to false explicitly in config.json.
+//
+// The runtime requirements (Private App + resolved owner DM) are
+// validated in cmd/start.go regardless of how the flag was set; when
+// they are missing the feature is disabled and a log line is emitted
+// at a level that distinguishes explicit opt-in (ERROR — operator
+// asked for it but it can't run) from the implicit default
+// (INFO — no one asked, just informing).
 func (rc RCConfig) IsAuthorizeMentionEnabled() bool {
-	return rc.AllowGroupMentionAuthorize != nil && *rc.AllowGroupMentionAuthorize
+	if rc.AllowGroupMentionAuthorize == nil {
+		return true
+	}
+	return *rc.AllowGroupMentionAuthorize
+}
+
+// IsAuthorizeMentionExplicit reports whether the operator set the
+// allow_group_mention_authorize field explicitly (regardless of
+// value). Used to distinguish "operator opted in but Private App is
+// missing" (logged at ERROR) from "implicit default tripped over a
+// missing Private App" (logged at INFO) so the noise level matches
+// operator intent.
+func (rc RCConfig) IsAuthorizeMentionExplicit() bool {
+	return rc.AllowGroupMentionAuthorize != nil
 }
 
 // AddChatUserAllow appends a trusted identifier (email / numeric ID /
