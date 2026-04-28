@@ -79,29 +79,60 @@ identity. See [Command Authorization](./command-authorization).
 
 ## Authorize-mention OOB flow
 
-::: danger SECURITY ADVISORY (v0.4.2)
-The OOB-approval flow gives the approved user the bot's **full
-agent capability** in their authorized chats — including
-filesystem access (`List`, `Read`, `Write`), terminal commands
-(`Bash`), and external HTTP — through the agent tool-call channel.
-ringclaw has no per-sender capability gating before v0.5.0.
+::: danger SECURITY ADVISORY (v0.4.2 → v0.4.3)
+Before v0.4.3, any user that became "trusted" — whether through
+`source_user_ids`, `chat_user_allow`, or the v0.4.1 OOB-approval
+flow — drove the same agent backend the bot operator uses, and
+could request filesystem (`List`, `Read`, `Write`), terminal
+(`Bash`), and external HTTP tool calls through the agent tool-call
+channel.
 
-**v0.4.2 mitigations:**
+**v0.4.3 (this release) — fail-closed two-tier non-owner isolation
+for `fs/*` + `terminal/*`:**
 
-- The default is reverted to **OFF** (the v0.4.1 default-on flip is
-  withdrawn). Set `ringcentral.allow_group_mention_authorize: true`
-  explicitly to enable.
-- `chat_user_allow` is **force-cleared at every startup** with a
-  loud ERROR log. Any pre-existing entries (including those left by
-  a v0.4.1 OOB approval) must be re-added by hand.
-- `source_user_ids` is **not** cleared, but those users have the
-  same capability surface — review your list before upgrading.
+- "Owner" is now strictly the **`source_user_ids`** set (plus the
+  resolved Private App owner). `chat_user_allow` users and any
+  v0.4.0 OOB-approved users are **non-owners** and run with the
+  reduced ceiling described below.
+- **Layer A (protocol):** ringclaw issues
+  `session/set_mode <restricted>` immediately after creating an
+  ACP session for a non-owner. The modeID is picked from a
+  per-agent map: `droid → spec`, `claude → plan`,
+  `gemini → plan`, `qwen → plan`, `cursor-agent → plan`.
+  Unknown agents fall back to a heuristic that scans
+  `availableModes` for `plan` / `spec` / `read` / `safe`.
+- **Layer B (client gate, fail-closed):** ringclaw rejects every
+  `fs/read_text_file` / `fs/write_text_file` /
+  `terminal/create` / `terminal/output` / `terminal/wait_for_exit` /
+  `terminal/kill` / `terminal/release` JSON-RPC request issued
+  from a non-owner session, regardless of the agent's mode
+  behavior. `session/request_permission` is also denied (the
+  agent gets either the offered `kind=deny` option or a
+  `cancelled` outcome).
+- **Fail-closed if no restricted mode exists.** When the agent
+  does not advertise any read-only mode and the operator did not
+  configure an override, the non-owner message is **not**
+  forwarded to the agent. The user receives a refusal text;
+  audit log emits `restricted_mode_unsupported_no_mode`.
+- **`chat_user_allow` is still force-cleared at every startup**
+  (v0.4.2 stop-gap). Operators must re-add entries by hand.
 
-**v0.5.0 (in progress)** introduces a restricted agent backend:
-non-owner senders will be routed to a separate Droid process whose
-capabilities are limited to text replies plus RingCentral
-`ACTION:MESSAGE / TASK / NOTE / EVENT` blocks. No filesystem, no
-terminal, no external HTTP.
+**Layer-A known limitations (best-effort only):** upstream
+agents do not always enforce the read-only mode by themselves
+(qwen-code#1806 returns success without enforcement;
+gemini-cli#22191 has known plan-mode bugs over ACP). Layer B is
+the actual security boundary for `fs/*` + `terminal/*`. **WebFetch
+/ WebSearch / built-in HTTP tools / MCP custom tools** are
+dispatched directly by the agent process and ringclaw does not
+see those JSON-RPC requests, so Layer B cannot apply — those
+remain best-effort under Layer A only. v0.5.0 (planned) will
+close this gap with OS-level sandboxing.
+
+**Operator-facing override:** the per-agent default modeID can be
+overridden via `agents.<name>.restricted_mode_id` in
+`config.json`. The override must match a mode the agent
+advertises in its `availableModes` list, otherwise the built-in
+selection still wins.
 :::
 
 A separate OOB surface, layered on the same challenge /
@@ -175,13 +206,30 @@ sequenceDiagram
   require Private-App-owner identity. See
   [Command Authorization](./command-authorization).
 
-::: warning Layer 2 (agent tool calls) IS effectively unlocked
-Listed users can drive the AI agent like any trusted sender, which
-means they can request the agent to call filesystem / terminal /
-web tools. Those calls run with the bot operator's permissions on
-the host machine. Until v0.5.0's restricted backend ships, treat a
-`chat_user_allow` entry as if you handed the user shell access in
-that chat.
+::: warning Layer 2 (agent tool calls) — non-owner ceiling (v0.4.3+)
+Listed users (chat_user_allow / OOB-approved) can drive the AI
+agent like any trusted sender, **but** v0.4.3 enforces a
+fail-closed ceiling on their session:
+
+- `fs/read_text_file`, `fs/write_text_file`,
+  `terminal/create` / `output` / `wait_for_exit` / `kill` /
+  `release`, and `session/request_permission` are denied at the
+  ringclaw client. The agent is told the call failed with
+  `code=-32001` ("denied for non-owner senders").
+- The session is also asked to switch to a read-only mode
+  (`spec` for droid, `plan` for the others) as a defense-in-depth
+  layer. When the agent does not support a suitable mode, the
+  message is refused outright rather than forwarded.
+- Plain text replies and RingCentral
+  `ACTION:MESSAGE / TASK / NOTE / EVENT` blocks remain available
+  (the latter go through the RingCentral REST API, not ACP).
+
+What is **not** covered by Layer B: `WebFetch`, `WebSearch`, and
+MCP custom tools. The agent dispatches those internally; ringclaw
+cannot see them. v0.5.0 will close that gap with OS-level
+sandboxing. Until then, treat a `chat_user_allow` user as
+"can read the public web through the agent and make the agent
+talk", but no longer "can shell into your host".
 :::
 - **Pending dedupe.** A pending challenge for a `(chatID, userID)`
   pair blocks new challenges from the same pair for the challenge
@@ -232,6 +280,8 @@ that chat.
 | `allow_group_mention_authorize: true` | Feature on. ringclaw emits a startup WARN reminding the operator that approved users gain full agent capability. |
 | Private App not configured (no owner DM resolvable) | Feature disabled at startup with ERROR log; falls back to silent drop. |
 | Existing `chat_user_allow` entries on disk (v0.4.1 leftover) | Force-cleared at startup with ERROR log; operator must re-add by hand after re-evaluating. |
+| Non-owner sender hits an agent with no read-only mode | v0.4.3 fail-closed: the message is **not** forwarded; the user receives a refusal reply; audit log emits `restricted_mode_unsupported_no_mode`. |
+| Non-owner sender + agent rejects `session/set_mode` | v0.4.3 fail-closed: same as above; the (`agentCmd`, `modeID`) pair is cached so subsequent attempts skip the RPC. |
 | Owner DM not yet resolved at runtime | The single message that hits this race is dropped with `WARN authorize-mention: OOB or owner DM unconfigured; dropping`. Subsequent messages succeed once the DM resolves. |
 | Owner denies the challenge | Pending lock released; owner DM notified. The `(chat, user)` pair enters a 24h cooldown — re-mentions drop silently until the window elapses. |
 | Challenge expires (5 min TTL) | Pending lock released; owner DM notified. Same 24h cooldown as deny. |
@@ -270,3 +320,7 @@ challenge is ever issued. The two fields are independent.
 | Authorize-mention persist failure | `ERROR authorize-mention: persist failed` (with `error`) | The in-memory grant succeeded but writing `config.json` did not — the grant survives the current process but is lost on restart. |
 | Authorize-mention prompt failure | `ERROR authorize-mention: post prompt failed` (with `error`) | The owner DM post failed; the challenge is auto-denied and the `(chat, user)` pending lock released so the user can retry. |
 | Authorize-mention email unavailable | `WARN authorize-mention: no email available, persisting numeric ID` | Directory lookup did not yield an email; the numeric extension ID is persisted instead (still chat-scoped). |
+| v0.4.3: restricted mode applied to non-owner | `WARN acp restricted-mode event` (`event=restricted_mode_applied`, `mode_id`, `mode_source`, `conversation`, `sender_id`) | Layer-A success: agent accepted the read-only mode for a non-owner conversation. |
+| v0.4.3: restricted mode unsupported (no candidate) | `WARN acp restricted-mode event` (`event=restricted_mode_unsupported_no_mode`, `available_modes`) | Layer-A fail-closed: no built-in / heuristic match. Non-owner message refused. |
+| v0.4.3: restricted mode unsupported (`set_mode` rejected) | `WARN acp restricted-mode event` (`event=restricted_mode_unsupported`, `error="Method not found"`) | Layer-A fail-closed: agent rejected the call. Cached so the next attempt skips. |
+| v0.4.3: Layer-B tool call denied | `WARN acp non-owner tool call denied` (`event=tool_call_denied`, `method`, `session`, `reason`) | Client-side fail-closed deny of a `fs/*` / `terminal/*` / `session/request_permission` request. Deduped per (session, method). |

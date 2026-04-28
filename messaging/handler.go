@@ -786,6 +786,11 @@ func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) st
 func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, ag agent.Agent, message, placeholderID string) {
 	conversationID := conversationIDForPost(client, post)
 
+	// v0.4.3: tag the request with the sender's Origin so the agent
+	// layer can apply the non-owner restricted-mode + fail-closed
+	// fs/terminal gate.
+	ctx = h.withOriginForPost(ctx, client, post)
+
 	// Prepend the persona + memory banner (empty string when persona
 	// is disabled or all sources are blank). This keeps the operator's
 	// SOUL and layered memory visible to every agent regardless of
@@ -843,6 +848,11 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 // broadcastToAgents sends the message to multiple agents in parallel.
 func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, names []string, message string) {
 	conversationID := conversationIDForPost(client, post)
+
+	// v0.4.3: tag the broadcast ctx with Origin so every fan-out
+	// agent invocation honors the non-owner restricted-mode +
+	// fail-closed fs/terminal gate.
+	ctx = h.withOriginForPost(ctx, client, post)
 
 	// Extract attachments once; audio takes priority over images (same as dispatchToAgent).
 	audio := extractAudioAttachments(ctx, client, post)

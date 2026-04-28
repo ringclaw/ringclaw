@@ -566,6 +566,7 @@ func TestHandleTerminalCreate(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -577,7 +578,7 @@ func TestHandleTerminalCreate(t *testing.T) {
 		close(done)
 	}()
 
-	raw := `{"jsonrpc":"2.0","id":1,"method":"terminal/create","params":{"command":"echo","args":["hello"]}}`
+	raw := `{"jsonrpc":"2.0","id":1,"method":"terminal/create","params":{"sessionId":"s1","command":"echo","args":["hello"]}}`
 	a.handleTerminalCreate(raw)
 
 	stdinWriter.Close()
@@ -605,6 +606,7 @@ func TestHandleTerminalOutput(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	// Create a terminal first
 	req := termCreateRequest{Command: "echo", Args: []string{"output test"}}
@@ -656,6 +658,7 @@ func TestHandleTerminalKill(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	req := termCreateRequest{Command: "sleep", Args: []string{"60"}}
 	id, err := a.termMgr.create(req)
@@ -697,6 +700,7 @@ func TestHandleTerminalRelease(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	req := termCreateRequest{Command: "echo", Args: []string{"done"}}
 	id, err := a.termMgr.create(req)
@@ -750,6 +754,7 @@ func TestHandleFSReadTextFile(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(dir),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -792,6 +797,7 @@ func TestHandleFSReadTextFile_WithLineAndLimit(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(dir),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -831,6 +837,7 @@ func TestHandleFSReadTextFile_NotFound(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -869,6 +876,7 @@ func TestHandleFSWriteTextFile(t *testing.T) {
 		allowWrite: true,
 		termMgr:    newTerminalManager(dir),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -913,6 +921,7 @@ func TestHandleFSWriteTextFile_Denied(t *testing.T) {
 		allowWrite: false, // write denied
 		termMgr:    newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -951,6 +960,7 @@ func TestHandleTerminalWaitForExit(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	req := termCreateRequest{Command: "echo", Args: []string{"done"}}
 	id, err := a.termMgr.create(req)
@@ -1001,6 +1011,7 @@ func TestHandleTerminalCreate_InvalidParams(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -1038,6 +1049,7 @@ func TestHandleTerminalOutput_InvalidParams(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -1070,6 +1082,7 @@ func TestHandleTerminalKill_InvalidParams(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -1102,6 +1115,7 @@ func TestHandleTerminalRelease_InvalidParams(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -1134,6 +1148,7 @@ func TestHandleFSReadTextFile_InvalidParams(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -1167,6 +1182,7 @@ func TestHandleFSWriteTextFile_InvalidParams(t *testing.T) {
 		allowWrite: true,
 		termMgr:    newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -1199,6 +1215,7 @@ func TestHandleTerminalOutput_NotFound(t *testing.T) {
 		stdin:   stdinWriter,
 		termMgr: newTerminalManager(t.TempDir()),
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})

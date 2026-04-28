@@ -161,6 +161,11 @@ func (h *Handler) handleCurrentGroupSummarize(ctx context.Context, replyClient *
 func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, req *SummarizeRequest) {
 	chatID := post.GroupID
 
+	// v0.4.3: tag the summarize ctx with Origin so the agent layer
+	// can apply the non-owner restricted-mode + fail-closed gate
+	// when a non-owner asked for the summary.
+	ctx = h.withOriginForPost(ctx, replyClient, post)
+
 	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, replyClient, chatID)
 	if placeholderErr != nil {
 		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)

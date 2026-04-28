@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,14 +26,15 @@ func init() {
 			cwd = defaultWorkspace()
 		}
 		ag := NewACPAgent(ACPAgentConfig{
-			Command:      cfg.Command,
-			Args:         cfg.Args,
-			Cwd:          cwd,
-			Env:          cfg.Env,
-			Model:        cfg.Model,
-			SystemPrompt: cfg.SystemPrompt,
-			AllowWrite:   cfg.AllowWrite,
-			FullAccess:   cfg.FullAccess,
+			Command:          cfg.Command,
+			Args:             cfg.Args,
+			Cwd:              cwd,
+			Env:              cfg.Env,
+			Model:            cfg.Model,
+			SystemPrompt:     cfg.SystemPrompt,
+			AllowWrite:       cfg.AllowWrite,
+			FullAccess:       cfg.FullAccess,
+			RestrictedModeID: cfg.RestrictedModeID,
 		})
 		if err := ag.Start(ctx); err != nil {
 			return nil, fmt.Errorf("start ACP agent: %w", err)
@@ -43,14 +45,15 @@ func init() {
 
 // ACPAgent communicates with ACP-compatible agents via stdio JSON-RPC 2.0.
 type ACPAgent struct {
-	command      string
-	args         []string
-	model        string
-	systemPrompt string
-	cwd          string
-	env          map[string]string
-	allowWrite   bool
-	fullAccess   bool
+	command          string
+	args             []string
+	model            string
+	systemPrompt     string
+	cwd              string
+	env              map[string]string
+	allowWrite       bool
+	fullAccess       bool
+	restrictedModeID string // optional override for non-owner sessions
 
 	mu       sync.Mutex
 	cmd      *exec.Cmd
@@ -59,6 +62,20 @@ type ACPAgent struct {
 	started  bool
 	nextID   atomic.Int64
 	sessions map[string]string // conversationID -> sessionID
+
+	// sessionRoles maps sessionID -> Origin. It is consulted by the
+	// fs/* and terminal/* request handlers (Layer-B gate) and by
+	// session/request_permission so non-owner sessions can be denied
+	// for the duration of the agent process. Entries are written
+	// once on session creation and never mutated; reads use
+	// sync.Map's lock-free fast path.
+	sessionRoles sync.Map // map[string]Origin
+
+	// sessionModes caches the availableModes list returned by
+	// session/new for each sessionID. Used to validate restricted
+	// modeId picks and surfaced in audit logs when fail-closed
+	// triggers.
+	sessionModes sync.Map // map[string][]SessionMode
 
 	// pending tracks in-flight JSON-RPC requests
 	pendingMu sync.Mutex
@@ -72,8 +89,21 @@ type ACPAgent struct {
 	droppedUpdates     atomic.Int64
 	loggedMethods      sync.Map
 	termMgr            *terminalManager
-	setModeUnsupported atomic.Bool  // set when agent rejects session/set_mode (e.g. claude-agent-acp)
+	setModeUnsupported atomic.Bool  // set when agent rejects full-access session/set_mode (legacy path)
 	promptCaps         atomic.Value // holds *acpPromptCaps; populated from initialize result
+
+	// restrictedSetModeUnsupported tracks per-(agentCmd,modeID)
+	// MethodNotFound results from session/set_mode so we don't
+	// re-issue obviously doomed calls. Key: agentCmd|modeID.
+	restrictedSetModeUnsupported sync.Map // map[string]bool
+
+	// restrictedSetModeWarned dedupes WARN/INFO logs along the
+	// non-owner restricted-mode path. Key: agentCmd|modeID|conversationID.
+	restrictedSetModeWarned sync.Map // map[string]bool
+
+	// deniedToolWarned dedupes Layer-B deny WARN logs.
+	// Key: sessionID|method.
+	deniedToolWarned sync.Map // map[string]bool
 }
 
 // acpPromptCaps captures the agent's advertised prompt capabilities so
@@ -91,14 +121,15 @@ type acpPromptCaps struct {
 
 // ACPAgentConfig holds configuration for the ACP agent.
 type ACPAgentConfig struct {
-	Command      string
-	Args         []string
-	Model        string
-	SystemPrompt string
-	Cwd          string
-	Env          map[string]string
-	AllowWrite   bool
-	FullAccess   bool
+	Command          string
+	Args             []string
+	Model            string
+	SystemPrompt     string
+	Cwd              string
+	Env              map[string]string
+	AllowWrite       bool
+	FullAccess       bool
+	RestrictedModeID string
 }
 
 // --- ACP protocol types ---
@@ -126,7 +157,16 @@ type newSessionParams struct {
 }
 
 type newSessionResult struct {
-	SessionID string `json:"sessionId"`
+	SessionID string             `json:"sessionId"`
+	Modes     *sessionModesField `json:"modes,omitempty"`
+}
+
+// sessionModesField mirrors the ACP `SessionModeState` structure.
+// The agent reports the modes it currently exposes so we can pick a
+// safe restricted mode for non-owner senders.
+type sessionModesField struct {
+	AvailableModes []SessionMode `json:"availableModes,omitempty"`
+	CurrentModeID  string        `json:"currentModeId,omitempty"`
 }
 
 type promptParams struct {
@@ -268,18 +308,19 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 			"component", "acp", "command", cfg.Command)
 	}
 	return &ACPAgent{
-		command:      cfg.Command,
-		args:         cfg.Args,
-		model:        cfg.Model,
-		systemPrompt: cfg.SystemPrompt,
-		cwd:          cfg.Cwd,
-		env:          cfg.Env,
-		allowWrite:   cfg.AllowWrite,
-		fullAccess:   fullAccess,
-		sessions:     make(map[string]string),
-		pending:      make(map[int64]chan *rpcResponse),
-		notifyCh:     make(map[string]chan *sessionUpdate),
-		termMgr:      newTerminalManager(cfg.Cwd),
+		command:          cfg.Command,
+		args:             cfg.Args,
+		model:            cfg.Model,
+		systemPrompt:     cfg.SystemPrompt,
+		cwd:              cfg.Cwd,
+		env:              cfg.Env,
+		allowWrite:       cfg.AllowWrite,
+		fullAccess:       fullAccess,
+		restrictedModeID: cfg.RestrictedModeID,
+		sessions:         make(map[string]string),
+		pending:          make(map[int64]chan *rpcResponse),
+		notifyCh:         make(map[string]chan *sessionUpdate),
+		termMgr:          newTerminalManager(cfg.Cwd),
 	}
 }
 
@@ -492,11 +533,17 @@ func (a *ACPAgent) SetCwd(cwd string) {
 // ResetSession clears the existing session and creates a new one.
 func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (string, error) {
 	a.mu.Lock()
+	prev, hadPrev := a.sessions[conversationID]
 	delete(a.sessions, conversationID)
 	a.mu.Unlock()
+	if hadPrev {
+		a.sessionRoles.Delete(prev)
+		a.sessionModes.Delete(prev)
+	}
 	slog.Info("session reset, creating new session", "component", "acp", "conversation", conversationID)
 
-	sessionID, _, err := a.getOrCreateSession(ctx, conversationID)
+	origin := OriginFromContext(ctx)
+	sessionID, _, err := a.getOrCreateSession(ctx, conversationID, origin)
 	if err != nil {
 		return "", fmt.Errorf("create new session: %w", err)
 	}
@@ -543,8 +590,12 @@ func (a *ACPAgent) chatWithEntries(ctx context.Context, conversationID string, e
 		}
 	}
 
-	sessionID, isNew, err := a.getOrCreateSession(ctx, conversationID)
+	origin := OriginFromContext(ctx)
+	sessionID, isNew, err := a.getOrCreateSession(ctx, conversationID, origin)
 	if err != nil {
+		if errors.Is(err, errRestrictedModeUnsupported) {
+			return restrictedModeRefusalText(a.command), nil
+		}
 		return "", fmt.Errorf("session error: %w", err)
 	}
 
@@ -625,7 +676,13 @@ func (a *ACPAgent) chatWithEntries(ctx context.Context, conversationID string, e
 	}
 }
 
-func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string) (string, bool, error) {
+// errRestrictedModeUnsupported is returned by getOrCreateSession when
+// the connected agent cannot guarantee a read-only mode for a
+// non-owner sender. Callers (chatWithEntries) translate this into a
+// fail-closed refusal text instead of forwarding the prompt.
+var errRestrictedModeUnsupported = errors.New("restricted mode not supported by agent")
+
+func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string, origin Origin) (string, bool, error) {
 	a.mu.Lock()
 	sid, exists := a.sessions[conversationID]
 	a.mu.Unlock()
@@ -649,9 +706,37 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 		return "", false, fmt.Errorf("parse session result: %w", err)
 	}
 
+	// Cache origin BEFORE registering the session so that any
+	// fs/* / terminal/* request the agent fires while the rest of
+	// session setup is in flight is matched against the right role.
+	a.sessionRoles.Store(sessionResult.SessionID, origin)
+	if sessionResult.Modes != nil {
+		a.sessionModes.Store(sessionResult.SessionID, append([]SessionMode(nil), sessionResult.Modes.AvailableModes...))
+	}
+
 	a.mu.Lock()
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
+
+	// Non-owner path: apply restricted mode (Layer A) and
+	// fail-closed when the agent does not support it. Layer B
+	// (gateNonOwnerToolCall) is independent and always active.
+	if !origin.IsOwner {
+		if err := a.applyRestrictedMode(ctx, sessionResult.SessionID, conversationID, origin); err != nil {
+			a.mu.Lock()
+			if cur, ok := a.sessions[conversationID]; ok && cur == sessionResult.SessionID {
+				delete(a.sessions, conversationID)
+			}
+			a.mu.Unlock()
+			a.sessionRoles.Delete(sessionResult.SessionID)
+			a.sessionModes.Delete(sessionResult.SessionID)
+			return "", false, err
+		}
+		// Non-owner sessions deliberately skip the full-access
+		// branch below — they never receive a full-access grant
+		// regardless of static config or OOB unlock.
+		return sessionResult.SessionID, true, nil
+	}
 
 	// The static a.fullAccess toggle covers operators who configured
 	// `full_access: true` + acknowledged it at startup. The dynamic
@@ -903,4 +988,112 @@ func extractPromptResultText(result json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+// agentCmdLine renders the agent command + args lowercased so the
+// restricted-mode resolver can match against substrings like "droid"
+// or "claude-code-acp".
+func (a *ACPAgent) agentCmdLine() string {
+	parts := append([]string{a.command}, a.args...)
+	return strings.ToLower(strings.Join(parts, " "))
+}
+
+// applyRestrictedMode is the Layer-A enforcement step for non-owner
+// sessions. It picks a read-only mode from the agent's advertised
+// availableModes (or from the operator override), calls
+// `session/set_mode`, and returns errRestrictedModeUnsupported when
+// no mapping is available or the agent rejects the call. Callers
+// must fail-closed on that error.
+//
+// Best-effort warnings are deduped per (agentCmd, modeID, conversation)
+// so repeat calls do not flood the log.
+func (a *ACPAgent) applyRestrictedMode(ctx context.Context, sessionID, conversationID string, origin Origin) error {
+	cmdLine := a.agentCmdLine()
+
+	var available []SessionMode
+	if v, ok := a.sessionModes.Load(sessionID); ok {
+		if list, ok := v.([]SessionMode); ok {
+			available = list
+		}
+	}
+
+	modeID, source := ResolveRestrictedModeID(cmdLine, available, a.restrictedModeID)
+	if modeID == "" {
+		a.warnRestrictedOnce(cmdLine, "", conversationID, "event", "restricted_mode_unsupported_no_mode",
+			"reason", source,
+			"available_modes", AvailableModeIDs(available),
+			"override", a.restrictedModeID,
+			"sender_id", origin.SenderID,
+			"sender_reason", origin.Reason,
+		)
+		return errRestrictedModeUnsupported
+	}
+
+	cacheKey := cmdLine + "|" + modeID
+	if v, ok := a.restrictedSetModeUnsupported.Load(cacheKey); ok && v.(bool) {
+		a.warnRestrictedOnce(cmdLine, modeID, conversationID, "event", "restricted_mode_unsupported_cached",
+			"reason", "method_not_found_cached",
+			"sender_id", origin.SenderID,
+			"sender_reason", origin.Reason,
+		)
+		return errRestrictedModeUnsupported
+	}
+
+	_, callErr := a.call(ctx, "session/set_mode", map[string]interface{}{
+		"sessionId": sessionID,
+		"modeId":    modeID,
+	})
+	if callErr != nil {
+		if isSetModeUnsupportedErr(callErr) {
+			a.restrictedSetModeUnsupported.Store(cacheKey, true)
+			a.warnRestrictedOnce(cmdLine, modeID, conversationID, "event", "restricted_mode_unsupported",
+				"reason", "method_not_found",
+				"error", callErr.Error(),
+				"sender_id", origin.SenderID,
+				"sender_reason", origin.Reason,
+			)
+			return errRestrictedModeUnsupported
+		}
+		a.warnRestrictedOnce(cmdLine, modeID, conversationID, "event", "restricted_mode_failed",
+			"error", callErr.Error(),
+			"sender_id", origin.SenderID,
+			"sender_reason", origin.Reason,
+		)
+		return errRestrictedModeUnsupported
+	}
+
+	a.warnRestrictedOnce(cmdLine, modeID, conversationID, "event", "restricted_mode_applied",
+		"mode_source", source,
+		"sender_id", origin.SenderID,
+		"sender_reason", origin.Reason,
+	)
+	return nil
+}
+
+func (a *ACPAgent) warnRestrictedOnce(cmdLine, modeID, conversationID string, kv ...interface{}) {
+	key := cmdLine + "|" + modeID + "|" + conversationID
+	if _, loaded := a.restrictedSetModeWarned.LoadOrStore(key, true); loaded {
+		return
+	}
+	args := append([]interface{}{
+		"component", "acp",
+		"command", a.command,
+		"mode_id", modeID,
+		"conversation", conversationID,
+	}, kv...)
+	slog.Warn("acp restricted-mode event", args...)
+}
+
+// restrictedModeRefusalText is the fail-closed reply rendered to a
+// non-owner sender when the connected agent cannot enforce a
+// read-only mode. The English copy is intentionally short — handlers
+// surface it verbatim through the bot reply path.
+func restrictedModeRefusalText(command string) string {
+	if command == "" {
+		command = "the configured ACP agent"
+	}
+	return "Sorry — this RingClaw deployment is configured for fail-closed safety: the connected agent (`" +
+		command + "`) does not expose a read-only mode that can be enforced for non-owner senders. " +
+		"Your message was not forwarded to the agent. Please ask the bot operator (someone listed in `source_user_ids`) " +
+		"to handle this request, or contact them about granting you full access."
 }

@@ -228,12 +228,77 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 }
 
 func (a *ACPAgent) handlePermissionRequest(raw string) {
+	// permissionRequestParamsWithSession is a local extension that
+	// also captures the sessionId so the v0.4.3 Layer-B gate can
+	// deny tool approvals that originate from non-owner sessions.
+	type permissionRequestParamsWithSession struct {
+		SessionID string             `json:"sessionId"`
+		ToolCall  json.RawMessage    `json:"toolCall"`
+		Options   []permissionOption `json:"options"`
+	}
 	var req struct {
-		ID     json.RawMessage         `json:"id"`
-		Params permissionRequestParams `json:"params"`
+		ID     json.RawMessage                    `json:"id"`
+		Params permissionRequestParamsWithSession `json:"params"`
 	}
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		slog.Error("failed to parse permission request", "component", "acp", "error", err)
+		return
+	}
+
+	type permissionOutcome struct {
+		Outcome  string `json:"outcome"`
+		OptionID string `json:"optionId"`
+	}
+	type permissionResult struct {
+		Outcome permissionOutcome `json:"outcome"`
+	}
+
+	// Layer-B gate: a non-owner session must never have a permission
+	// auto-approved on its behalf, even when the agent itself has
+	// already decided to ask. We pick the first deny-kind option (or
+	// synthesize a "deny" outcome) so the agent learns the tool call
+	// was rejected.
+	if v, ok := a.sessionRoles.Load(req.Params.SessionID); ok {
+		if origin, _ := v.(Origin); !origin.IsOwner {
+			denyOption := ""
+			for _, opt := range req.Params.Options {
+				if opt.Kind == "deny" || opt.Kind == "reject" {
+					denyOption = opt.OptionID
+					break
+				}
+			}
+			if denyOption != "" {
+				a.sendResponse(req.ID, permissionResult{
+					Outcome: permissionOutcome{
+						Outcome:  "selected",
+						OptionID: denyOption,
+					},
+				})
+			} else {
+				// No explicit deny option offered — return a
+				// cancelled outcome so the agent treats the
+				// request as not-granted.
+				a.sendResponse(req.ID, permissionResult{
+					Outcome: permissionOutcome{Outcome: "cancelled"},
+				})
+			}
+			a.warnDeniedOnce(req.Params.SessionID, "session/request_permission",
+				"reason", "non_owner",
+				"deny_option", denyOption,
+				"sender_id", origin.SenderID,
+				"sender_reason", origin.Reason,
+			)
+			return
+		}
+	} else {
+		// Unknown session → fail-closed deny, mirroring the
+		// gateNonOwnerToolCall fallback.
+		a.sendResponse(req.ID, permissionResult{
+			Outcome: permissionOutcome{Outcome: "cancelled"},
+		})
+		a.warnDeniedOnce(req.Params.SessionID, "session/request_permission",
+			"reason", "unknown_session",
+		)
 		return
 	}
 
@@ -249,14 +314,6 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 	}
 	if optionID == "" {
 		optionID = "allow"
-	}
-
-	type permissionOutcome struct {
-		Outcome  string `json:"outcome"`
-		OptionID string `json:"optionId"`
-	}
-	type permissionResult struct {
-		Outcome permissionOutcome `json:"outcome"`
 	}
 
 	a.sendResponse(req.ID, permissionResult{

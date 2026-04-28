@@ -305,6 +305,10 @@ func (a *ACPAgent) handleTerminalCreate(raw string) {
 		return
 	}
 
+	if a.gateNonOwnerToolCall(id, "terminal/create", req.SessionID) {
+		return
+	}
+
 	termID, err := a.termMgr.create(req)
 	if err != nil {
 		a.sendErrorResponse(id, -32000, err.Error())
@@ -327,6 +331,10 @@ func (a *ACPAgent) handleTerminalOutput(raw string) {
 		return
 	}
 
+	if a.gateNonOwnerToolCall(id, "terminal/output", req.SessionID) {
+		return
+	}
+
 	resp, err := a.termMgr.output(req.TerminalID)
 	if err != nil {
 		a.sendErrorResponse(id, -32000, err.Error())
@@ -346,6 +354,10 @@ func (a *ACPAgent) handleTerminalWaitForExit(raw string) {
 	var req termWaitRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		a.sendErrorResponse(id, -32602, fmt.Sprintf("invalid params: %v", err))
+		return
+	}
+
+	if a.gateNonOwnerToolCall(id, "terminal/wait_for_exit", req.SessionID) {
 		return
 	}
 
@@ -373,6 +385,10 @@ func (a *ACPAgent) handleTerminalKill(raw string) {
 		return
 	}
 
+	if a.gateNonOwnerToolCall(id, "terminal/kill", req.SessionID) {
+		return
+	}
+
 	if err := a.termMgr.kill(req.TerminalID); err != nil {
 		a.sendErrorResponse(id, -32000, err.Error())
 		return
@@ -391,6 +407,10 @@ func (a *ACPAgent) handleTerminalRelease(raw string) {
 	var req termReleaseRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		a.sendErrorResponse(id, -32602, fmt.Sprintf("invalid params: %v", err))
+		return
+	}
+
+	if a.gateNonOwnerToolCall(id, "terminal/release", req.SessionID) {
 		return
 	}
 
@@ -427,6 +447,10 @@ func (a *ACPAgent) handleFSReadTextFile(raw string) {
 	var req fsReadRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		a.sendErrorResponse(id, -32602, fmt.Sprintf("invalid params: %v", err))
+		return
+	}
+
+	if a.gateNonOwnerToolCall(id, "fs/read_text_file", req.SessionID) {
 		return
 	}
 
@@ -477,6 +501,10 @@ func (a *ACPAgent) handleFSWriteTextFile(raw string) {
 	var req fsWriteRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		a.sendErrorResponse(id, -32602, fmt.Sprintf("invalid params: %v", err))
+		return
+	}
+
+	if a.gateNonOwnerToolCall(id, "fs/write_text_file", req.SessionID) {
 		return
 	}
 
