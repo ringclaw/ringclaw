@@ -1,15 +1,28 @@
 # RingClaw 官方 Binary Setup Runbook
 
-这份文档是给 AI agent 执行 setup 用的，不是只给人看的说明。目标是让另一个人把本文交给 AI，AI 可以按步骤完成 RingClaw 安装、RingCentral DPW 配置、本机配置、重启和验证。
+这份文档是给 AI agent 执行 setup 用的，不是只给人看的说明。目标是让用户只引用本文，AI 就能按步骤完成 RingClaw 安装、RingCentral DPW 配置、本机配置、重启和验证。
 
 文档里不要写入真实 `Bot Token`、`Client Secret`、`JWT`。执行时 AI 可以读取或写入本机 `~/.ringclaw/config.json`，但最终汇报只能输出脱敏状态。
 
-## 直接给 AI 的任务 Prompt
+## 用户如何调用本文
 
-把下面这段发给 AI：
+用户只需要在 AI coding agent 里输入：
 
 ```text
-请按这个 runbook 帮我 setup RingClaw。要求：
+根据 {ringclaw-repo/AI-AGENT-SETUP-GUIDE.md} 帮我setup RingClaw
+```
+
+其中 `{ringclaw-repo}` 可以是：
+
+- 本地 RingClaw repo 路径，例如 `/Users/<you>/work/git/ringclaw`
+- GitHub 文件链接
+- AI 工具能读取的仓库引用
+
+AI 收到这句话后，必须先打开并读取本文，然后直接执行 setup。不要只给计划，也不要要求用户把本文内容再复制一遍。
+
+## AI 执行目标
+
+AI 执行本文时必须满足：
 
 1. 使用 RingClaw 官方 binary，不要使用源码自编译版本。
 2. 按官方文档配置 Bot App 和 Private REST API App/JWT。
@@ -22,9 +35,6 @@
    - 日志里 bot DM chat resolved
    - 日志里 subscribed to post events, listening...
    - 私聊或群聊至少一次端到端响应成功
-
-请先读取本文，再执行，不要只给计划。
-```
 
 ## 0. 执行规则
 
