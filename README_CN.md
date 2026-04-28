@@ -24,6 +24,8 @@ ringclaw start
 
 所有配置都存放在 `~/.ringclaw/config.json` 中。首次启动时，RingClaw 会自动检测已安装的 AI 智能体并更新该文件。不再读取 `RC_BOT_TOKEN` 等环境变量——请使用 `ringclaw setup` 或直接编辑该文件。
 
+🤖 **AI Agent 自动安装：** 让 AI 帮你完成全部配置 — [AI Agent 安装指南](docs/zh/guide/ai-agent-setup.md)
+
 ## 功能特性
 
 - **多 Agent 支持** — 通过 ACP/CLI/HTTP 路由消息到 Claude、Codex、Gemini、Kimi 等。[→ Agent 配置](https://ringclaw.github.io/ringclaw/zh/guide/agents.html)
