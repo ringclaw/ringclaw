@@ -176,44 +176,54 @@ func runStart(cmd *cobra.Command, args []string) error {
 		handler.AddTrustedSender(id)
 	}
 
-	// Resolve & seed chat_user_allow (per-chat trusted users). Entries
-	// may be emails / phone numbers; ResolveUserIDs maps them to
-	// numeric IDs the monitor compares against incoming CreatorIDs.
+	// SECURITY ADVISORY (v0.4.2): chat_user_allow is force-cleared at
+	// startup because listed users gain the bot's full agent
+	// capability — including filesystem access, terminal commands,
+	// and external HTTP — through the agent tool-call channel. The
+	// pre-v0.5.0 implementation has no per-sender capability gating,
+	// so any entry here, even from a benign OOB approval, is
+	// equivalent to handing the requester owner-level access in that
+	// chat. v0.5.0 will route these users through a restricted
+	// agent backend; until then we wipe the slate every boot and
+	// force the operator to reconsider.
+	//
+	// Operators who fully understand the trade-off and still want
+	// per-chat trust today should pre-seed source_user_ids instead
+	// (which has the same capability concern but is at least
+	// explicitly hand-curated and documented as such).
 	if len(cfg.RC.ChatUserAllow) > 0 {
-		lookupClient := c.lookupClient()
-		resolvedChatAllow := make(map[string][]string, len(cfg.RC.ChatUserAllow))
+		cleared := make(map[string][]string, len(cfg.RC.ChatUserAllow))
 		total := 0
 		for chatID, list := range cfg.RC.ChatUserAllow {
-			ids := lookupClient.ResolveUserIDs(ctx, list)
-			if len(ids) == 0 {
-				continue
-			}
-			resolvedChatAllow[chatID] = ids
-			total += len(ids)
-			for _, uid := range ids {
-				handler.AddChatUserAllow(chatID, uid)
-			}
+			cleared[chatID] = append([]string(nil), list...)
+			total += len(list)
 		}
-		monitor.SetChatUserAllow(resolvedChatAllow)
-		slog.Info("chat_user_allow resolved", "component", "start", "chats", len(resolvedChatAllow), "users", total)
+		cfg.RC.ChatUserAllow = nil
+		if err := config.Save(cfg); err != nil {
+			slog.Error("failed to persist chat_user_allow clear",
+				"component", "start", "error", err)
+		}
+		for chatID, list := range cleared {
+			slog.Error("SECURITY: chat_user_allow entry cleared on startup (v0.4.2 stop-gap)",
+				"component", "start", "chatID", chatID, "identifiers", list)
+		}
+		slog.Error("SECURITY: chat_user_allow force-cleared on startup; v0.4.2 reverts the v0.4.1 OOB-default-on change because OOB-approved users currently get full agent capability (FS / terminal / HTTP). v0.5.0 will introduce a restricted agent backend. Re-add entries only after reading docs/security/sender-allowlist.md.",
+			"component", "start", "totalChats", len(cleared), "totalIdentifiers", total)
 	}
 
-	// Wire the authorize-mention OOB flow when enabled. Requires
-	// Private App + resolved owner DM; without those the feature is
-	// disabled. Log level depends on whether the operator opted in
-	// explicitly (ERROR — they asked for a feature that can't run)
-	// or defaulted in (INFO — the v0.4.1+ default tripped over a
-	// minimal install, no need to scream about it).
+	// Wire the authorize-mention OOB flow only when explicitly opted
+	// in. v0.4.2 reverted the v0.4.1 default-on flip; in v0.4.2 the
+	// flag must be explicit-true. The IsAuthorizeMentionEnabled
+	// helper already encodes the default-OFF semantics, but we also
+	// surface a one-time WARN so operators see why their bot just
+	// posted /approval to the owner DM.
 	if cfg.RC.IsAuthorizeMentionEnabled() {
+		slog.Warn("authorize-mention OOB enabled — approved users currently receive full agent capability in their authorized chats; v0.5.0 will restrict them to text + RC ACTION only",
+			"component", "start")
 		ownerDM := handler.OwnerDMChatID()
 		if c.private == nil || ownerDM == "" {
-			if cfg.RC.IsAuthorizeMentionExplicit() {
-				slog.Error("allow_group_mention_authorize requires Private App + resolved owner DM; feature disabled",
-					"component", "start", "hasPrivateApp", c.private != nil, "ownerDMChatID", ownerDM)
-			} else {
-				slog.Info("authorize-mention OOB defaulted on but Private App + owner DM unavailable; non-trusted group mentions will be silently dropped (set ringcentral.allow_group_mention_authorize=false to silence this notice)",
-					"component", "start", "hasPrivateApp", c.private != nil, "ownerDMChatID", ownerDM)
-			}
+			slog.Error("allow_group_mention_authorize requires Private App + resolved owner DM; feature disabled",
+				"component", "start", "hasPrivateApp", c.private != nil, "ownerDMChatID", ownerDM)
 		} else {
 			persist := func(chatID, identifier string) error {
 				if cfg.RC.AddChatUserAllow(chatID, identifier) {

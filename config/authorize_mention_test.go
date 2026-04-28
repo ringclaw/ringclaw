@@ -3,10 +3,10 @@ package config
 import "testing"
 
 func TestRCConfig_IsAuthorizeMentionEnabled(t *testing.T) {
-	t.Run("nil pointer defaults to enabled in v0.4.1+", func(t *testing.T) {
+	t.Run("nil pointer defaults to disabled in v0.4.2+ (security stop-gap reverted v0.4.1 default)", func(t *testing.T) {
 		var rc RCConfig
-		if !rc.IsAuthorizeMentionEnabled() {
-			t.Fatalf("zero-value RCConfig must report enabled (default flipped in v0.4.1)")
+		if rc.IsAuthorizeMentionEnabled() {
+			t.Fatalf("zero-value RCConfig must report disabled in v0.4.2+ (default reverted from v0.4.1)")
 		}
 	})
 	t.Run("explicit false disables", func(t *testing.T) {

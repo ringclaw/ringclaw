@@ -119,14 +119,17 @@ type RCConfig struct {
 	// to ChatUserAllow for that chat only and persisted to
 	// config.json.
 	//
-	// Defaults to true since v0.4.1 (an unset field means "on") so
-	// fresh installs get the OOB behavior without an explicit toggle.
-	// Set to false to keep the legacy silent-drop behavior.
+	// SECURITY ADVISORY (v0.4.2): the default is reverted to false
+	// (nil/unset = OFF) because OOB approval grants the requester
+	// the bot's full agent capability — including filesystem access,
+	// terminal commands, and external HTTP — via the agent tool-call
+	// channel. v0.4.1 had defaulted this on; v0.4.2 reverts to the
+	// v0.4.0 behavior while v0.5.0 introduces a restricted agent
+	// backend for non-owner senders.
 	//
-	// Requires Private App + resolved owner DM. Without those the
-	// feature is disabled at startup; the log level depends on
-	// whether the operator opted in explicitly (ERROR) or relied on
-	// the default (INFO).
+	// Requires Private App + resolved owner DM when explicitly set.
+	// Without those, the feature is disabled at startup with an
+	// ERROR log.
 	AllowGroupMentionAuthorize *bool `json:"allow_group_mention_authorize,omitempty"`
 
 	// ChatUserAllow maps chat ID -> additional trusted user
@@ -138,35 +141,45 @@ type RCConfig struct {
 	// authorize-mention OOB flow; operators may also pre-seed it by
 	// hand. Empty (or absent chat key) means "no per-chat
 	// exception".
+	//
+	// SECURITY ADVISORY (v0.4.2): listed users gain the bot's full
+	// agent capability in their authorized chats — including
+	// filesystem access (List, Read, Write), terminal commands, and
+	// external HTTP — through the agent tool-call channel. v0.4.2
+	// force-clears this map at startup and emits an ERROR log so
+	// operators must consciously re-add entries. v0.5.0 will route
+	// these users through a restricted agent backend that allows
+	// only text replies and RingCentral ACTION blocks.
 	ChatUserAllow map[string][]string `json:"chat_user_allow,omitempty"`
 }
 
 // IsAuthorizeMentionEnabled reports whether the authorize-mention OOB
-// flow is on. Since v0.4.1 the default is true: an unset
-// allow_group_mention_authorize field means "feature on" so non-trusted
-// group mentions surface in the owner DM instead of being silently
-// dropped. Operators who want the legacy silent-drop behavior must set
-// the field to false explicitly in config.json.
+// flow is on. v0.4.1 defaulted this to true; v0.4.2 reverts to the
+// v0.4.0 behavior of default-OFF because the OOB grant carries the
+// bot's full agent capability (FS / terminal / web). v0.5.0 will
+// reintroduce a default-ON path once the restricted agent backend
+// lands.
+//
+// Operators who want the OOB flow today must set the field to true
+// explicitly and accept that approved users gain full agent
+// capability in their authorized chats.
 //
 // The runtime requirements (Private App + resolved owner DM) are
-// validated in cmd/start.go regardless of how the flag was set; when
-// they are missing the feature is disabled and a log line is emitted
-// at a level that distinguishes explicit opt-in (ERROR — operator
-// asked for it but it can't run) from the implicit default
-// (INFO — no one asked, just informing).
+// validated in cmd/start.go; when they are missing the feature is
+// disabled with an ERROR log.
 func (rc RCConfig) IsAuthorizeMentionEnabled() bool {
 	if rc.AllowGroupMentionAuthorize == nil {
-		return true
+		return false
 	}
 	return *rc.AllowGroupMentionAuthorize
 }
 
 // IsAuthorizeMentionExplicit reports whether the operator set the
 // allow_group_mention_authorize field explicitly (regardless of
-// value). Used to distinguish "operator opted in but Private App is
-// missing" (logged at ERROR) from "implicit default tripped over a
-// missing Private App" (logged at INFO) so the noise level matches
-// operator intent.
+// value). Retained for forward compatibility with v0.5.0 where the
+// log level may again differ between explicit-on and defaulted-on.
+// In v0.4.2 the default is OFF, so explicit-on is the only "on"
+// path.
 func (rc RCConfig) IsAuthorizeMentionExplicit() bool {
 	return rc.AllowGroupMentionAuthorize != nil
 }

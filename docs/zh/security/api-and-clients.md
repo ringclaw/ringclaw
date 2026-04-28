@@ -97,7 +97,7 @@ RingClaw 可以同时使用 **两类不同的 RingCentral 客户端**：始终
 | 基于邮箱的 `source_user_ids`（`alice@example.com`） | 忽略 — 无法将邮箱解析为用户 ID |
 | 基于电话的 `source_user_ids`（`+15551234567`） | 忽略 — 无法将电话解析为用户 ID |
 | 跨聊天操作（在其他聊天中创建任务/笔记） | 仅限 Bot 所在的聊天 |
-| Authorize-mention OOB 流程（`allow_group_mention_authorize`） | 启动时禁用。显式 `true` 时打 `ERROR ...`，未设置（v0.4.1+ 默认开启）时打 `INFO ...`；两种情况下非授信 `@bot` 都回退为静默丢弃。 |
+| Authorize-mention OOB 流程（`allow_group_mention_authorize`） | v0.4.2 起默认关闭。显式 `true` 但未配置 Private App 时启动时禁用功能并打 ERROR 日志；非授信 `@bot` 静默丢弃。 |
 | Bot 私聊里的"仅 owner"第一层门控 | 退化为"任意 trusted sender"——详见 [命令授权](./command-authorization) |
 
 ::: tip
