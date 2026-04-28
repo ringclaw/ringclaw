@@ -1,15 +1,17 @@
 # RingClaw 官方 Binary Setup Runbook
 
-这份文档是给 AI agent 执行 setup 用的，不是只给人看的说明。目标是让用户只引用本文，AI 就能按步骤完成 RingClaw 安装、RingCentral DPW 配置、本机配置、重启和验证。
+这份文档是给 AI agent 执行 setup 用的，不是只给人看的说明。目标是让用户通过本文完成 RingClaw setup；AI 读取本文后，应按步骤完成 RingClaw 安装、RingCentral DPW 配置、本机配置、重启和验证。
 
 文档里不要写入真实 `Bot Token`、`Client Secret`、`JWT`。执行时 AI 可以读取或写入本机 `~/.ringclaw/config.json`，但最终汇报只能输出脱敏状态。
 
-## 用户如何调用本文
+## 用户如何使用本文
 
-用户只需要在 AI coding agent 里输入：
+用户只需要把这个文件路径或链接交给 AI，并要求 AI 通过本文 setup RingClaw。
+
+推荐输入：
 
 ```text
-根据 {ringclaw-repo/AI-AGENT-SETUP-GUIDE.md} 帮我setup RingClaw
+根据 {ringclaw-repo/AI-AGENT-SETUP-GUIDE.md} setup RingClaw
 ```
 
 其中 `{ringclaw-repo}` 可以是：
