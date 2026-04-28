@@ -71,25 +71,51 @@ Private-App-owner 身份。详见 [命令授权](./command-authorization)。
 ## Authorize-mention OOB 流程
 
 RingClaw 在与 `/full-access`、跨聊天 OOB challenge 共用一套
-::: danger 安全公告（v0.4.2）
-OOB 审批一旦通过，被批准的用户在授权群聊中获得 bot 的**完整
-agent 能力**——包括文件系统访问（`List`、`Read`、`Write`）、
-终端命令（`Bash`）、外部 HTTP——通过 agent 工具调用通道实现。
-v0.5.0 之前 ringclaw 没有按发信者粒度的能力门控。
+::: danger 安全公告（v0.4.2 → v0.4.3）
+v0.4.3 之前任何变成"trusted"的发件人——无论是通过
+`source_user_ids`、`chat_user_allow` 还是 v0.4.1 OOB 审批——
+都驱动与 bot 操作员相同的 agent 后端，能在 agent 工具调用通道
+里发起文件系统（`List`、`Read`、`Write`）、终端（`Bash`）、
+外部 HTTP 调用。
 
-**v0.4.2 紧急止血：**
+**v0.4.3（本版本）—— 针对 `fs/*` + `terminal/*` 的双层 fail-closed
+非-owner 隔离：**
 
-- 默认值**翻回 OFF**（v0.4.1 默认开启的改动撤回）。要启用必
-  须显式设置 `ringcentral.allow_group_mention_authorize: true`。
-- `chat_user_allow` 在**每次启动时强制清空**并打 ERROR 日志。
-  v0.4.1 OOB 审批留下的旧条目必须由运维重新评估后手工添加。
-- `source_user_ids` 不会被清空，但同样存在能力暴露面问题——
-  升级前请审查该列表。
+- "Owner" 现在严格只是 **`source_user_ids`** 集合（加上解析出
+  的 Private App 机主）。`chat_user_allow` 用户、v0.4.0 OOB
+  审批通过的用户都被视为 **non-owner**，按下述受限上限运行。
+- **第一层（协议）：** 创建非-owner 的 ACP 会话之后立刻发送
+  `session/set_mode <restricted>`。modeID 走每家 agent 一张表：
+  `droid → spec`，`claude → plan`，`gemini → plan`，
+  `qwen → plan`，`cursor-agent → plan`。未知 agent 走启发式：
+  在 `availableModes` 里找名称含 `plan`/`spec`/`read`/`safe`
+  的 mode。
+- **第二层（客户端 fail-closed gate）：** ringclaw 拒绝来自
+  非-owner 会话的任何 `fs/read_text_file` /
+  `fs/write_text_file` / `terminal/create` /
+  `terminal/output` / `terminal/wait_for_exit` /
+  `terminal/kill` / `terminal/release` JSON-RPC 请求，无视 agent
+  本身对 mode 的执行情况。`session/request_permission` 也会被
+  deny（agent 收到的是 `kind=deny` 选项或 `cancelled` 结果）。
+- **找不到只读 mode = fail-closed。** 当 agent 没有任何只读
+  mode 且运维也没配 override 时，非-owner 消息**不会**进入
+  agent；用户拿到一段拒绝文案；审计日志打
+  `restricted_mode_unsupported_no_mode`。
+- **`chat_user_allow` 仍每次启动强制清空**（v0.4.2 止血措施）。
 
-**v0.5.0（开发中）** 引入受限 agent 后端：非 owner 发信人会被
-路由到独立的 Droid 进程，能力被限制为文字回复 + RingCentral
-`ACTION:MESSAGE / TASK / NOTE / EVENT`，无文件系统、无终端、
-无外部 HTTP。
+**第一层已知局限（best-effort）：** 部分上游 agent 不会强制执行
+只读 mode（qwen-code#1806 set_mode 返回成功但不强制；
+gemini-cli#22191 plan mode 在 ACP 路径有已知 bug）。`fs/*` +
+`terminal/*` 的真正安全边界由第二层提供。**WebFetch /
+WebSearch / 内置 HTTP 工具 / MCP 自定义工具** 由 agent 进程
+本身发起，ringclaw 看不到对应的 JSON-RPC 请求，因此第二层无法
+覆盖——这部分仍只能依赖第一层 best-effort。v0.5.0 计划用 OS
+级别 sandbox 把这部分也封住。
+
+**运维 override：** 每家 agent 的默认 modeID 可以通过
+`config.json` 中的 `agents.<name>.restricted_mode_id` 覆盖。
+override 必须在 agent 自己的 `availableModes` 列表里，否则
+内置选择仍然生效。
 :::
 
 challenge / 主机审批基础设施之上叠加了一条独立 OOB 入口，让
@@ -154,12 +180,27 @@ sequenceDiagram
   层。非 owner 的特权第一层命令仍要求 Private-App-owner 身
   份。详见 [命令授权](./command-authorization)。
 
-::: warning 第二层（agent 工具调用）实际上被解锁
-被列入的用户可以像任何 trusted sender 一样驱动 AI agent，意味
-着他们可以请 agent 调用文件系统 / 终端 / Web 工具。这些调用
-以 bot 运维者的权限运行在主机上。在 v0.5.0 受限后端上线之前，
-请把 `chat_user_allow` 一条记录视为"在该群里把 shell 交给该用
-户"。
+::: warning 第二层（agent 工具调用）—— 非-owner 上限（v0.4.3+）
+被列入的用户可以像任何 trusted sender 一样驱动 AI agent，**但**
+v0.4.3 在他们的会话上加了一道 fail-closed 上限：
+
+- `fs/read_text_file`、`fs/write_text_file`、
+  `terminal/create` / `output` / `wait_for_exit` / `kill` /
+  `release`、`session/request_permission` 在 ringclaw
+  客户端层就被 deny。agent 拿到的是 `code=-32001`（"非-owner
+  发件人调用被拒"）。
+- 会话同时被请求切换到只读 mode（droid 走 `spec`，其余走
+  `plan`）作为纵深防御。当 agent 不支持任何合适 mode 时，
+  消息会直接被拒，不进入 agent。
+- 文字回复与 RingCentral
+  `ACTION:MESSAGE / TASK / NOTE / EVENT` 仍可用（后者走
+  RingCentral REST API，不走 ACP）。
+
+**第二层覆盖不到的部分：** `WebFetch`、`WebSearch`、MCP 自定义
+工具。这些是 agent 进程内部派发的，ringclaw 看不到。v0.5.0 计
+划通过 OS 级 sandbox 把这部分也封住。在那之前，把
+`chat_user_allow` 用户视为"可以让 agent 读公网、可以让 agent
+说话"，但**不再**是"可以 shell 进你的主机"。
 :::
 - **Pending dedupe。** 同一 `(chatID, userID)` 在 challenge TTL
   内同时只能存在一个 pending challenge。批准 / 拒绝 / 过期 /
@@ -202,6 +243,8 @@ sequenceDiagram
 | `allow_group_mention_authorize: true` | 显式开启。ringclaw 启动时打一条 WARN 提醒运维：被批准的用户获得 agent 完整能力。 |
 | Private App 未配置（owner 私聊不可解析） | 启动时禁用功能并打 ERROR 日志；非授信 `@bot` 静默丢弃。 |
 | 磁盘上残留的 `chat_user_allow` 条目（v0.4.1 遗留） | 启动时强制清空并打 ERROR 日志，运维必须重新评估后手工添加。 |
+| 非-owner 命中没有只读 mode 的 agent | v0.4.3 fail-closed：消息**不**进入 agent；用户收到一段拒绝文案；审计日志打 `restricted_mode_unsupported_no_mode`。 |
+| 非-owner + agent 拒绝 `session/set_mode` | v0.4.3 fail-closed：同上；(`agentCmd`, `modeID`) 被缓存，后续尝试跳过该 RPC。 |
 | 运行时 owner 私聊尚未解析 | 命中竞争窗口的那一条消息丢弃并打 `WARN authorize-mention: OOB or owner DM unconfigured; dropping`；私聊解析完成后后续消息正常。 |
 | 运维拒绝 challenge | 释放 pending 锁；owner 私聊收到通知。`(chat, user)` 进入 24 小时冷却——期间再 `@bot` 会被静默丢弃。 |
 | Challenge 过期（5 分钟 TTL） | 释放 pending 锁；owner 私聊收到过期通知。同样进入 24 小时冷却。 |
@@ -240,3 +283,7 @@ challenge。两个字段互相独立。
 | 持久化失败 | `ERROR authorize-mention: persist failed`（含 `error`） | 内存授权成功但写 `config.json` 失败——本进程内仍生效，重启会丢。 |
 | Prompt 发送失败 | `ERROR authorize-mention: post prompt failed`（含 `error`） | Owner 私聊发送失败；challenge 自动 deny，pending 锁释放，用户可重试。 |
 | 没有可用邮箱 | `WARN authorize-mention: no email available, persisting numeric ID` | 目录解析无邮箱；改存数字 extension ID（仍按群作用域）。 |
+| v0.4.3：非-owner 应用受限 mode | `WARN acp restricted-mode event`（`event=restricted_mode_applied`、`mode_id`、`mode_source`、`conversation`、`sender_id`） | 第一层成功：agent 接受了非-owner 会话的只读 mode。 |
+| v0.4.3：受限 mode 不可用（无候选） | `WARN acp restricted-mode event`（`event=restricted_mode_unsupported_no_mode`、`available_modes`） | 第一层 fail-closed：内置表与启发式都没匹配。非-owner 消息被拒。 |
+| v0.4.3：受限 mode 不可用（`set_mode` 被拒） | `WARN acp restricted-mode event`（`event=restricted_mode_unsupported`、`error="Method not found"`） | 第一层 fail-closed：agent 拒绝调用。被缓存，后续跳过。 |
+| v0.4.3：第二层工具调用被拒 | `WARN acp non-owner tool call denied`（`event=tool_call_denied`、`method`、`session`、`reason`） | 客户端 fail-closed 拒绝 `fs/*` / `terminal/*` / `session/request_permission`，按 (session, method) 去重。 |

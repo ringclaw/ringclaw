@@ -99,7 +99,7 @@ func TestGetOrCreateSession_SetModeUnsupportedCache(t *testing.T) {
 	defer cancel()
 
 	// First session: set_mode is attempted, fails, flag is set
-	if _, _, err := a.getOrCreateSession(ctx, "conv-1"); err != nil {
+	if _, _, err := a.getOrCreateSession(ctx, "conv-1", Origin{IsOwner: true}); err != nil {
 		t.Fatalf("session 1: %v", err)
 	}
 	if got := atomic.LoadInt32(&setModeCalls); got != 1 {
@@ -110,7 +110,7 @@ func TestGetOrCreateSession_SetModeUnsupportedCache(t *testing.T) {
 	}
 
 	// Second session: set_mode should be skipped
-	if _, _, err := a.getOrCreateSession(ctx, "conv-2"); err != nil {
+	if _, _, err := a.getOrCreateSession(ctx, "conv-2", Origin{IsOwner: true}); err != nil {
 		t.Fatalf("session 2: %v", err)
 	}
 	if got := atomic.LoadInt32(&setModeCalls); got != 1 {
@@ -118,7 +118,7 @@ func TestGetOrCreateSession_SetModeUnsupportedCache(t *testing.T) {
 	}
 
 	// Third session: still skipped
-	if _, _, err := a.getOrCreateSession(ctx, "conv-3"); err != nil {
+	if _, _, err := a.getOrCreateSession(ctx, "conv-3", Origin{IsOwner: true}); err != nil {
 		t.Fatalf("session 3: %v", err)
 	}
 	if got := atomic.LoadInt32(&setModeCalls); got != 1 {

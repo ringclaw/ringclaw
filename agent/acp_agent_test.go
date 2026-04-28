@@ -251,7 +251,7 @@ func TestACPAgent_GetOrCreateSession_ExistingReuse(t *testing.T) {
 	}
 
 	// Should reuse without any RPC call
-	sid, isNew, err := a.getOrCreateSession(context.Background(), "conv-1")
+	sid, isNew, err := a.getOrCreateSession(context.Background(), "conv-1", Origin{IsOwner: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestACPAgent_GetOrCreateSession_NewSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sid, isNew, err := a.getOrCreateSession(ctx, "new-conv")
+	sid, isNew, err := a.getOrCreateSession(ctx, "new-conv", Origin{IsOwner: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

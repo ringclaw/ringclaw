@@ -223,6 +223,7 @@ Cron / heartbeat / HTTP API **不会** 被注入 banner——仅限 WebSocket
 |------|------|--------|---------------|
 | `allow_write` | bool | `false` | 授予 ACP 文件写入能力（agent 可写文件）。 |
 | `full_access` | bool | `false` | 每次新建 session 调用 `session/set_mode "full-access"`。需要顶层 `full_access_ack: true`，否则降级并打印 `WARN`。 |
+| `restricted_mode_id` | string | 每家 agent 自带默认 | v0.4.3+：应用到非-owner 会话的 ACP modeID（fail-closed 隔离用）。默认：`droid → spec`；`claude / gemini / qwen / cursor-agent → plan`；其余走启发式（在 `availableModes` 中匹配 `plan` / `spec` / `read` / `safe`）。override 必须命中 agent 自己 `availableModes` 中的某一个，否则仍走内置选择。两条路径都无候选时，非-owner 消息直接被拒。详见 [发送者白名单 › 安全公告（v0.4.2 → v0.4.3）](../security/sender-allowlist#authorize-mention-oob-流程)。 |
 
 ### HTTP 专属（`type: http`）
 

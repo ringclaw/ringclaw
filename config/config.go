@@ -280,6 +280,27 @@ type AgentConfig struct {
 	Env          map[string]string `json:"env,omitempty"`           // extra environment variables (cli/acp type)
 	AllowWrite   bool              `json:"allow_write,omitempty"`   // grant file write permission to ACP agent (default: false)
 	FullAccess   bool              `json:"full_access,omitempty"`   // call session/set_mode "full-access" on ACP session creation
+
+	// RestrictedModeID overrides the built-in agent → restricted
+	// modeId map that ringclaw uses for non-owner senders. When
+	// empty (default), the agent layer picks `spec` for droid and
+	// `plan` for claude / gemini / qwen / cursor (with a heuristic
+	// fallback for unknown agents). When non-empty, the value MUST
+	// be one of the modes the agent advertises in its
+	// `availableModes` list; otherwise the override is ignored and
+	// ringclaw falls back to the built-in selection.
+	//
+	// SECURITY NOTE (v0.4.3): ringclaw protects non-owner sessions
+	// via TWO layers — (1) the ACP `session/set_mode` call covered
+	// by this field, and (2) a fail-closed client-side gate that
+	// denies every fs/* and terminal/* tool call from non-owner
+	// sessions regardless of the agent's mode behavior. WebFetch /
+	// WebSearch / MCP tools are dispatched directly by the agent
+	// process and therefore rely on Layer 1 alone — see
+	// docs/security/sender-allowlist.md for the limitation
+	// statement and the v0.5.0 OS-sandbox roadmap that closes it.
+	RestrictedModeID string `json:"restricted_mode_id,omitempty"`
+
 	Model        string            `json:"model,omitempty"`         // model name
 	SystemPrompt string            `json:"system_prompt,omitempty"` // system prompt
 	Endpoint     string            `json:"endpoint,omitempty"`      // API endpoint (http type)

@@ -8,9 +8,140 @@ contract). Doc-only or test-only changes do not bump the version.
 
 ## [Unreleased]
 
-Planned for v0.5.0 — restricted agent backend for non-owner senders
-(text replies + RingCentral `ACTION:MESSAGE / TASK / NOTE / EVENT`
-only; no filesystem, terminal, or external HTTP).
+Planned for v0.5.0 — OS-level sandboxing for non-owner agent
+processes to close the WebFetch / WebSearch / MCP gap left open by
+v0.4.3's client-side gate.
+
+---
+
+## v0.4.3 — 2026-04-28 — SECURITY: fail-closed two-tier non-owner isolation
+
+### Highlights
+
+v0.4.3 turns the non-owner ceiling promised in v0.4.2 into actual
+runtime enforcement, without waiting for v0.5.0's separate-process
+sandbox. Two cooperating layers protect every non-owner ACP
+session:
+
+- **Layer A — protocol.** ringclaw issues
+  `session/set_mode <restricted>` immediately after creating the
+  session. The modeID comes from a per-agent map: `droid → spec`,
+  `claude → plan`, `gemini → plan`, `qwen → plan`,
+  `cursor-agent → plan`; unknown agents fall back to a heuristic
+  over `availableModes` (`plan` / `spec` / `read` / `safe`).
+  Operators can override per agent via the new
+  `agents.<name>.restricted_mode_id` field; the override must
+  match a mode the agent advertises, otherwise the built-in
+  selection wins.
+- **Layer B — client gate (fail-closed).** ringclaw rejects
+  `fs/read_text_file`, `fs/write_text_file`, `terminal/create`,
+  `terminal/output`, `terminal/wait_for_exit`, `terminal/kill`,
+  `terminal/release`, and `session/request_permission` JSON-RPC
+  requests from non-owner sessions with
+  `code=-32001 "denied for non-owner senders"`, regardless of
+  whether the agent honored Layer A. Layer B is the actual
+  security boundary for `fs/*` / `terminal/*` — Layer A is
+  defense-in-depth.
+
+### Owner / non-owner split
+
+"Owner" is now strictly the resolved Private App owner plus
+`source_user_ids`. `chat_user_allow` users and any v0.4.0
+OOB-approved users are **non-owners** and run under the v0.4.3
+ceiling. DMs to the bot are always treated as owner conversations
+regardless of allowlist membership.
+
+### Fail-closed behavior
+
+When the agent advertises no read-only mode and the operator did
+not configure an override, ringclaw refuses the non-owner message
+outright instead of forwarding it. The user receives a refusal
+text; the audit log records
+`event=restricted_mode_unsupported_no_mode` (or
+`restricted_mode_unsupported` when `set_mode` itself was rejected).
+The (`agentCmd`, `modeID`) pair is cached so subsequent attempts
+skip the failed RPC.
+
+### Known limitations (still requiring v0.5.0)
+
+`WebFetch`, `WebSearch`, the agent's built-in HTTP tools, and MCP
+custom tools are dispatched directly inside the agent process.
+ringclaw does not see those JSON-RPC requests, so Layer B cannot
+apply — those remain best-effort under Layer A only. v0.5.0 will
+close that gap with OS-level sandboxing of the non-owner agent
+subprocess.
+
+### Audit log additions
+
+| Event | Log line |
+|---|---|
+| Restricted mode applied | `WARN acp restricted-mode event` (`event=restricted_mode_applied`, `mode_id`, `mode_source`, `conversation`, `sender_id`) |
+| Restricted mode unsupported (no candidate) | `WARN acp restricted-mode event` (`event=restricted_mode_unsupported_no_mode`, `available_modes`) |
+| Restricted mode unsupported (`set_mode` rejected) | `WARN acp restricted-mode event` (`event=restricted_mode_unsupported`, `error`) |
+| Layer-B tool-call denied | `WARN acp non-owner tool call denied` (`event=tool_call_denied`, `method`, `session`, `reason`) |
+
+Each warning is deduped per `(session, method)` or
+`(agentCmd, modeID)` pair so a misbehaving agent does not flood
+the operator log.
+
+### Config schema
+
+```jsonc
+{
+  "agents": {
+    "droid": {
+      "type": "acp",
+      "command": "droid",
+      "restricted_mode_id": "spec"     // optional override
+    },
+    "claude": {
+      "type": "acp",
+      "command": "claude",
+      "restricted_mode_id": "plan"
+    }
+  }
+}
+```
+
+### Files
+
+- `agent/origin.go`, `agent/restricted_modes.go`, `agent/acp_gate.go`
+- `agent/acp_agent.go` — `sessionRoles` / `sessionModes` /
+  `restrictedSetModeUnsupported` / `restrictedSetModeWarned` /
+  `deniedToolWarned` maps; `getOrCreateSession` takes an `Origin`;
+  fail-closed branch in `chatWithEntries`; `applyRestrictedMode`
+  helper.
+- `agent/acp_terminal.go` — Layer-B gate at all seven
+  `fs/*` / `terminal/*` handler entries.
+- `agent/acp_rpc.go` — `handlePermissionRequest` denies non-owner
+  sessions (using either the agent-offered `kind=deny` option or a
+  `cancelled` outcome).
+- `messaging/sender_role.go` — `originForPost`: DM = owner,
+  `source_user_ids` = owner, `chat_user_allow` = non-owner with
+  `Reason="chat_user_allow"`, anyone else = non-owner.
+- `messaging/handler.go` / `messaging/handler_summarize.go` —
+  Origin attached to the dispatch context.
+- `config/config.go` — `AgentConfig.RestrictedModeID` field with
+  godoc SECURITY NOTE.
+- Docs: `docs/security/sender-allowlist.md`,
+  `docs/security/index.md`, `docs/guide/configuration.md`, and
+  Chinese mirrors.
+- Tests: `restricted_modes_test.go`, `gate_test.go`,
+  `origin_test.go`, `acp_restricted_mode_test.go`,
+  `messaging/sender_role_test.go`. Existing `acp_agent_test.go`,
+  `acp_set_mode_unsupported_test.go`, `acp_terminal_test.go`,
+  `acp_rpc_test.go` updated for the new `Origin` parameter.
+
+### Compatibility
+
+- Owner-side behavior is unchanged. Existing tests pass without
+  configuration changes.
+- `OriginFromContext` defaults to "owner" when no Origin is
+  attached, so non-messaging callers (cron, `/api/send`) continue
+  to operate as owner.
+- Operators with read-only-mode-incapable agents need to either
+  set `restricted_mode_id` or accept that non-owner messages will
+  be refused with the v0.4.3 fail-closed text.
 
 ---
 

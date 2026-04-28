@@ -230,6 +230,7 @@ extras below.
 |-------|------|---------|------------------------|
 | `allow_write` | bool | `false` | Grant the ACP fs capability (agent may write files). |
 | `full_access` | bool | `false` | Call `session/set_mode "full-access"` on every new session. Requires `full_access_ack: true` at the top level, otherwise downgraded with a `WARN`. |
+| `restricted_mode_id` | string | per-agent default | v0.4.3+: ACP modeID applied to non-owner sessions for fail-closed isolation. Defaults: `droid → spec`; `claude / gemini / qwen / cursor-agent → plan`; otherwise heuristic (`plan` / `spec` / `read` / `safe` from `availableModes`). Override must match a mode the agent advertises; otherwise the built-in selection wins. When neither path yields a mode, non-owner messages are refused outright. See [Sender Allowlist › SECURITY ADVISORY (v0.4.2 → v0.4.3)](../security/sender-allowlist#authorize-mention-oob-flow). |
 
 ### HTTP-specific (`type: http`)
 

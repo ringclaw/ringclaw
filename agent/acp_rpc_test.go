@@ -499,8 +499,9 @@ func TestReadLoop_DispatchesTerminalCreate(t *testing.T) {
 		}
 	}()
 
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 	// Feed terminal/create request to readLoop
-	req := `{"jsonrpc":"2.0","id":100,"method":"terminal/create","params":{"command":"echo","args":["hi"]}}`
+	req := `{"jsonrpc":"2.0","id":100,"method":"terminal/create","params":{"sessionId":"s1","command":"echo","args":["hi"]}}`
 	fmt.Fprintf(stdoutWriter, "%s\n", req)
 
 	select {
@@ -552,6 +553,7 @@ func TestReadLoop_DispatchesFSRead(t *testing.T) {
 		}
 	}()
 
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 	req := fmt.Sprintf(`{"jsonrpc":"2.0","id":101,"method":"fs/read_text_file","params":{"sessionId":"s1","path":"%s"}}`, testFile)
 	fmt.Fprintf(stdoutWriter, "%s\n", req)
 
@@ -604,6 +606,7 @@ func TestReadLoop_DispatchesFSWrite(t *testing.T) {
 		}
 	}()
 
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 	req := fmt.Sprintf(`{"jsonrpc":"2.0","id":102,"method":"fs/write_text_file","params":{"sessionId":"s1","path":"%s","content":"written"}}`, testFile)
 	fmt.Fprintf(stdoutWriter, "%s\n", req)
 
@@ -649,7 +652,8 @@ func TestReadLoop_DispatchesPermissionRequest(t *testing.T) {
 		}
 	}()
 
-	req := `{"jsonrpc":"2.0","id":103,"method":"session/request_permission","params":{"toolCall":{},"options":[{"optionId":"allow","name":"Allow","kind":"allow"}]}}`
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
+	req := `{"jsonrpc":"2.0","id":103,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{},"options":[{"optionId":"allow","name":"Allow","kind":"allow"}]}}`
 	fmt.Fprintf(stdoutWriter, "%s\n", req)
 
 	select {
@@ -852,6 +856,7 @@ func TestHandlePermissionRequest(t *testing.T) {
 	a := &ACPAgent{
 		stdin: stdinWriter,
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	// Capture response
 	var response string
@@ -864,7 +869,7 @@ func TestHandlePermissionRequest(t *testing.T) {
 		close(done)
 	}()
 
-	raw := `{"jsonrpc":"2.0","id":5,"method":"session/request_permission","params":{"toolCall":{},"options":[{"optionId":"allow-once","name":"Allow Once","kind":"allow"},{"optionId":"deny","name":"Deny","kind":"deny"}]}}`
+	raw := `{"jsonrpc":"2.0","id":5,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{},"options":[{"optionId":"allow-once","name":"Allow Once","kind":"allow"},{"optionId":"deny","name":"Deny","kind":"deny"}]}}`
 	a.handlePermissionRequest(raw)
 
 	stdinWriter.Close()
@@ -891,6 +896,7 @@ func TestHandlePermissionRequest_FallbackToFirstOption(t *testing.T) {
 	a := &ACPAgent{
 		stdin: stdinWriter,
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -903,7 +909,7 @@ func TestHandlePermissionRequest_FallbackToFirstOption(t *testing.T) {
 	}()
 
 	// No option has kind="allow"; should fall back to first option's ID
-	raw := `{"jsonrpc":"2.0","id":6,"method":"session/request_permission","params":{"toolCall":{},"options":[{"optionId":"approve-all","name":"Approve All","kind":"approve"},{"optionId":"deny","name":"Deny","kind":"deny"}]}}`
+	raw := `{"jsonrpc":"2.0","id":6,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{},"options":[{"optionId":"approve-all","name":"Approve All","kind":"approve"},{"optionId":"deny","name":"Deny","kind":"deny"}]}}`
 	a.handlePermissionRequest(raw)
 
 	stdinWriter.Close()
@@ -926,6 +932,7 @@ func TestHandlePermissionRequest_EmptyOptions(t *testing.T) {
 	a := &ACPAgent{
 		stdin: stdinWriter,
 	}
+	a.sessionRoles.Store("s1", Origin{IsOwner: true})
 
 	var response string
 	done := make(chan struct{})
@@ -938,7 +945,7 @@ func TestHandlePermissionRequest_EmptyOptions(t *testing.T) {
 	}()
 
 	// Empty options array; should fall back to hardcoded "allow"
-	raw := `{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"toolCall":{},"options":[]}}`
+	raw := `{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{},"options":[]}}`
 	a.handlePermissionRequest(raw)
 
 	stdinWriter.Close()
