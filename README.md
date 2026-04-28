@@ -24,6 +24,8 @@ ringclaw start
 
 All configuration lives in `~/.ringclaw/config.json`. On first start, RingClaw auto-detects installed AI agents and updates the file. Environment variables like `RC_BOT_TOKEN` are no longer read — use `ringclaw setup` or edit the file directly.
 
+🤖 **AI Agent Setup:** Let your AI agent handle the full setup — [AI Agent Setup Guide](docs/guide/ai-agent-setup.md)
+
 ## Features
 
 - **Multi-Agent Support** — route messages to Claude, Codex, Gemini, Kimi, and more via ACP/CLI/HTTP. [→ Agents](https://ringclaw.github.io/ringclaw/guide/agents.html)
