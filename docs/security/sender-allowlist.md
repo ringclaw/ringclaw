@@ -114,8 +114,11 @@ for `fs/*` + `terminal/*`:**
   configure an override, the non-owner message is **not**
   forwarded to the agent. The user receives a refusal text;
   audit log emits `restricted_mode_unsupported_no_mode`.
-- **`chat_user_allow` is still force-cleared at every startup**
-  (v0.4.2 stop-gap). Operators must re-add entries by hand.
+- **`chat_user_allow` is preserved across restarts (v0.4.4+).**
+  The v0.4.2 startup force-clear is removed now that v0.4.3
+  enforces the non-owner ceiling on these sessions. Listed users
+  are admitted at Layer 0, then run under the same fail-closed
+  ceiling described above.
 
 **Layer-A known limitations (best-effort only):** upstream
 agents do not always enforce the read-only mode by themselves
@@ -277,9 +280,9 @@ talk", but no longer "can shell into your host".
 |---|---|
 | `allow_group_mention_authorize` unset (default since v0.4.2) | Feature off. Non-trusted `@bot` is silently dropped (v0.4.0-style baseline). |
 | `allow_group_mention_authorize: false` | Feature off, explicitly. Same as unset. |
-| `allow_group_mention_authorize: true` | Feature on. ringclaw emits a startup WARN reminding the operator that approved users gain full agent capability. |
+| `allow_group_mention_authorize: true` | Feature on. ringclaw emits a startup INFO reminding the operator that approved users run under the v0.4.3+ non-owner ceiling. |
 | Private App not configured (no owner DM resolvable) | Feature disabled at startup with ERROR log; falls back to silent drop. |
-| Existing `chat_user_allow` entries on disk (v0.4.1 leftover) | Force-cleared at startup with ERROR log; operator must re-add by hand after re-evaluating. |
+| `chat_user_allow` entry resolves to zero numeric IDs | v0.4.4: WARN `chat_user_allow entry resolved to zero numeric IDs` with the offending raw identifiers. Most common cause: the chat ID field is a team display name instead of the numeric chat ID. Other causes: identifier not in the directory; Private App lacks `ReadAccounts`. |
 | Non-owner sender hits an agent with no read-only mode | v0.4.3 fail-closed: the message is **not** forwarded; the user receives a refusal reply; audit log emits `restricted_mode_unsupported_no_mode`. |
 | Non-owner sender + agent rejects `session/set_mode` | v0.4.3 fail-closed: same as above; the (`agentCmd`, `modeID`) pair is cached so subsequent attempts skip the RPC. |
 | Owner DM not yet resolved at runtime | The single message that hits this race is dropped with `WARN authorize-mention: OOB or owner DM unconfigured; dropping`. Subsequent messages succeed once the DM resolves. |
@@ -298,14 +301,129 @@ OOB flow at all can hand-edit `chat_user_allow` directly:
   "ringcentral": {
     "allow_group_mention_authorize": false,  // OOB flow off
     "chat_user_allow": {
-      "chat-engineering-7": ["alice@example.com"]
+      "800123456": ["alice@example.com"]
     }
   }
 }
 ```
 
-This admits Alice in `chat-engineering-7` and only there; no
-challenge is ever issued. The two fields are independent.
+This admits Alice in chat `800123456` and only there; no challenge
+is ever issued. The two fields are independent. The map key
+**must** be the numeric RC chat / group ID (see
+[How to find a chat ID](#how-to-find-a-chat-id)) — a team display
+name will silently match nothing.
+
+## Enabling OOB approval for group members
+
+Use this checklist when a non-owner group member needs to drive
+the agent in a specific group chat. Approved users run under the
+v0.4.3+ non-owner ceiling: text replies + RC `ACTION:MESSAGE /
+TASK / NOTE / EVENT` blocks remain available; `fs/*`, `terminal/*`
+and `session/request_permission` are denied at the JSON-RPC layer.
+
+#### Prerequisites (all four required)
+
+1. **Private App configured.** OOB needs to read the owner DM. The
+   bot client alone cannot see DMs to itself, so the Private App
+   uses the operator's identity. Without `ringcentral.private_app`
+   the OOB flow is disabled at startup with an `ERROR` log.
+2. **Owner has DM-ed the bot at least once.** ringclaw resolves
+   `ownerDMChatID` from that conversation. If the resolution fails
+   you'll see `ERROR allow_group_mention_authorize requires
+   Private App + resolved owner DM; feature disabled`.
+3. **`chat_ids` includes the target group's numeric chat ID.**
+   Messages from chats not on this list are dropped before the
+   sender allowlist is even consulted.
+4. **`source_user_ids` is non-empty** (the Private App owner is
+   auto-injected when the Private App resolves) so strict-mode
+   does not drop everything.
+
+#### Minimal config
+
+```jsonc
+{
+  "ringcentral": {
+    "bot": {
+      "server_url": "https://platform.ringcentral.com",
+      "token":      "<bot oauth token>"
+    },
+    "private_app": {
+      "server_url":    "https://platform.ringcentral.com",
+      "client_id":     "...",
+      "client_secret": "...",
+      "jwt":           "..."
+    },
+    "chat_ids":                       ["800123456"],
+    "source_user_ids":                ["owner@yourcompany.com"],
+    "group_mention_only":             true,
+    "allow_group_mention_authorize":  true,
+    "chat_user_allow":                {}
+  },
+  "agents": {
+    "droid": {
+      "type": "acp",
+      "command": "droid",
+      "restricted_mode_id": "spec"
+    }
+  }
+}
+```
+
+Leave `chat_user_allow` empty — OOB approval will fill it in. You
+**can** pre-seed it (see [Pre-seeding without OOB](#pre-seeding-without-oob))
+but the key must be a numeric chat ID, not a team display name.
+
+#### Expected startup log lines
+
+When everything is wired up, you should see, in order:
+
+1. `INFO source_user_ids resolved` with your owner ID.
+2. `INFO authorize-mention OOB enabled — approved users run under
+   v0.4.3+ non-owner ceiling …`
+3. `INFO authorize-mention OOB flow active ownerDMChatID=…`
+
+If you see `ERROR allow_group_mention_authorize requires Private
+App + resolved owner DM`: prerequisites #1 or #2 are missing.
+
+If you see `WARN chat_user_allow entry resolved to zero numeric
+IDs`: a chat key is wrong (most often a team name instead of the
+numeric chat ID), or an identifier is not in the directory.
+
+#### Approval flow
+
+1. Group member `@bot how do I …` in the configured group.
+2. ringclaw drops the original post (it is **not** replayed on
+   approval) and posts an `/approval <id>` prompt to the owner DM.
+3. Operator runs `ringclaw approval <id>` on the host where the
+   bot is running.
+4. ringclaw writes the approved user into `chat_user_allow[<chatID>]`
+   on disk (v0.4.4+: this entry survives restarts) and into the
+   live Monitor + Handler allowlists.
+5. Group member `@bot` again — this time the message is dispatched
+   to the agent under the non-owner ceiling.
+
+The same `(chat, user)` pair is silenced for 24h after a deny or
+expire to prevent repeat owner-DM spam (see
+[Key invariants](#key-invariants)).
+
+## How to find a chat ID
+
+`chat_ids` and `chat_user_allow` keys both expect a **numeric RC
+chat / group ID** (typically a 9–10 digit string like
+`"800123456"`). A team / group display name will silently match
+nothing. Three ways to obtain it:
+
+1. **RingCentral client URL.** Open the chat in the RingCentral
+   web or desktop client. The URL ends with `/r/<chatID>` — copy
+   that number.
+2. **ringclaw debug log.** With `RINGCLAW_LOG_LEVEL=debug`, post
+   any message in the chat and watch for monitor lines such as
+   `ignoring message from non-allowed chat chatID=…` — that field
+   is the chat ID.
+3. **REST `glip/groups`.** Call
+   `GET /restapi/v1.0/glip/groups?recordCount=250` with the
+   Private App credentials and find the entry where `name`
+   matches your team. The `id` field is the chat ID.
 
 ## Audit-log additions
 
@@ -324,3 +442,5 @@ challenge is ever issued. The two fields are independent.
 | v0.4.3: restricted mode unsupported (no candidate) | `WARN acp restricted-mode event` (`event=restricted_mode_unsupported_no_mode`, `available_modes`) | Layer-A fail-closed: no built-in / heuristic match. Non-owner message refused. |
 | v0.4.3: restricted mode unsupported (`set_mode` rejected) | `WARN acp restricted-mode event` (`event=restricted_mode_unsupported`, `error="Method not found"`) | Layer-A fail-closed: agent rejected the call. Cached so the next attempt skips. |
 | v0.4.3: Layer-B tool call denied | `WARN acp non-owner tool call denied` (`event=tool_call_denied`, `method`, `session`, `reason`) | Client-side fail-closed deny of a `fs/*` / `terminal/*` / `session/request_permission` request. Deduped per (session, method). |
+| v0.4.4: chat_user_allow loaded | `INFO chat_user_allow resolved (v0.4.3+ non-owner ceiling enforced for these users)` (`chats`, `users`) | Per-chat exceptions read from `config.json` and pushed into Monitor + Handler. Replaces the v0.4.2 force-clear. |
+| v0.4.4: chat_user_allow entry resolved to nothing | `WARN chat_user_allow entry resolved to zero numeric IDs` (`chatID`, `rawIdentifiers`) | A chat key (or one of its identifiers) failed to resolve. Most common cause: the key is a team display name rather than the numeric chat ID. |

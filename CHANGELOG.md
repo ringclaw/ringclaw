@@ -14,6 +14,66 @@ v0.4.3's client-side gate.
 
 ---
 
+## v0.4.4 — 2026-04-29 — fix: restore chat_user_allow loading
+
+### Bug
+
+v0.4.3 promised that `chat_user_allow` users would be preserved
+across restarts and run under the new non-owner ceiling, but
+`cmd/start.go` inadvertently kept the v0.4.2 stop-gap that
+force-cleared the map at startup — so configured per-chat
+exceptions silently disappeared on every boot, and OOB-approved
+users had to be re-approved after every restart.
+
+### Fix
+
+- **`cmd/start.go`** restores the v0.4.1 resolve-and-inject path:
+  email / phone / numeric identifiers resolve to numeric user IDs
+  via the Private App directory and push into both Monitor and
+  Handler. Listed users run under the v0.4.3 non-owner ceiling
+  (Layer A read-only ACP mode + Layer B fail-closed deny of
+  `fs/*` / `terminal/*` / `session/request_permission`); plain-text
+  replies and RC `ACTION:MESSAGE / TASK / NOTE / EVENT` blocks
+  remain available.
+- **OOB-enabled startup notice** demoted from `WARN` to `INFO`
+  with an updated description (the v0.4.3 ceiling makes the old
+  "approved users get full agent capability" warning incorrect).
+- **New `WARN`** when an entry resolves to zero numeric IDs
+  (typical cause: chat ID is a team display name instead of the
+  numeric chat ID), with the offending raw identifiers logged.
+
+### Docs
+
+- `docs/security/sender-allowlist.md`: removed the "force-cleared
+  at startup" language; added an **Enabling OOB approval for
+  group members** section (4 prerequisites, minimal config,
+  expected startup logs, approval flow) and a **How to find a
+  chat ID** section (3 methods).
+- `docs/security/index.md`, `docs/guide/configuration.md`, and
+  Chinese mirrors updated to match.
+- Audit-log table gained two `v0.4.4:` rows (loaded /
+  resolved-to-zero).
+
+### Files
+
+- `cmd/start.go`
+- `docs/security/sender-allowlist.md` (+ZH mirror)
+- `docs/security/index.md` (+ZH mirror)
+- `docs/guide/configuration.md` (+ZH mirror)
+- `CHANGELOG.md`
+
+### Compatibility
+
+- Existing v0.4.3 binaries that started with `chat_user_allow`
+  populated will see the old force-clear behavior persist until
+  the operator upgrades — that is, the on-disk map keeps getting
+  emptied on every boot. v0.4.4 stops doing the wipe; pre-existing
+  entries (whether OOB-issued or hand-edited) start surviving
+  restarts again as soon as the upgrade lands.
+- No config schema change.
+
+---
+
 ## v0.4.3 — 2026-04-28 — SECURITY: fail-closed two-tier non-owner isolation
 
 ### Highlights

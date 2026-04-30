@@ -101,7 +101,10 @@ v0.4.3 之前任何变成"trusted"的发件人——无论是通过
   mode 且运维也没配 override 时，非-owner 消息**不会**进入
   agent；用户拿到一段拒绝文案；审计日志打
   `restricted_mode_unsupported_no_mode`。
-- **`chat_user_allow` 仍每次启动强制清空**（v0.4.2 止血措施）。
+- **`chat_user_allow` 重启后保留（v0.4.4+）。** v0.4.2 启动时
+  强制清空的措施已经移除——v0.4.3 的非-owner ceiling 已经在 ACP
+  层把这些会话锁住。被列入的用户在 Layer 0 放行，然后按上面的
+  fail-closed ceiling 运行。
 
 **第一层已知局限（best-effort）：** 部分上游 agent 不会强制执行
 只读 mode（qwen-code#1806 set_mode 返回成功但不强制；
@@ -240,9 +243,9 @@ v0.4.3 在他们的会话上加了一道 fail-closed 上限：
 |---|---|
 | `allow_group_mention_authorize` 未设置（v0.4.2 起的默认） | 功能关闭，非授信 `@bot` 静默丢弃（v0.4.0 基线）。 |
 | `allow_group_mention_authorize: false` | 显式关闭，行为与未设置一致。 |
-| `allow_group_mention_authorize: true` | 显式开启。ringclaw 启动时打一条 WARN 提醒运维：被批准的用户获得 agent 完整能力。 |
+| `allow_group_mention_authorize: true` | 显式开启。ringclaw 启动时打一条 INFO 提醒：被批准用户运行在 v0.4.3+ 非-owner ceiling 下。 |
 | Private App 未配置（owner 私聊不可解析） | 启动时禁用功能并打 ERROR 日志；非授信 `@bot` 静默丢弃。 |
-| 磁盘上残留的 `chat_user_allow` 条目（v0.4.1 遗留） | 启动时强制清空并打 ERROR 日志，运维必须重新评估后手工添加。 |
+| `chat_user_allow` 条目解析为零数字 ID | v0.4.4：打 WARN `chat_user_allow entry resolved to zero numeric IDs` 并附上 raw identifiers。最常见的原因是 chat ID 字段填的是 team 显示名而不是数字 chat ID；其次是 identifier 不在 directory 里、Private App 没有 `ReadAccounts` 权限。 |
 | 非-owner 命中没有只读 mode 的 agent | v0.4.3 fail-closed：消息**不**进入 agent；用户收到一段拒绝文案；审计日志打 `restricted_mode_unsupported_no_mode`。 |
 | 非-owner + agent 拒绝 `session/set_mode` | v0.4.3 fail-closed：同上；(`agentCmd`, `modeID`) 被缓存，后续尝试跳过该 RPC。 |
 | 运行时 owner 私聊尚未解析 | 命中竞争窗口的那一条消息丢弃并打 `WARN authorize-mention: OOB or owner DM unconfigured; dropping`；私聊解析完成后后续消息正常。 |
@@ -261,14 +264,119 @@ v0.4.3 在他们的会话上加了一道 fail-closed 上限：
   "ringcentral": {
     "allow_group_mention_authorize": false,  // OOB 关闭
     "chat_user_allow": {
-      "chat-engineering-7": ["alice@example.com"]
+      "800123456": ["alice@example.com"]
     }
   }
 }
 ```
 
-这只在 `chat-engineering-7` 中信任 Alice，不会触发任何
-challenge。两个字段互相独立。
+这只在 chat `800123456` 中信任 Alice，不会触发任何 challenge。
+两个字段互相独立。map 的 key **必须**是 RC 数字 chat / group ID
+（参考 [如何获取 chat ID](#如何获取-chat-id)）——填 team 显示名
+不会匹配任何消息。
+
+## 群成员 OOB 审批的完整启用步骤
+
+非-owner 群成员需要在某个群里驱动 agent 时，按下面这份清单走。
+被批准的用户运行在 v0.4.3+ 非-owner ceiling 下：文字回复 + RC
+`ACTION:MESSAGE / TASK / NOTE / EVENT` 仍可用；`fs/*`、
+`terminal/*`、`session/request_permission` 在 JSON-RPC 层就被
+拒绝。
+
+#### 前置条件（4 个全部必须）
+
+1. **配好 Private App。** OOB 需要读 owner 私聊。bot client
+   单独看不到自己的 DM，所以 Private App 用运维身份去读。少了
+   `ringcentral.private_app` 这一段，OOB 在启动时会被禁用并打
+   `ERROR` 日志。
+2. **owner 至少和 bot 私聊过一次。** ringclaw 由那段对话解析
+   `ownerDMChatID`。解析失败会看到 `ERROR
+   allow_group_mention_authorize requires Private App + resolved
+   owner DM; feature disabled`。
+3. **`chat_ids` 里包含目标群的数字 chat ID。** 不在 `chat_ids`
+   名单里的群，消息在更早的 step 就被丢弃，根本走不到 OOB。
+4. **`source_user_ids` 非空**（Private App owner 启动时会自动
+   注入），否则 strict mode 会把所有消息都丢掉。
+
+#### 最小 config
+
+```jsonc
+{
+  "ringcentral": {
+    "bot": {
+      "server_url": "https://platform.ringcentral.com",
+      "token":      "<bot oauth token>"
+    },
+    "private_app": {
+      "server_url":    "https://platform.ringcentral.com",
+      "client_id":     "...",
+      "client_secret": "...",
+      "jwt":           "..."
+    },
+    "chat_ids":                       ["800123456"],
+    "source_user_ids":                ["owner@yourcompany.com"],
+    "group_mention_only":             true,
+    "allow_group_mention_authorize":  true,
+    "chat_user_allow":                {}
+  },
+  "agents": {
+    "droid": {
+      "type": "acp",
+      "command": "droid",
+      "restricted_mode_id": "spec"
+    }
+  }
+}
+```
+
+`chat_user_allow` 留空就行——OOB 审批通过会自动写入。也**可以**
+预先手填（见上面[预置授权](#不开启-oob-直接预置授权)），但 key
+必须是数字 chat ID 不是 team 显示名。
+
+#### 启动期望日志
+
+一切配齐时，按顺序应该看到：
+
+1. `INFO source_user_ids resolved`，列出 owner ID。
+2. `INFO authorize-mention OOB enabled — approved users run under
+   v0.4.3+ non-owner ceiling …`
+3. `INFO authorize-mention OOB flow active ownerDMChatID=…`
+
+看到 `ERROR allow_group_mention_authorize requires Private App +
+resolved owner DM`：前置条件 #1 或 #2 没满足。
+
+看到 `WARN chat_user_allow entry resolved to zero numeric IDs`：
+某个 chat key 错了（八成是写了 team 名而不是数字 chat ID），或
+identifier 不在 directory 里。
+
+#### 审批流
+
+1. 群成员 `@bot 你好` 在配置好的群里发言。
+2. ringclaw 把原消息丢弃（**不会**在批准后重放），向 owner 私聊
+   投递 `/approval <id>` 提示。
+3. 运维在 bot 所在主机执行 `ringclaw approval <id>`。
+4. ringclaw 把被批准的用户写入 `chat_user_allow[<chatID>]`
+   （v0.4.4+：重启后保留）以及运行时的 Monitor + Handler 白名单。
+5. 群成员**再 `@bot` 一次**——这次消息会以非-owner ceiling 进入
+   agent。
+
+同一对 `(chat, user)` 在 deny / 过期后会被静默 24 小时（避免反复
+打扰 owner 私聊）。详见 [关键不变量](#关键不变量)。
+
+## 如何获取 chat ID
+
+`chat_ids` 与 `chat_user_allow` 的 key 都需要 **RC 数字 chat /
+group ID**（通常是 9–10 位数字字符串如 `"800123456"`）。填 team
+显示名不会匹配任何消息。三种获取方法：
+
+1. **RingCentral 客户端 URL。** 在 RingCentral 网页 / 桌面客户端
+   打开那个聊天，URL 末尾 `/r/<chatID>` 中的数字就是 chat ID。
+2. **ringclaw debug 日志。** 设置 `RINGCLAW_LOG_LEVEL=debug`，群里
+   随便发条消息，看 monitor 行 `ignoring message from non-allowed
+   chat chatID=…`，这里的 `chatID` 就是。
+3. **REST `glip/groups`。** 用 Private App 凭据调
+   `GET /restapi/v1.0/glip/groups?recordCount=250`，找到 `name`
+   匹配的项，`id` 字段就是 chat ID。
 
 ## 审计日志条目
 
@@ -287,3 +395,5 @@ challenge。两个字段互相独立。
 | v0.4.3：受限 mode 不可用（无候选） | `WARN acp restricted-mode event`（`event=restricted_mode_unsupported_no_mode`、`available_modes`） | 第一层 fail-closed：内置表与启发式都没匹配。非-owner 消息被拒。 |
 | v0.4.3：受限 mode 不可用（`set_mode` 被拒） | `WARN acp restricted-mode event`（`event=restricted_mode_unsupported`、`error="Method not found"`） | 第一层 fail-closed：agent 拒绝调用。被缓存，后续跳过。 |
 | v0.4.3：第二层工具调用被拒 | `WARN acp non-owner tool call denied`（`event=tool_call_denied`、`method`、`session`、`reason`） | 客户端 fail-closed 拒绝 `fs/*` / `terminal/*` / `session/request_permission`，按 (session, method) 去重。 |
+| v0.4.4：chat_user_allow 加载 | `INFO chat_user_allow resolved (v0.4.3+ non-owner ceiling enforced for these users)`（`chats`、`users`） | 从 `config.json` 读到的按群例外，已推入 Monitor + Handler，替代 v0.4.2 的 force-clear。 |
+| v0.4.4：chat_user_allow 条目解析为零 | `WARN chat_user_allow entry resolved to zero numeric IDs`（`chatID`、`rawIdentifiers`） | 某个 chat key（或其 identifier）解析失败。最常见原因是 key 是 team 显示名而非数字 chat ID。 |
