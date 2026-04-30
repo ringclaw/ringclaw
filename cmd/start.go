@@ -176,49 +176,47 @@ func runStart(cmd *cobra.Command, args []string) error {
 		handler.AddTrustedSender(id)
 	}
 
-	// SECURITY ADVISORY (v0.4.2): chat_user_allow is force-cleared at
-	// startup because listed users gain the bot's full agent
-	// capability — including filesystem access, terminal commands,
-	// and external HTTP — through the agent tool-call channel. The
-	// pre-v0.5.0 implementation has no per-sender capability gating,
-	// so any entry here, even from a benign OOB approval, is
-	// equivalent to handing the requester owner-level access in that
-	// chat. v0.5.0 will route these users through a restricted
-	// agent backend; until then we wipe the slate every boot and
-	// force the operator to reconsider.
-	//
-	// Operators who fully understand the trade-off and still want
-	// per-chat trust today should pre-seed source_user_ids instead
-	// (which has the same capability concern but is at least
-	// explicitly hand-curated and documented as such).
+	// chat_user_allow: resolve identifiers (email / phone / numeric)
+	// to numeric user IDs and inject into both Monitor + Handler.
+	// v0.4.4 restores the v0.4.1 resolve-and-inject path; the v0.4.2
+	// startup force-clear is removed now that v0.4.3 enforces a
+	// non-owner ceiling on these sessions: Layer A (read-only ACP
+	// mode via session/set_mode) plus Layer B (fail-closed deny of
+	// fs/* / terminal/* / session/request_permission). Plain-text
+	// replies and RC ACTION blocks (MESSAGE / TASK / NOTE / EVENT)
+	// remain available; WebFetch / WebSearch / MCP custom tools are
+	// still best-effort under Layer A only and are scheduled to be
+	// closed by the v0.5.0 OS-level sandbox.
 	if len(cfg.RC.ChatUserAllow) > 0 {
-		cleared := make(map[string][]string, len(cfg.RC.ChatUserAllow))
+		lookupClient := c.lookupClient()
+		resolvedChatAllow := make(map[string][]string, len(cfg.RC.ChatUserAllow))
 		total := 0
 		for chatID, list := range cfg.RC.ChatUserAllow {
-			cleared[chatID] = append([]string(nil), list...)
-			total += len(list)
+			ids := lookupClient.ResolveUserIDs(ctx, list)
+			if len(ids) == 0 {
+				slog.Warn("chat_user_allow entry resolved to zero numeric IDs; the chat ID must be a real RC group ID (numeric string), not a team display name, and identifiers must exist in the directory",
+					"component", "start", "chatID", chatID, "rawIdentifiers", list)
+				continue
+			}
+			resolvedChatAllow[chatID] = ids
+			total += len(ids)
+			for _, uid := range ids {
+				handler.AddChatUserAllow(chatID, uid)
+			}
 		}
-		cfg.RC.ChatUserAllow = nil
-		if err := config.Save(cfg); err != nil {
-			slog.Error("failed to persist chat_user_allow clear",
-				"component", "start", "error", err)
-		}
-		for chatID, list := range cleared {
-			slog.Error("SECURITY: chat_user_allow entry cleared on startup (v0.4.2 stop-gap)",
-				"component", "start", "chatID", chatID, "identifiers", list)
-		}
-		slog.Error("SECURITY: chat_user_allow force-cleared on startup; v0.4.2 reverts the v0.4.1 OOB-default-on change because OOB-approved users currently get full agent capability (FS / terminal / HTTP). v0.5.0 will introduce a restricted agent backend. Re-add entries only after reading docs/security/sender-allowlist.md.",
-			"component", "start", "totalChats", len(cleared), "totalIdentifiers", total)
+		monitor.SetChatUserAllow(resolvedChatAllow)
+		slog.Info("chat_user_allow resolved (v0.4.3+ non-owner ceiling enforced for these users)",
+			"component", "start", "chats", len(resolvedChatAllow), "users", total)
 	}
 
 	// Wire the authorize-mention OOB flow only when explicitly opted
-	// in. v0.4.2 reverted the v0.4.1 default-on flip; in v0.4.2 the
-	// flag must be explicit-true. The IsAuthorizeMentionEnabled
-	// helper already encodes the default-OFF semantics, but we also
-	// surface a one-time WARN so operators see why their bot just
-	// posted /approval to the owner DM.
+	// in. v0.4.2 reverted the v0.4.1 default-on flip; the flag must
+	// be explicit-true. v0.4.4 demotes the OOB-enabled startup notice
+	// from WARN to INFO and updates the description: v0.4.3+ approved
+	// users run under the non-owner ceiling (no fs/terminal/permission_request),
+	// not "full agent capability".
 	if cfg.RC.IsAuthorizeMentionEnabled() {
-		slog.Warn("authorize-mention OOB enabled — approved users currently receive full agent capability in their authorized chats; v0.5.0 will restrict them to text + RC ACTION only",
+		slog.Info("authorize-mention OOB enabled — approved users run under v0.4.3+ non-owner ceiling (no fs/terminal/permission_request; plain-text replies + RC ACTION blocks remain available); v0.5.0 will tighten WebFetch/MCP via OS-level sandbox",
 			"component", "start")
 		ownerDM := handler.OwnerDMChatID()
 		if c.private == nil || ownerDM == "" {

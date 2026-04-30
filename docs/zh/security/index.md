@@ -132,7 +132,7 @@ authorize-mention 批准的用户写入 `chat_user_allow`——它**只放宽
 | `agents.<name>.full_access` | `config.json`（每个 ACP agent） | `true` 仅当顶层同时有 `full_access_ack: true` 才生效；否则降级并打 `WARN` 日志。详见 [ACP Full-Access](./full-access)。 |
 | `full_access_ack` | `config.json`（顶层） | `true` 才会真正接受 `full_access`，`false` 或省略均拒绝。 |
 | `ringcentral.allow_group_mention_authorize` | `config.json`（在 `ringcentral` 下） | **v0.4.2 起默认关闭**（v0.4.1 默认开启的改动已作为安全止血措施撤回）。必须显式设为 `true` 才启用。拒绝 / 过期后，同一 `(chat, user)` 进入 24 小时冷却期。需要 Private App + 可解析的 owner 私聊。详见 [发送者白名单 › 安全公告](./sender-allowlist#authorize-mention-oob-流程)。 |
-| `ringcentral.chat_user_allow` | `config.json`（在 `ringcentral` 下） | 按群叠加的发送者白名单。**v0.4.2 起每次启动仍强制清空**并打 ERROR 日志；被列入的用户从 v0.4.3 起按非-owner 上限运行（只读 ACP mode + 客户端 fail-closed 拒绝 `fs/*` / `terminal/*` / `session/request_permission`）。在 v0.4.2 止血措施仍生效期间，运维仍需在每次重启后手工再添加。 |
+| `ringcentral.chat_user_allow` | `config.json`（在 `ringcentral` 下） | 按群叠加的发送者白名单。**v0.4.4+：重启后保留。** 被列入的用户按 v0.4.3 非-owner 上限运行（只读 ACP mode + 客户端 fail-closed 拒绝 `fs/*` / `terminal/*` / `session/request_permission`）。map 的 key 必须是 RC 数字 chat / group ID——参考 [发送者白名单 › 如何获取 chat ID](./sender-allowlist#如何获取-chat-id)。 |
 | `agents.<name>.restricted_mode_id` | `config.json`（每家 agent 节点下） | v0.4.3+：应用到非-owner 会话的 ACP modeID。默认值：`droid → spec`、`claude / gemini / qwen / cursor-agent → plan`，其余 agent 走启发式（在 `availableModes` 中匹配 `plan` / `spec` / `read` / `safe`）。两条路径都无候选且没有 override 时，非-owner 消息直接被拒。override 必须命中 agent 自己 `availableModes` 中的某一个，否则仍走内置选择。详见 [发送者白名单 › 安全公告（v0.4.2 → v0.4.3）](./sender-allowlist#authorize-mention-oob-流程)。 |
 
 历史上支持的 `RC_*` / `RINGCLAW_*` / `OPENCLAW_GATEWAY_*` 环境
