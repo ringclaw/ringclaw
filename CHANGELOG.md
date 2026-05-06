@@ -14,6 +14,67 @@ v0.4.3's client-side gate.
 
 ---
 
+## v0.4.5 — 2026-05-06 — fix: ACP JSON-RPC ID parsing + npx cache auto-recovery
+
+### Bug 1 — Codex ACP string IDs silently dropped (PR #138)
+
+Codex ACP emits JSON-RPC IDs as strings (including UUIDs) instead
+of JSON numbers. ringclaw previously decoded inbound IDs as
+`int64`, causing ACP / MCP tool results to be silently dropped
+whenever the ID was not a JSON number.
+
+### Fix
+
+- **`agent/acp_rpc.go`** — `rpcResponse.ID` changed from `*int64`
+  to a new `*rpcID` struct with custom `UnmarshalJSON`. The raw ID
+  is preserved verbatim; numeric coercion to `int64` happens only
+  when routing responses to ringclaw-owned pending requests.
+  String-wrapped integers (e.g. `"42"`) are also coerced so agents
+  that stringify their IDs still match.
+- **`agent/acp_rpc_test.go`** — regression tests for numeric
+  string IDs and UUID string IDs.
+
+### Bug 2 — npx ENOTEMPTY cache corruption crashes startup (PR #139)
+
+When `npx`-based ACP agents (`claude-agent-acp`, `codex-acp`) are
+launched after an npm upgrade, a corrupted npx cache under
+`~/.npm/_npx/` can cause `ENOTEMPTY` errors during package
+installation, preventing the agent subprocess from starting.
+Users had to manually `rm -rf` the cache directory to recover.
+
+### Fix
+
+- **`agent/acp_log.go`** — `acpStderrWriter` detects `ENOTEMPTY`
+  + `_npx/` patterns in stderr and extracts the corrupted cache
+  directory path. Handles both Unix forward-slash and Windows
+  backslash paths.
+- **`agent/acp_agent.go`** — `Start()` refactored into
+  `Start()` + `startOnce()`. On first failure, if the command is
+  `npx` (including `npx.cmd` / `npx.exe` on Windows) and a
+  corrupted cache dir was detected, `Start()` removes the cache
+  directory and retries once automatically.
+- **Tests** — `TestExtractNpxCacheDir` (Unix + Windows paths),
+  `TestAcpStderrWriter_NpxCorruptedDir`,
+  `TestStart_NpxCacheRetry`, `TestStart_NonNpx_NoRetry`,
+  `TestIsNpxCommand`.
+
+### Files
+
+- `agent/acp_rpc.go`, `agent/acp_rpc_test.go`
+- `agent/acp_agent.go`, `agent/acp_agent_test.go`
+- `agent/acp_log.go`, `agent/acp_log_test.go`
+- `CHANGELOG.md`
+
+### Compatibility
+
+- No config schema change.
+- Existing agents using numeric JSON-RPC IDs are unaffected.
+- The npx retry adds at most one extra startup attempt; operators
+  see a `WARN npx cache corrupted, cleaning and retrying` log
+  when it triggers.
+
+---
+
 ## v0.4.4 — 2026-04-29 — fix: restore chat_user_allow loading
 
 ### Bug
