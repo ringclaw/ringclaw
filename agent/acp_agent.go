@@ -325,7 +325,32 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 }
 
 // Start launches the ACP subprocess and initializes the connection.
+// If the command is npx and the first attempt fails due to a corrupted
+// npx cache (ENOTEMPTY), Start cleans the cache directory and retries once.
 func (a *ACPAgent) Start(ctx context.Context) error {
+	err := a.startOnce(ctx)
+	if err != nil && a.isNpxCommand() {
+		if dir := a.stderr.NpxCorruptedDir(); dir != "" {
+			slog.Warn("npx cache corrupted, cleaning and retrying",
+				"component", "acp", "cache_dir", dir)
+			if rmErr := os.RemoveAll(dir); rmErr != nil {
+				slog.Warn("failed to remove npx cache dir",
+					"component", "acp", "cache_dir", dir, "error", rmErr)
+			}
+			err = a.startOnce(ctx)
+		}
+	}
+	return err
+}
+
+// isNpxCommand returns true when the agent command is npx.
+func (a *ACPAgent) isNpxCommand() bool {
+	return filepath.Base(a.command) == "npx"
+}
+
+// startOnce performs a single attempt to launch and handshake with the
+// ACP subprocess.
+func (a *ACPAgent) startOnce(ctx context.Context) error {
 	a.mu.Lock()
 	if a.started {
 		a.mu.Unlock()

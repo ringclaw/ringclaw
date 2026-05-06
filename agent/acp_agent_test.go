@@ -542,3 +542,24 @@ func TestAgentInfo_String(t *testing.T) {
 		t.Error("expected non-empty string")
 	}
 }
+
+func TestIsNpxCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{"/usr/local/bin/npx", true},
+		{"/Users/x/.nvm/versions/node/v22.21.1/bin/npx", true},
+		{"npx", true},
+		{"/usr/bin/claude-agent-acp", false},
+		{"claude-agent-acp", false},
+		{"/usr/bin/codex-acp", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		a := &ACPAgent{command: tt.command}
+		if got := a.isNpxCommand(); got != tt.want {
+			t.Errorf("isNpxCommand(%q) = %v, want %v", tt.command, got, tt.want)
+		}
+	}
+}

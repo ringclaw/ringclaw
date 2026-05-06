@@ -292,6 +292,69 @@ func TestAcpStderrWriter_SkipsBraceOnlyLines(t *testing.T) {
 	}
 }
 
+func TestExtractNpxCacheDir(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want string
+	}{
+		{
+			name: "npm error with single-quoted path",
+			line: "ENOTEMPTY: directory not empty, rename '/Users/x/.npm/_npx/d820eb7d96bc2600/node_modules/@anthropic-ai/claude-agent-sdk' -> '/Users/x/.npm/_npx/d820eb7d96bc2600/node_modules/@anthropic-ai/.claude-agent-sdk-ce9fpONq'",
+			want: "/Users/x/.npm/_npx/d820eb7d96bc2600",
+		},
+		{
+			name: "codex acp path",
+			line: "ENOTEMPTY: directory not empty, rename '/home/user/.npm/_npx/abc123/node_modules/@zed-industries/codex-acp' -> '/home/user/.npm/_npx/abc123/node_modules/.tmp'",
+			want: "/home/user/.npm/_npx/abc123",
+		},
+		{
+			name: "no npx path",
+			line: "ENOTEMPTY: directory not empty, rename '/tmp/foo' -> '/tmp/bar'",
+			want: "",
+		},
+		{
+			name: "empty line",
+			line: "",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractNpxCacheDir(tt.line)
+			if got != tt.want {
+				t.Errorf("extractNpxCacheDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAcpStderrWriter_NpxCorruptedDir(t *testing.T) {
+	w := &acpStderrWriter{prefix: "test"}
+	if dir := w.NpxCorruptedDir(); dir != "" {
+		t.Errorf("expected empty before write, got %q", dir)
+	}
+
+	w.Write([]byte("npm error code ENOTEMPTY\n"))
+	w.Write([]byte("npm error syscall rename\n"))
+	w.Write([]byte("npm error path /Users/x/.npm/_npx/abc123/node_modules/@anthropic-ai/claude-agent-sdk\n"))
+	w.Write([]byte("ENOTEMPTY: directory not empty, rename '/Users/x/.npm/_npx/abc123/node_modules/@anthropic-ai/claude-agent-sdk' -> '/Users/x/.npm/_npx/abc123/node_modules/.tmp'\n"))
+
+	dir := w.NpxCorruptedDir()
+	if dir != "/Users/x/.npm/_npx/abc123" {
+		t.Errorf("expected '/Users/x/.npm/_npx/abc123', got %q", dir)
+	}
+}
+
+func TestAcpStderrWriter_NpxCorruptedDir_NoMatch(t *testing.T) {
+	w := &acpStderrWriter{prefix: "test"}
+	w.Write([]byte("some other error\n"))
+
+	if dir := w.NpxCorruptedDir(); dir != "" {
+		t.Errorf("expected empty for non-ENOTEMPTY error, got %q", dir)
+	}
+}
+
 func TestIsStructuralOnly(t *testing.T) {
 	cases := map[string]bool{
 		"":                   false,
