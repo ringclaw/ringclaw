@@ -82,45 +82,60 @@ func (a *Auth) AccessToken() (string, error) {
 }
 
 func (a *Auth) refreshToken() error {
-	data := url.Values{
-		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
-		"assertion":  {a.jwtToken},
+	const maxRetries = 2
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		data := url.Values{
+			"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
+			"assertion":  {a.jwtToken},
+		}
+
+		req, err := http.NewRequest(http.MethodPost, a.serverURL+"/restapi/oauth/token", strings.NewReader(data.Encode()))
+		if err != nil {
+			return fmt.Errorf("create token request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString(
+			[]byte(a.clientID+":"+a.clientSecret)))
+
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("token request: %w", err)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("read token response: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries {
+			wait := parseRetryAfter(resp.Header.Get("Retry-After"), 5*time.Second)
+			if wait > 30*time.Second {
+				wait = 30 * time.Second
+			}
+			slog.Warn("token endpoint rate limited, retrying",
+				"component", "auth", "retry_after", wait, "attempt", attempt+1)
+			time.Sleep(wait)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("token request failed HTTP %d: %s", resp.StatusCode, string(body))
+		}
+
+		var tokenResp TokenResponse
+		if err := json.Unmarshal(body, &tokenResp); err != nil {
+			return fmt.Errorf("parse token response: %w", err)
+		}
+
+		a.mu.Lock()
+		a.accessToken = tokenResp.AccessToken
+		a.expiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+		a.mu.Unlock()
+
+		return nil
 	}
-
-	req, err := http.NewRequest(http.MethodPost, a.serverURL+"/restapi/oauth/token", strings.NewReader(data.Encode()))
-	if err != nil {
-		return fmt.Errorf("create token request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString(
-		[]byte(a.clientID+":"+a.clientSecret)))
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("token request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read token response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("token request failed HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var tokenResp TokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return fmt.Errorf("parse token response: %w", err)
-	}
-
-	a.mu.Lock()
-	a.accessToken = tokenResp.AccessToken
-	a.expiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-	a.mu.Unlock()
-
-	return nil
+	return fmt.Errorf("token request rate limited after %d retries", maxRetries)
 }
 
 // InvalidateToken clears the cached access token, forcing the next
