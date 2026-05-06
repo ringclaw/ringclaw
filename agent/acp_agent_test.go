@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -540,5 +542,89 @@ func TestAgentInfo_String(t *testing.T) {
 	s = infoWithPID.String()
 	if s == "" {
 		t.Error("expected non-empty string")
+	}
+}
+
+func TestStart_NpxCacheRetry(t *testing.T) {
+	tmpDir := t.TempDir()
+	cacheDir := filepath.Join(tmpDir, "_npx", "abc123")
+	os.MkdirAll(filepath.Join(cacheDir, "node_modules"), 0o755)
+
+	// Create a fake "npx" script that emits ENOTEMPTY to stderr and exits.
+	npxScript := filepath.Join(tmpDir, "npx")
+	os.WriteFile(npxScript, []byte(fmt.Sprintf(
+		"#!/bin/sh\necho \"ENOTEMPTY: directory not empty, rename '%s/node_modules/pkg' -> '%s/node_modules/.tmp'\" >&2\nexit 1\n",
+		cacheDir, cacheDir,
+	)), 0o755)
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command: npxScript,
+		Args:    []string{"-y", "@agentclientprotocol/claude-agent-acp"},
+		Cwd:     tmpDir,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := a.Start(ctx)
+	// Both attempts will fail (fake script always exits 1), but the
+	// important assertion is that the cache dir was cleaned.
+	if err == nil {
+		t.Fatal("expected error from fake npx")
+	}
+	if _, statErr := os.Stat(cacheDir); !os.IsNotExist(statErr) {
+		t.Errorf("expected cache dir %q to be removed, but it still exists", cacheDir)
+	}
+}
+
+func TestStart_NonNpx_NoRetry(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// A non-npx command that fails — Start should NOT retry.
+	script := filepath.Join(tmpDir, "agent")
+	os.WriteFile(script, []byte(
+		"#!/bin/sh\necho 'ENOTEMPTY: _npx/abc' >&2\nexit 1\n",
+	), 0o755)
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command: script,
+		Args:    nil,
+		Cwd:     tmpDir,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := a.Start(ctx)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// isNpxCommand() is false, so no retry path taken
+	if a.isNpxCommand() {
+		t.Error("expected isNpxCommand=false for non-npx command")
+	}
+}
+
+func TestIsNpxCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{"/usr/local/bin/npx", true},
+		{"/Users/x/.nvm/versions/node/v22.21.1/bin/npx", true},
+		{"npx", true},
+		{"C:/Program Files/nodejs/npx.cmd", true},
+		{"npx.cmd", true},
+		{"npx.exe", true},
+		{"/usr/bin/claude-agent-acp", false},
+		{"claude-agent-acp", false},
+		{"/usr/bin/codex-acp", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		a := &ACPAgent{command: tt.command}
+		if got := a.isNpxCommand(); got != tt.want {
+			t.Errorf("isNpxCommand(%q) = %v, want %v", tt.command, got, tt.want)
+		}
 	}
 }
