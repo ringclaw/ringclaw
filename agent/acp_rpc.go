@@ -19,11 +19,36 @@ type rpcRequest struct {
 
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id,omitempty"`
+	ID      *rpcID          `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+type rpcID struct {
+	Raw json.RawMessage
+	Int *int64
+}
+
+func (id *rpcID) UnmarshalJSON(data []byte) error {
+	id.Raw = append(id.Raw[:0], data...)
+
+	var n int64
+	if err := json.Unmarshal(data, &n); err == nil {
+		id.Int = &n
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	var parsed int64
+	if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+		id.Int = &parsed
+	}
+	return nil
 }
 
 type rpcError struct {
@@ -120,11 +145,13 @@ func (a *ACPAgent) readLoop() {
 
 		// Response to a request we made (has id, no method)
 		if msg.ID != nil && msg.Method == "" {
-			a.pendingMu.Lock()
-			ch, ok := a.pending[*msg.ID]
-			a.pendingMu.Unlock()
-			if ok {
-				ch <- &msg
+			if msg.ID.Int != nil {
+				a.pendingMu.Lock()
+				ch, ok := a.pending[*msg.ID.Int]
+				a.pendingMu.Unlock()
+				if ok {
+					ch <- &msg
+				}
 			}
 			continue
 		}

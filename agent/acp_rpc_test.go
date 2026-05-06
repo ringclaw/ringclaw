@@ -375,6 +375,65 @@ func TestReadLoop_DispatchesResponses(t *testing.T) {
 	stdinWriter.Close()
 }
 
+func TestReadLoop_DispatchesResponsesWithStringID(t *testing.T) {
+	_, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	a := &ACPAgent{
+		stdin:    stdinWriter,
+		scanner:  bufio.NewScanner(stdoutReader),
+		started:  true,
+		pending:  make(map[int64]chan *rpcResponse),
+		notifyCh: make(map[string]chan *sessionUpdate),
+		sessions: make(map[string]string),
+		termMgr:  newTerminalManager(t.TempDir()),
+	}
+	a.scanner.Buffer(make([]byte, 0, 64*1024), 64*1024)
+
+	ch := make(chan *rpcResponse, 1)
+	a.pendingMu.Lock()
+	a.pending[42] = ch
+	a.pendingMu.Unlock()
+
+	go a.readLoop()
+
+	fmt.Fprintln(stdoutWriter, `{"jsonrpc":"2.0","id":"42","result":{"data":"hello"}}`)
+	stdoutWriter.Close()
+
+	select {
+	case msg := <-ch:
+		if msg == nil {
+			t.Fatal("received nil response")
+		}
+		var result map[string]string
+		json.Unmarshal(msg.Result, &result)
+		if result["data"] != "hello" {
+			t.Errorf("expected data=hello, got %v", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for response")
+	}
+
+	stdinWriter.Close()
+}
+
+func TestReadLoop_AcceptsUUIDStringIDMessages(t *testing.T) {
+	var msg rpcResponse
+	raw := `{"jsonrpc":"2.0","id":"1900d5fe-c749-40f5-9383-1dfe9dfe14f5","method":"session/update","params":{}}`
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatalf("uuid string id should parse: %v", err)
+	}
+	if msg.ID == nil {
+		t.Fatal("expected id to be present")
+	}
+	if msg.ID.Int != nil {
+		t.Fatalf("uuid id should not be coerced to int: %v", *msg.ID.Int)
+	}
+	if string(msg.ID.Raw) != `"1900d5fe-c749-40f5-9383-1dfe9dfe14f5"` {
+		t.Fatalf("unexpected raw id: %s", string(msg.ID.Raw))
+	}
+}
+
 func TestReadLoop_SkipsEmptyLines(t *testing.T) {
 	_, stdinWriter := io.Pipe()
 	stdoutReader, stdoutWriter := io.Pipe()
