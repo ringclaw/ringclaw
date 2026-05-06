@@ -81,9 +81,10 @@ func extractToolOutput(data json.RawMessage, maxLen int) string {
 // acpStderrWriter forwards the ACP subprocess stderr to the application log
 // and captures the last meaningful error line.
 type acpStderrWriter struct {
-	prefix string
-	mu     sync.Mutex
-	last   string
+	prefix      string
+	mu          sync.Mutex
+	last        string
+	npxCacheDir string // populated when ENOTEMPTY + _npx/ detected
 }
 
 func (w *acpStderrWriter) Write(p []byte) (int, error) {
@@ -106,6 +107,11 @@ func (w *acpStderrWriter) Write(p []byte) (int, error) {
 			continue
 		}
 		w.last = line
+		if w.npxCacheDir == "" && strings.Contains(line, "ENOTEMPTY") {
+			if dir := extractNpxCacheDir(line); dir != "" {
+				w.npxCacheDir = dir
+			}
+		}
 	}
 	w.mu.Unlock()
 	return len(p), nil
@@ -135,4 +141,45 @@ func (w *acpStderrWriter) LastError() string {
 	s := w.last
 	w.last = ""
 	return s
+}
+
+// NpxCorruptedDir returns the npx cache directory path if an ENOTEMPTY
+// error was detected in stderr, indicating a corrupted npx cache.
+func (w *acpStderrWriter) NpxCorruptedDir() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.npxCacheDir
+}
+
+// extractNpxCacheDir extracts the npx cache directory from an ENOTEMPTY
+// error line. It looks for a path containing "_npx/" (or "_npx\" on
+// Windows) and returns the directory up to and including the hash segment
+// (e.g. "/Users/x/.npm/_npx/d820eb7d96bc2600").
+func extractNpxCacheDir(line string) string {
+	// Normalize backslashes so Windows paths match the same logic.
+	normalized := strings.ReplaceAll(line, "\\", "/")
+	const marker = "_npx/"
+	for _, token := range strings.Fields(normalized) {
+		token = strings.Trim(token, "'\"")
+		idx := strings.Index(token, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := token[idx+len(marker):]
+		slash := strings.Index(rest, "/")
+		if slash < 0 {
+			return denormalizePath(line, token[:idx+len(marker)+len(rest)])
+		}
+		return denormalizePath(line, token[:idx+len(marker)+slash])
+	}
+	return ""
+}
+
+// denormalizePath restores original OS path separators. If the original
+// line contained backslashes (Windows), convert the normalized result back.
+func denormalizePath(original, normalized string) string {
+	if strings.Contains(original, "\\") {
+		return strings.ReplaceAll(normalized, "/", "\\")
+	}
+	return normalized
 }
