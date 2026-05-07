@@ -4,6 +4,7 @@ package ringcentral
 type Post struct {
 	ID               string       `json:"id"`
 	GroupID          string       `json:"groupId"`
+	ThreadID         string       `json:"threadId,omitempty"`
 	Type             string       `json:"type"`
 	Text             string       `json:"text"`
 	CreatorID        string       `json:"creatorId"`
@@ -65,7 +66,9 @@ type ListPostsOpts struct {
 
 // CreatePostRequest is the body for creating a post.
 type CreatePostRequest struct {
-	Text string `json:"text"`
+	Text         string `json:"text"`
+	ThreadID     string `json:"threadId,omitempty"`
+	ParentPostID string `json:"parentPostId,omitempty"`
 }
 
 // UpdatePostRequest is the body for updating a post.

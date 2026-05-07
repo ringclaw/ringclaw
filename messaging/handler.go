@@ -121,6 +121,10 @@ type Handler struct {
 	// operator's persona / memory context. A nil loader is safe to
 	// carry (Enabled reports false).
 	personaLoader *persona.Loader
+
+	// replyInThread makes the bot reply inside a thread rather than
+	// as a flat post. Each thread maps to a separate agent session.
+	replyInThread bool
 }
 
 // NewHandler creates a new message handler.
@@ -210,6 +214,13 @@ func (h *Handler) PersonaLoader() *persona.Loader {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.personaLoader
+}
+
+// SetReplyInThread enables or disables thread-based replies.
+func (h *Handler) SetReplyInThread(enabled bool) {
+	h.mu.Lock()
+	h.replyInThread = enabled
+	h.mu.Unlock()
 }
 
 // buildPersonaBanner returns the context banner to prepend to a
@@ -635,7 +646,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		}
 		return
 	} else if text == "/new" || text == "/clear" {
-		logSendError(SendTextReply(ctx, client, chatID, h.resetDefaultSession(ctx, conversationIDForPost(client, post))))
+		logSendError(SendTextReply(ctx, client, chatID, h.resetDefaultSession(ctx, conversationIDForPost(client, post, h.replyInThread))))
 		return
 	} else if strings.HasPrefix(text, "/cwd") {
 		logSendError(SendTextReply(ctx, client, chatID, h.handleCwd(text)))
@@ -773,9 +784,12 @@ func (h *Handler) routeOOBApprovalReply(ctx context.Context, client *ringcentral
 // Any caller building an ad-hoc conversationID must preserve these
 // invariants; in particular, do not reduce the key to just the chat or
 // just the user.
-func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) string {
+func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post, threadMode bool) string {
 	chatID := strings.TrimSpace(post.GroupID)
 	creatorID := strings.TrimSpace(post.CreatorID)
+	if threadMode && post.ThreadID != "" {
+		return fmt.Sprintf("rc:thread:%s:%s", chatID, post.ThreadID)
+	}
 	if client != nil && client.IsBotDM(chatID) {
 		return fmt.Sprintf("rc:dm:%s:%s", chatID, creatorID)
 	}
@@ -784,7 +798,7 @@ func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) st
 
 // dispatchToAgent handles the common pattern: placeholder → extract attachments → chat → reply with actions.
 func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, ag agent.Agent, message, placeholderID string) {
-	conversationID := conversationIDForPost(client, post)
+	conversationID := conversationIDForPost(client, post, h.replyInThread)
 
 	// v0.4.3: tag the request with the sender's Origin so the agent
 	// layer can apply the non-owner restricted-mode + fail-closed
@@ -812,10 +826,7 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 
 // sendToDefaultAgent sends the message to the default agent and replies.
 func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string) {
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, post.GroupID)
-	if placeholderErr != nil {
-		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
-	}
+	placeholderID := h.sendPlaceholder(ctx, client, post)
 
 	ag := h.getDefaultAgent()
 	if ag == nil {
@@ -830,10 +841,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Cl
 
 // sendToNamedAgent sends the message to a specific agent and replies.
 func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, name, message string) {
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, post.GroupID)
-	if placeholderErr != nil {
-		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
-	}
+	placeholderID := h.sendPlaceholder(ctx, client, post)
 
 	ag, agErr := h.getAgent(ctx, name)
 	if agErr != nil {
@@ -847,7 +855,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 
 // broadcastToAgents sends the message to multiple agents in parallel.
 func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, names []string, message string) {
-	conversationID := conversationIDForPost(client, post)
+	conversationID := conversationIDForPost(client, post, h.replyInThread)
 
 	// v0.4.3: tag the broadcast ctx with Origin so every fan-out
 	// agent invocation honors the non-owner restricted-mode +
@@ -893,6 +901,23 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 		reply := fmt.Sprintf("[%s] %s", r.name, r.reply)
 		h.sendReplyWithActions(ctx, client, readClient, post, reply, "")
 	}
+}
+
+// sendPlaceholder sends a "Thinking..." placeholder, using thread targeting
+// when reply_in_thread is enabled.
+func (h *Handler) sendPlaceholder(ctx context.Context, client *ringcentral.Client, post ringcentral.Post) string {
+	var placeholderID string
+	var err error
+	if h.replyInThread {
+		ti := ThreadInfoFromPost(post)
+		placeholderID, err = SendTypingPlaceholderInThread(ctx, client, post.GroupID, ti)
+	} else {
+		placeholderID, err = SendTypingPlaceholder(ctx, client, post.GroupID)
+	}
+	if err != nil {
+		slog.Error("failed to send typing placeholder", "component", "handler", "error", err)
+	}
+	return placeholderID
 }
 
 // sendReplyWithActions processes action blocks and sends the final reply.
@@ -941,9 +966,12 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 	}
 
 	// Update the placeholder with the real reply, or send a new post.
-	// Empty reply (e.g. agent response was 100% ACTION blocks) deletes
-	// the placeholder so no phantom empty post remains.
-	FinalizeReply(ctx, client, chatID, placeholderID, reply, "handler")
+	if h.replyInThread {
+		ti := ThreadInfoFromPost(post)
+		FinalizeThreadReply(ctx, client, chatID, ti, placeholderID, reply, "handler")
+	} else {
+		FinalizeReply(ctx, client, chatID, placeholderID, reply, "handler")
+	}
 
 	// Send extracted images as separate file uploads
 	for _, imgURL := range imageURLs {

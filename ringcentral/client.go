@@ -161,6 +161,50 @@ func (c *Client) SendPost(ctx context.Context, chatID, text string) (*Post, erro
 	return &post, nil
 }
 
+// SendThreadReply creates a new post inside an existing thread.
+func (c *Client) SendThreadReply(ctx context.Context, chatID, threadID, text string) (*Post, error) {
+	reqBody := CreatePostRequest{Text: text, ThreadID: threadID}
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal thread reply: %w", err)
+	}
+
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts", chatID)
+	respBody, err := c.doRequest(ctx, http.MethodPost, path, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	var post Post
+	if err := json.Unmarshal(respBody, &post); err != nil {
+		return nil, fmt.Errorf("parse thread reply response: %w", err)
+	}
+	c.markSentPost(post.ID)
+	return &post, nil
+}
+
+// SendPostAsThread creates a new thread by replying to a parent post.
+func (c *Client) SendPostAsThread(ctx context.Context, chatID, parentPostID, text string) (*Post, error) {
+	reqBody := CreatePostRequest{Text: text, ParentPostID: parentPostID}
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal thread post: %w", err)
+	}
+
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts", chatID)
+	respBody, err := c.doRequest(ctx, http.MethodPost, path, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	var post Post
+	if err := json.Unmarshal(respBody, &post); err != nil {
+		return nil, fmt.Errorf("parse thread post response: %w", err)
+	}
+	c.markSentPost(post.ID)
+	return &post, nil
+}
+
 // UpdatePost updates an existing post's text.
 func (c *Client) UpdatePost(ctx context.Context, chatID, postID, text string) (*Post, error) {
 	reqBody := UpdatePostRequest{Text: text}
