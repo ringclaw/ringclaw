@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -319,38 +321,85 @@ func (c *Client) doRequest(ctx context.Context, method, path, contentType string
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	token, err := c.auth.AccessToken()
-	if err != nil {
-		return nil, fmt.Errorf("get access token: %w", err)
+	// Buffer the body so it can be replayed on retry.
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, fmt.Errorf("read request body: %w", err)
+		}
 	}
 
-	reqURL := c.serverURL + path
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	req.Header.Set("Accept", "application/json")
+	const maxRetries = 2
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		token, err := c.auth.AccessToken()
+		if err != nil {
+			return nil, fmt.Errorf("get access token: %w", err)
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+		reqURL := c.serverURL + path
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		req.Header.Set("Accept", "application/json")
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
 
-	return respBody, nil
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries {
+			wait := parseRetryAfter(resp.Header.Get("Retry-After"), 5*time.Second)
+			if wait > 30*time.Second {
+				wait = 30 * time.Second
+			}
+			slog.Warn("API rate limited, retrying",
+				"component", "rc", "method", method, "path", path,
+				"retry_after", wait, "attempt", attempt+1)
+			select {
+			case <-time.After(wait):
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		return respBody, nil
+	}
+	return nil, fmt.Errorf("HTTP 429: rate limited after %d retries", maxRetries)
+}
+
+// parseRetryAfter parses the Retry-After header value (in seconds) and
+// returns a duration. Falls back to the provided default if the header
+// is empty or unparseable.
+func parseRetryAfter(header string, fallback time.Duration) time.Duration {
+	if header == "" {
+		return fallback
+	}
+	if secs, err := strconv.Atoi(header); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return fallback
 }
 
 func inferContentType(fileName string) string {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -228,5 +229,61 @@ func TestGetWSToken_RetryOn401(t *testing.T) {
 	}
 	if tokenCallCount.Load() != 1 {
 		t.Errorf("expected 1 token refresh call, got %d", tokenCallCount.Load())
+	}
+}
+
+func TestRefreshToken_429Retry(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		if n <= 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"errorCode":"CMN-301","message":"Request rate exceeded"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(TokenResponse{
+			AccessToken: "retry-token",
+			ExpiresIn:   3600,
+		})
+	}))
+	defer srv.Close()
+
+	auth := NewAuth("id", "secret", "jwt", srv.URL)
+	auth.httpClient = srv.Client()
+
+	if err := auth.Authenticate(); err != nil {
+		t.Fatalf("expected success after 429 retry, got: %v", err)
+	}
+	token, err := auth.AccessToken()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "retry-token" {
+		t.Errorf("expected retry-token, got %q", token)
+	}
+	if callCount.Load() != 2 {
+		t.Errorf("expected 2 token calls (1 x 429 + 1 success), got %d", callCount.Load())
+	}
+}
+
+func TestRefreshToken_429ExhaustedRetries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"errorCode":"CMN-301","message":"Request rate exceeded"}`))
+	}))
+	defer srv.Close()
+
+	auth := NewAuth("id", "secret", "jwt", srv.URL)
+	auth.httpClient = srv.Client()
+
+	err := auth.Authenticate()
+	if err == nil {
+		t.Fatal("expected error after exhausted retries")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("expected '429' in error, got: %v", err)
 	}
 }

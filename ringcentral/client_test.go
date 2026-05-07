@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1764,5 +1766,88 @@ func TestListRecentChats_NoParams(t *testing.T) {
 	}
 	if len(list.Records) != 1 {
 		t.Errorf("expected 1 chat, got %d", len(list.Records))
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	tests := []struct {
+		header   string
+		fallback time.Duration
+		want     time.Duration
+	}{
+		{"", 5 * time.Second, 5 * time.Second},
+		{"3", 5 * time.Second, 3 * time.Second},
+		{"10", 5 * time.Second, 10 * time.Second},
+		{"0", 5 * time.Second, 5 * time.Second},
+		{"-1", 5 * time.Second, 5 * time.Second},
+		{"abc", 5 * time.Second, 5 * time.Second},
+	}
+	for _, tt := range tests {
+		got := parseRetryAfter(tt.header, tt.fallback)
+		if got != tt.want {
+			t.Errorf("parseRetryAfter(%q, %v) = %v, want %v", tt.header, tt.fallback, got, tt.want)
+		}
+	}
+}
+
+func TestDoRequest_429Retry(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/restapi/oauth/token" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(TokenResponse{AccessToken: "tok", ExpiresIn: 3600})
+			return
+		}
+		n := callCount.Add(1)
+		if n <= 2 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"errorCode":"CMN-301","message":"Request rate exceeded"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	auth := NewAuth("id", "secret", "jwt", srv.URL)
+	auth.httpClient = srv.Client()
+	client := &Client{serverURL: srv.URL, auth: auth, httpClient: srv.Client()}
+
+	body, err := client.doRequest(context.Background(), http.MethodGet, "/test", "", nil)
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if !strings.Contains(string(body), "ok") {
+		t.Errorf("unexpected body: %s", body)
+	}
+	if callCount.Load() != 3 {
+		t.Errorf("expected 3 API calls (2 x 429 + 1 success), got %d", callCount.Load())
+	}
+}
+
+func TestDoRequest_429ExhaustedRetries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/restapi/oauth/token" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(TokenResponse{AccessToken: "tok", ExpiresIn: 3600})
+			return
+		}
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"errorCode":"CMN-301","message":"Request rate exceeded"}`))
+	}))
+	defer srv.Close()
+
+	auth := NewAuth("id", "secret", "jwt", srv.URL)
+	auth.httpClient = srv.Client()
+	client := &Client{serverURL: srv.URL, auth: auth, httpClient: srv.Client()}
+
+	_, err := client.doRequest(context.Background(), http.MethodGet, "/test", "", nil)
+	if err == nil {
+		t.Fatal("expected error after exhausted retries")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("expected 429 in error, got: %v", err)
 	}
 }
