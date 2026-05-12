@@ -476,6 +476,57 @@ func TestReadLoop_SkipsEmptyLines(t *testing.T) {
 	stdinWriter.Close()
 }
 
+func TestReadLoop_DispatchesLargeResponseLine(t *testing.T) {
+	_, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	a := &ACPAgent{
+		stdin:    stdinWriter,
+		scanner:  newACPScanner(stdoutReader),
+		started:  true,
+		pending:  make(map[int64]chan *rpcResponse),
+		notifyCh: make(map[string]chan *sessionUpdate),
+		sessions: make(map[string]string),
+		termMgr:  newTerminalManager(t.TempDir()),
+	}
+
+	id := int64(99)
+	ch := make(chan *rpcResponse, 1)
+	a.pendingMu.Lock()
+	a.pending[id] = ch
+	a.pendingMu.Unlock()
+
+	go a.readLoop()
+
+	resp := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  strings.Repeat("x", 5*1024*1024),
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	go func() {
+		fmt.Fprintf(stdoutWriter, "%s\n", data)
+	}()
+
+	select {
+	case msg := <-ch:
+		if msg == nil {
+			t.Fatal("received nil response")
+		}
+		if got := len(msg.Result); got < 5*1024*1024 {
+			t.Fatalf("response result too small: %d", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for large response")
+	}
+
+	stdoutWriter.Close()
+	stdinWriter.Close()
+}
+
 func TestReadLoop_ClosesAllPendingOnExit(t *testing.T) {
 	_, stdinWriter := io.Pipe()
 	stdoutReader, stdoutWriter := io.Pipe()
