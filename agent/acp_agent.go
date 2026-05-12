@@ -106,6 +106,17 @@ type ACPAgent struct {
 	deniedToolWarned sync.Map // map[string]bool
 }
 
+const (
+	acpScannerInitialBufferSize = 64 * 1024
+	acpScannerMaxTokenSize      = 64 * 1024 * 1024
+)
+
+func newACPScanner(r io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, acpScannerInitialBufferSize), acpScannerMaxTokenSize)
+	return scanner
+}
+
 // acpPromptCaps captures the agent's advertised prompt capabilities so
 // the handler can decide at runtime whether to forward image / audio
 // entries. The boolean fields mirror the well-known keys from the ACP
@@ -392,8 +403,7 @@ func (a *ACPAgent) startOnce(ctx context.Context) error {
 	pid := a.cmd.Process.Pid
 	slog.Info("started subprocess", "component", "acp", "command", a.command, "pid", pid)
 
-	a.scanner = bufio.NewScanner(stdout)
-	a.scanner.Buffer(make([]byte, 0, 4*1024*1024), 4*1024*1024)
+	a.scanner = newACPScanner(stdout)
 	a.started = true
 
 	go a.readLoop()
