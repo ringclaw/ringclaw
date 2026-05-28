@@ -109,6 +109,10 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 		},
 		FullVersion(),
 	)
+	if ns := cfg.Bot.EffectiveConversationNamespace(); ns != "" {
+		handler.SetConversationNamespace(ns)
+		slog.Info("agent conversation namespace configured", "component", "start", "namespace", ns)
+	}
 
 	// Populate agent metas for /status
 	var metas []messaging.AgentMeta

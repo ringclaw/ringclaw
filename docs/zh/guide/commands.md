@@ -19,6 +19,8 @@ title: 聊天命令
 | `/note list\|create\|get\|update\|delete\|lock\|unlock` | 管理笔记 |
 | `/event list [chatId]\|create\|get\|update\|delete` | 管理日历事件 |
 | `/card get\|delete` | 管理 Adaptive Card |
+| `/video create\|get\|delete` | 创建和管理 RingCentral Video bridge |
+| `/phone ringout\|status\|cancel\|calllog` | 电话动作和通话记录；RingOut 仅 owner 可执行 |
 | `/chatinfo [chatId]` | 查看聊天详情（名称、类型、成员数） |
 | `总结我和 John 的聊天` | 总结某个对话 |
 | `/cron list\|add\|delete\|enable\|disable` | 管理定时任务 |
@@ -92,6 +94,8 @@ title: 聊天命令
 /task complete <id>              # 标记任务完成
 /note create 会议纪要 | 内容     # 创建笔记（自动发布）
 /event list                      # 列出日历事件
+/video create 设计评审           # 创建 Video bridge 并返回入会链接
+/phone calllog direction=Outbound # 查看最近的个人通话记录（仅 owner）
 ```
 
 每个命令支持：`list`、`create`、`get`、`update`、`delete`。任务还支持 `complete`。
@@ -124,6 +128,8 @@ ringclaw
 ├── restart                            # 重启
 ├── status                             # 检查运行状态
 ├── setup                              # 交互式凭据配置
+├── app-url                            # 生成预填的 Developer Console 应用创建链接
+├── onboard                            # API 辅助的非交互式凭据/K8S onboarding
 ├── update [--channel beta|alpha] [--branch X]  # 自动更新
 ├── upgrade / version                  # 别名
 │
@@ -167,6 +173,17 @@ ringclaw
 │   ├── get <cardId>                  # 获取卡片
 │   └── delete <cardId>              # 删除卡片
 │
+├── video                              # RingCentral Video 操作
+│   ├── create <title> [--type X]     # 创建 bridge
+│   ├── get <bridgeId>                # 获取 bridge 详情
+│   └── delete <bridgeId>             # 删除 bridge
+│
+├── phone                              # RingCentral Phone 操作
+│   ├── ringout <from> <to>           # 发起双腿 RingOut
+│   ├── status <ringOutId>            # 查看 RingOut 状态
+│   ├── cancel <ringOutId>            # 取消连接中的 RingOut
+│   └── calllog [--limit N]           # 查看个人通话记录
+│
 ├── user                               # 用户操作
 │   ├── search <query>                # 搜索公司目录
 │   └── get <personId>               # 获取用户信息
@@ -186,6 +203,20 @@ ringclaw message send 123456 "来自 CLI 的消息"
 
 # 列出聊天中的任务
 ringclaw task list 123456
+
+# 创建 RingCentral Video bridge
+ringclaw video create "设计评审" --type Scheduled
+
+# onboarding 时记录 Video/Phone 能力要求
+ringclaw onboard --from-env --capability video --capability phone
+
+# 从多 Bot manifest 渲染长期运行的 Kubernetes Pod
+ringclaw onboard --manifest bots.json --output-dir ./rendered-bots --skip-validate \
+  --k8s --k8s-namespace personal-ava
+kubectl apply -f ./rendered-bots/personal-ava-summer/k8s.yaml
+
+# 发起 RingOut（需要 RingOut scope 和 owner 权限）
+ringclaw phone ringout +14155550100 +14155550199 --caller-id +14155550100
 
 # 搜索公司目录
 ringclaw user search "Alice"

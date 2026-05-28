@@ -112,6 +112,8 @@ func buildHelpText() string {
 /note list|create|get|update|delete|lock|unlock
 /event list|create|get|update|delete
 /card get|delete
+/video create|get|delete
+/phone ringout|status|cancel|calllog
 /chatinfo [chatId] - Show chat details
 /cron add|list|delete - Scheduled tasks
 /reload - Re-detect installed agents
@@ -160,6 +162,8 @@ func buildHelpCard() json.RawMessage {
 		{"/note", "list | create | get | update | delete | lock | unlock"},
 		{"/event", "list | create | get | update | delete"},
 		{"/card", "get | delete"},
+		{"/video", "create | get | delete"},
+		{"/phone", "ringout | status | cancel | calllog"},
 		{"/chatinfo", "Show chat details"},
 		{"/cron", "add | list | delete"},
 	}
@@ -174,6 +178,8 @@ func buildHelpCard() json.RawMessage {
 				mono("/task create \"Review PR\" assignee=John"),
 				mono("/note create \"Meeting Notes\""),
 				mono("/event create \"Standup\" 2026-04-10T09:00:00Z 2026-04-10T09:30:00Z"),
+				mono("/video create \"Design Review\" type=Scheduled"),
+				mono("/phone calllog direction=Outbound limit=5"),
 				mono("/cron add \"0 9 * * 1-5\" morning standup summary"),
 				mono("/chatinfo 158994374662"),
 			},
@@ -252,6 +258,9 @@ func isPrivilegedCommand(text string) bool {
 		return true
 	}
 	if strings.HasPrefix(text, "/cron") {
+		return true
+	}
+	if strings.HasPrefix(text, "/phone") {
 		return true
 	}
 	if text == "/reload" {

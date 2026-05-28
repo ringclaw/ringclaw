@@ -4,7 +4,7 @@ title: AI-Driven Actions
 
 # AI-Driven Actions
 
-AI agents can automatically create notes, tasks, events, and adaptive cards during conversation. When a user's request implies creating these resources, the agent appends ACTION blocks to its response and RingClaw executes them via the RC API.
+AI agents can automatically create notes, tasks, events, adaptive cards, RingCentral Video bridges, and owner-approved RingOut calls during conversation. When a user's request implies creating these resources, the agent appends ACTION blocks to its response and RingClaw executes them via the RC API.
 
 ## How It Works
 
@@ -51,6 +51,12 @@ sequenceDiagram
             R->>RC: CreateEvent
         else CARD
             R->>RC: CreateAdaptiveCard
+        else VIDEO
+            R->>RC: CreateVideoBridge
+            R->>RC: SendPost with join URL
+        else RINGOUT
+            R->>R: Require owner sender
+            R->>RC: CreateRingOut
         else MESSAGE
             R->>R: Resolve chatid / person name
             R->>RC: SendPost
@@ -71,9 +77,16 @@ END_ACTION
 
 ACTION:EVENT title=Sprint Review start=2026-04-01T14:00:00Z end=2026-04-01T15:00:00Z
 END_ACTION
+
+ACTION:VIDEO title=Design Review type=Scheduled
+END_ACTION
+
+ACTION:RINGOUT from=+14155550100 to=+14155550199 callerid=+14155550100
+END_ACTION
 ```
 
 Actions may target a different chat via the `chatid=<id>` parameter.
+`ACTION:RINGOUT` is owner-only and is refused for non-owner senders.
 
 - **Non-owner senders**: when OOB is configured (Private App + owner DM resolved), a context-rich challenge prompt is posted to the owner DM (action type, requester label with email, origin / target chat names, optional `Title:` / `Subject:` / `Assignee:` lines, a body preview capped at 200 characters, effect description, and host approve / deny commands). The owner must run `ringclaw approval <id>` on the host machine to approve. On approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. Example owner DM prompt:
 
@@ -148,4 +161,19 @@ Manage cards via chat commands:
 ```
 /card get <id>       # view card details
 /card delete <id>    # delete a card
+```
+
+## Video & Phone Commands
+
+Video bridge creation uses RingCentral Video REST API and posts or prints the join URL. Phone commands use the low-risk RingOut and extension Call Log APIs. These commands use the same resolved RingCentral client path as message commands; the selected app token must carry the required scopes. RingOut is owner-only inside the message bridge.
+
+```
+/video create Design Review type=Scheduled
+/video get <bridgeId>
+/video delete <bridgeId>
+
+/phone ringout +14155550100 +14155550199 callerid=+14155550100
+/phone status <ringOutId>
+/phone cancel <ringOutId>
+/phone calllog direction=Outbound view=Detailed limit=10
 ```

@@ -21,7 +21,7 @@ var crossChatNoticeTimeout = 5 * time.Second
 
 // AgentAction represents a parsed action from the agent's response.
 type AgentAction struct {
-	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE"
+	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE", "VIDEO", "RINGOUT"
 	Params map[string]string
 	Body   string
 }
@@ -105,7 +105,7 @@ func parseActionBlock(block string) *AgentAction {
 // parseActionParams parses "title=xxx start=2026-01-01T10:00:00Z end=2026-01-01T11:00:00Z"
 func parseActionParams(s string) []keyValue {
 	var result []keyValue
-	keys := []string{"title", "subject", "start", "end", "chatid", "assignee"}
+	keys := []string{"title", "subject", "start", "end", "chatid", "assignee", "type", "from", "to", "callerid", "playprompt"}
 	remaining := s
 	for len(remaining) > 0 {
 		remaining = strings.TrimSpace(remaining)
@@ -173,6 +173,26 @@ type ActionContext struct {
 func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcentral.Client, chatID string, actions []AgentAction, opts ActionContext) []string {
 	var results []string
 	for _, a := range actions {
+		if a.Type == "RINGOUT" {
+			if !opts.OriginIsOwner {
+				results = append(results, "Refused RINGOUT: only the owner can start phone calls.")
+				continue
+			}
+			req, err := ringOutRequestFromParams(a.Params)
+			if err != nil {
+				results = append(results, fmt.Sprintf("Failed to start RingOut: %v", err))
+				continue
+			}
+			ringOut, err := actionClient.CreateRingOut(ctx, req)
+			if err != nil {
+				slog.Error("action: create ringout failed", "error", err)
+				results = append(results, fmt.Sprintf("Failed to start RingOut: %v", err))
+				continue
+			}
+			slog.Info("action: started ringout", "ringOutID", ringOut.ID, "status", ringOut.Status.CallStatus)
+			continue
+		}
+
 		targetChat := chatID
 		crossChat := false
 		if cid := a.Params["chatid"]; cid != "" {
@@ -319,6 +339,32 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			}
 			slog.Info("action: sent message", "chatID", targetChat, "text", util.Truncate(body, 60))
 
+		case "VIDEO":
+			title := a.Params["title"]
+			if title == "" {
+				title = "RingClaw Meeting"
+			}
+			bridgeType := a.Params["type"]
+			if bridgeType == "" {
+				bridgeType = "Instant"
+			}
+			bridge, err := actionClient.CreateVideoBridge(ctx, &ringcentral.CreateVideoBridgeRequest{
+				Name: title,
+				Type: bridgeType,
+			})
+			if err != nil {
+				slog.Error("action: create video bridge failed", "error", err)
+				results = append(results, fmt.Sprintf("Failed to create video meeting: %v", err))
+				continue
+			}
+			text := formatVideoBridgeMessage(bridge)
+			if err := SendTextReply(ctx, actionClient, targetChat, text); err != nil {
+				slog.Error("action: send video bridge link failed", "error", err, "chatID", targetChat)
+				results = append(results, fmt.Sprintf("Created video meeting but failed to post link: %v", err))
+				continue
+			}
+			slog.Info("action: created video bridge", "bridgeID", bridge.ID, "chatID", targetChat, "title", title)
+
 		default:
 			slog.Warn("action: unknown action type, sending body as message", "type", a.Type)
 			body := strings.TrimSpace(a.Body)
@@ -331,6 +377,39 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		}
 	}
 	return results
+}
+
+func formatVideoBridgeMessage(bridge *ringcentral.VideoBridge) string {
+	if bridge == nil {
+		return "Video meeting created."
+	}
+	title := bridge.Name
+	if title == "" {
+		title = "Video meeting"
+	}
+	if bridge.Discovery.Web != "" {
+		return fmt.Sprintf("Video meeting created: **%s**\n%s", title, bridge.Discovery.Web)
+	}
+	return fmt.Sprintf("Video meeting created: **%s** (`%s`)", title, bridge.ID)
+}
+
+func ringOutRequestFromParams(params map[string]string) (*ringcentral.CreateRingOutRequest, error) {
+	from := strings.TrimSpace(params["from"])
+	to := strings.TrimSpace(params["to"])
+	if from == "" || to == "" {
+		return nil, fmt.Errorf("missing from/to phone number")
+	}
+	req := &ringcentral.CreateRingOutRequest{
+		From: ringcentral.PhoneNumberRef{PhoneNumber: from},
+		To:   ringcentral.PhoneNumberRef{PhoneNumber: to},
+	}
+	if callerID := strings.TrimSpace(params["callerid"]); callerID != "" {
+		req.CallerID = &ringcentral.PhoneNumberRef{PhoneNumber: callerID}
+	}
+	if playPrompt := strings.ToLower(strings.TrimSpace(params["playprompt"])); playPrompt == "true" || playPrompt == "1" || playPrompt == "yes" {
+		req.PlayPrompt = true
+	}
+	return req, nil
 }
 
 // announceCrossChatOrRefuse posts a metadata-only heads-up to the
@@ -625,6 +704,29 @@ func awaitCrossChatOOB(actionClient *ringcentral.Client, challenge *oob.Challeng
 			"text", util.Truncate(body, 60))
 		logSendError(SendTextReply(ctx, actionClient, originChat,
 			fmt.Sprintf("Cross-chat %s approved — message delivered to target chat.", a.Type)))
+	case "VIDEO":
+		title := a.Params["title"]
+		if title == "" {
+			title = "RingClaw Meeting"
+		}
+		bridgeType := a.Params["type"]
+		if bridgeType == "" {
+			bridgeType = "Instant"
+		}
+		bridge, err := actionClient.CreateVideoBridge(ctx, &ringcentral.CreateVideoBridgeRequest{Name: title, Type: bridgeType})
+		if err != nil {
+			logSendError(SendTextReply(ctx, actionClient, originChat,
+				fmt.Sprintf("Cross-chat %s failed: create video meeting: %v", a.Type, err)))
+			return
+		}
+		if err := SendTextReply(ctx, actionClient, targetChat, formatVideoBridgeMessage(bridge)); err != nil {
+			logSendError(SendTextReply(ctx, actionClient, originChat,
+				fmt.Sprintf("Cross-chat %s failed: post video link: %v", a.Type, err)))
+			return
+		}
+		slog.Info("action: cross-chat OOB approved - created video bridge", "bridgeID", bridge.ID, "chatID", targetChat, "title", title)
+		logSendError(SendTextReply(ctx, actionClient, originChat,
+			fmt.Sprintf("Cross-chat %s approved — video meeting \"%s\" created in target chat.", a.Type, title)))
 	default:
 		logSendError(SendTextReply(ctx, actionClient, originChat,
 			fmt.Sprintf("Cross-chat %s cancelled: unsupported type for OOB approval.", a.Type)))

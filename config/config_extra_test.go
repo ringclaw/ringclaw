@@ -284,6 +284,39 @@ func TestConfigPath(t *testing.T) {
 	}
 }
 
+func TestConfigPath_EnvOverride(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "bot-a", "config.json")
+	t.Setenv("RINGCLAW_CONFIG", override)
+
+	p, err := ConfigPath()
+	if err != nil {
+		t.Fatalf("ConfigPath() error: %v", err)
+	}
+	if p != override {
+		t.Fatalf("ConfigPath() = %q, want %q", p, override)
+	}
+}
+
+func TestBotConfigEffectiveConversationNamespace(t *testing.T) {
+	cases := []struct {
+		name string
+		bot  BotConfig
+		want string
+	}{
+		{"explicit", BotConfig{ConversationNamespace: "custom"}, "custom"},
+		{"tenant and bot", BotConfig{TenantID: "tenant", ID: "bot"}, "tenant/bot"},
+		{"bot only", BotConfig{ID: "bot"}, "bot"},
+		{"empty", BotConfig{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.bot.EffectiveConversationNamespace(); got != tc.want {
+				t.Fatalf("EffectiveConversationNamespace() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsGroupMentionOnly_Default(t *testing.T) {
 	rc := RCConfig{}
 	if !rc.IsGroupMentionOnly() {

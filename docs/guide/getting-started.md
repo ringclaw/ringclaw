@@ -37,6 +37,106 @@ That's it. On first start, RingClaw will:
 After creating your apps, run `ringclaw setup` for an interactive wizard that collects credentials, validates them, and saves the config file.
 :::
 
+::: info
+RingCentral does not expose a public REST endpoint for creating Developer Console apps. RingClaw can generate official pre-filled create-app URLs:
+
+```bash
+ringclaw app-url
+```
+
+For Personal AVA Pro bots that need Video and Phone capabilities, include the extra scopes in the generated links. The Bot App link stays messaging-only; the Private JWT App link receives the Video, RingOut, and ReadCallLog scopes:
+
+```bash
+ringclaw app-url --capability video --capability phone
+```
+
+Open the generated Bot App and Private JWT App links, confirm creation in the Developer Console, then continue with `ringclaw setup` or the API-assisted non-interactive flow:
+
+```bash
+export RC_BOT_TOKEN='<BOT_TOKEN>'
+export RC_CLIENT_ID='<PRIVATE_APP_CLIENT_ID>'
+export RC_CLIENT_SECRET='<PRIVATE_APP_CLIENT_SECRET>'
+export RC_JWT_TOKEN='<OWNER_JWT>'
+export RINGCLAW_BOT_ID='personal-ava-summer'
+export RINGCLAW_TENANT_ID='fiji'
+export RINGCLAW_OWNER_USER_ID='summer.gan'
+export RINGCLAW_CAPABILITIES='video,phone'
+ringclaw onboard --from-env --capability video --capability phone
+```
+
+`--capability video --capability phone` records the bot's requested AVA capabilities in config and prints the required RingCentral scopes. For these two capabilities, the preferred JWT App scopes are **Video**, **RingOut**, and **ReadCallLog**.
+:::
+
+::: tip Kubernetes multi-bot runtime
+For long-lived K8S deployments, run one RingClaw pod per bot in the MVP phase. Give every pod its own Secret, config path, and bot identity:
+
+```bash
+export RINGCLAW_CONFIG=/etc/ringclaw/config/config.json
+ringclaw onboard --from-env --config-out "$RINGCLAW_CONFIG"
+ringclaw start -f
+```
+
+Set `RINGCLAW_BOT_ID` and `RINGCLAW_TENANT_ID` for every bot. RingClaw uses them to namespace AI agent conversations, so multiple bot pods can share the same Codex/Dify/OpenAI-compatible gateway without cross-bot context collisions. For stronger isolation, configure per-bot agent tokens in each pod's Secret and inject them through the agent `env`, `api_key`, or custom headers.
+
+For N-bot rollout, render one config per bot from a manifest:
+
+```json
+{
+  "defaults": {
+    "tenant_id": "fiji",
+    "server_url": "https://platform.ringcentral.com",
+    "default_agent": "codex",
+    "agents": {
+      "codex": {
+        "type": "http",
+        "endpoint": "https://agent-gateway.example.com/v1/chat/completions",
+        "api_key": "${CODEX_GATEWAY_TOKEN}"
+      }
+    }
+  },
+  "bots": [
+    {
+      "bot_id": "personal-ava-summer",
+      "owner_user_id": "summer.gan",
+      "bot_token": "${SUMMER_RC_BOT_TOKEN}",
+      "client_id": "${SUMMER_RC_CLIENT_ID}",
+      "client_secret": "${SUMMER_RC_CLIENT_SECRET}",
+      "jwt_token": "${SUMMER_RC_JWT_TOKEN}",
+      "capabilities": ["video", "phone"],
+      "chat_ids": ["123"]
+    },
+    {
+      "bot_id": "personal-ava-alice",
+      "owner_user_id": "alice",
+      "bot_token": "${ALICE_RC_BOT_TOKEN}",
+      "chat_ids": ["456"],
+      "agents": {
+        "codex": {
+          "type": "http",
+          "endpoint": "https://agent-gateway.example.com/v1/chat/completions",
+          "api_key": "${ALICE_CODEX_GATEWAY_TOKEN}"
+        }
+      }
+    }
+  ]
+}
+```
+
+```bash
+ringclaw onboard --manifest bots.json --output-dir ./rendered-bots --skip-validate \
+  --k8s --k8s-namespace personal-ava \
+  --k8s-image ghcr.io/ringclaw/ringclaw:latest
+```
+
+Each rendered folder contains a `config.json` and, when `--k8s` is set, a `k8s.yaml` with an Opaque Secret and one-replica Deployment. Apply each bot manifest independently:
+
+```bash
+kubectl apply -f ./rendered-bots/personal-ava-summer/k8s.yaml
+```
+
+The Secret stores the full RingClaw config, including Bot Token, JWT App credentials, selected capabilities, chat IDs, and per-bot agent tokens. The Deployment mounts it at `/etc/ringclaw/config/config.json` and runs `ringclaw start -f`, so the runtime path is the same as local MVP usage.
+:::
+
 ### Step 1: Create a Bot App (Required)
 
 1. Go to [RingCentral Developer Console](https://developers.ringcentral.com/console) and sign in
@@ -50,7 +150,7 @@ After creating your apps, run `ringclaw setup` for an interactive wizard that co
    <a href="/images/rc-bot-addin.png" target="_blank"><img src="/images/rc-bot-addin.png" width="600" alt="Select Bot Add-in" /></a>
 
 3. Configure the app:
-   - **Security** → **Application Scopes**: check **Read Accounts**, **Read Messages**, **TeamMessaging**, **WebSockets Subscription**, **WebSockets**
+   - **Security** → **Application Scopes**: check **Read Accounts**, **Read Messages**, **TeamMessaging**, **WebSocketsSubscription**
    - **Access**: Private (only your own account)
 
    <a href="/images/rc-scopes.png" target="_blank"><img src="/images/rc-scopes.png" width="600" alt="Application Scopes" /></a>
@@ -74,6 +174,7 @@ After creating your apps, run `ringclaw setup` for an interactive wizard that co
 A Private App (REST API with JWT) enables additional features:
 - **Summarize** conversations from other chats
 - **Cross-chat actions** (read messages, create tasks in other chats)
+- **Video/Phone actions** (create RingCentral Video bridges, start owner-approved RingOut, read extension Call Log)
 
 1. In the Developer Console, click **Register App** → select **REST API App (most common)**
 
@@ -81,7 +182,8 @@ A Private App (REST API with JWT) enables additional features:
 
 2. Configure the app:
    - **Auth**: JWT auth flow
-   - **Security** → **Application Scopes**: check **Read Accounts**, **Read Messages**, **TeamMessaging**, **WebSockets Subscription**, **WebSockets**
+   - **Security** → **Application Scopes**: check **Read Accounts**, **Read Messages**, **TeamMessaging**, **WebSocketsSubscription**
+   - For Personal AVA Pro Video/Phone: add **Video**, **RingOut**, and **ReadCallLog**
    - **Access**: Private
 3. Click **Create** — you'll get a **Client ID** and **Client Secret**
 4. Go to **Credentials** tab → **JWT Credentials** → click **Create JWT Token**

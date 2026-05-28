@@ -1642,6 +1642,23 @@ func TestConversationIDForPost_DMAndGroupNamespaces(t *testing.T) {
 	}
 }
 
+func TestHandlerConversationIDForPost_BotNamespace(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+	post := ringcentral.Post{GroupID: "group-1", CreatorID: "user-1"}
+	h := NewHandler(nil, nil, "test")
+	h.SetConversationNamespace("tenant:bot one")
+
+	id := h.conversationIDForPost(client, post)
+
+	if !strings.HasPrefix(id, "bot:tenant_bot_one:rc:chat:") {
+		t.Fatalf("expected bot namespace prefix, got %q", id)
+	}
+	if !strings.Contains(id, "group-1") || !strings.Contains(id, "user-1") {
+		t.Fatalf("expected base chat/user isolation to be preserved, got %q", id)
+	}
+}
+
 // --- cleanSeenMsgs test ---
 
 func TestCleanSeenMsgs(t *testing.T) {
@@ -2026,6 +2043,34 @@ func TestHandleMessage_DMPrivilegedFallsBackWithoutPrivateApp(t *testing.T) {
 		if strings.Contains(reply, "Only the Private App owner") || strings.Contains(reply, "Only the bot owner") {
 			t.Errorf("did not expect a privileged-command refusal without Private App, got %q", reply)
 		}
+	}
+}
+
+func TestHandleMessage_PhoneUsesActionCommandPathLikeMessage(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "phone-no-private-1",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/phone calllog direction=Outbound",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a phone command reply")
+	}
+	if strings.Contains(got[0], "Private App") {
+		t.Errorf("did not expect a Private App-specific gate, got %q", got[0])
+	}
+	if !strings.Contains(got[0], "No call log records") {
+		t.Errorf("expected phone command to reach action handler, got %q", got[0])
 	}
 }
 

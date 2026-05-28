@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ringclaw/ringclaw/messaging/oob"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -123,6 +124,8 @@ func TestIsActionCommand(t *testing.T) {
 		{"/task create test", true},
 		{"/note list", true},
 		{"/event create meeting 2026-01-01T10:00:00Z 2026-01-01T11:00:00Z", true},
+		{"/video create Design Review", true},
+		{"/phone ringout +14155550100 +14155550199", true},
 		{"/Task list", true},
 		{"/help", false},
 		{"/status", false},
@@ -133,6 +136,77 @@ func TestIsActionCommand(t *testing.T) {
 		if got := IsActionCommand(tt.text); got != tt.want {
 			t.Errorf("IsActionCommand(%q) = %v, want %v", tt.text, got, tt.want)
 		}
+	}
+}
+
+func TestHandleActionCommand_VideoCreate(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/rcvideo/v2/account/~/extension/~/bridges" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.VideoBridge{
+			ID:   "bridge-1",
+			Name: "Design Review",
+			Discovery: ringcentral.VideoBridgeDiscovery{
+				Web: "https://v.ringcentral.com/join/123",
+			},
+		})
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/video create Design Review")
+	if !strings.Contains(result, "bridge-1") || !strings.Contains(result, "https://v.ringcentral.com/join/123") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestHandleActionCommand_VideoCreateKeepsTitleWordsAfterType(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/rcvideo/v2/account/~/extension/~/bridges" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		var body ringcentral.CreateVideoBridgeRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode video request: %v", err)
+		}
+		if body.Name != "Design Review" || body.Type != "Scheduled" {
+			t.Fatalf("unexpected video request: %+v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.VideoBridge{
+			ID:   "bridge-1",
+			Name: body.Name,
+			Type: body.Type,
+			Discovery: ringcentral.VideoBridgeDiscovery{
+				Web: "https://v.ringcentral.com/join/123",
+			},
+		})
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/video create Design type=Scheduled Review")
+	if !strings.Contains(result, "bridge-1") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestHandleActionCommand_PhoneRingOut(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/restapi/v1.0/account/~/extension/~/ring-out" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.RingOut{
+			ID:     "ringout-1",
+			Status: ringcentral.RingOutStatus{CallStatus: "InProgress"},
+		})
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/phone ringout +14155550100 +14155550199")
+	if !strings.Contains(result, "ringout-1") || !strings.Contains(result, "InProgress") {
+		t.Errorf("unexpected result: %s", result)
 	}
 }
 
@@ -562,6 +636,147 @@ END_ACTION`
 	}
 	if actions[0].Params["chatid"] != "137158549510" {
 		t.Errorf("expected chatid '137158549510', got %q", actions[0].Params["chatid"])
+	}
+}
+
+func TestParseAgentActions_VideoAndRingOutParams(t *testing.T) {
+	reply := `ACTION:VIDEO title=Design Review type=Scheduled chatid=team
+END_ACTION
+ACTION:RINGOUT from=+14155550100 to=+14155550199 callerid=+14155550100
+END_ACTION`
+
+	_, actions := ParseAgentActions(reply)
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(actions))
+	}
+	if actions[0].Type != "VIDEO" || actions[0].Params["title"] != "Design Review" || actions[0].Params["type"] != "Scheduled" {
+		t.Fatalf("unexpected video action: %+v", actions[0])
+	}
+	if actions[1].Type != "RINGOUT" || actions[1].Params["from"] != "+14155550100" || actions[1].Params["to"] != "+14155550199" {
+		t.Fatalf("unexpected ringout action: %+v", actions[1])
+	}
+}
+
+func TestExecuteAgentActions_VideoCreatesBridgeAndPostsLink(t *testing.T) {
+	var posted bool
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges":
+			var body ringcentral.CreateVideoBridgeRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode video request: %v", err)
+			}
+			if body.Name != "Design Review" || body.Type != "Scheduled" {
+				t.Fatalf("unexpected video request: %+v", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ringcentral.VideoBridge{
+				ID:   "bridge-1",
+				Name: "Design Review",
+				Type: "Scheduled",
+				Discovery: ringcentral.VideoBridgeDiscovery{
+					Web: "https://v.ringcentral.com/join/123",
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			posted = true
+			var body ringcentral.CreatePostRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post request: %v", err)
+			}
+			if !strings.Contains(body.Text, "https://v.ringcentral.com/join/123") {
+				t.Fatalf("expected join URL in post, got %q", body.Text)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "VIDEO",
+		Params: map[string]string{"title": "Design Review", "type": "Scheduled"},
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if !posted {
+		t.Fatal("expected video join link post")
+	}
+}
+
+func TestExecuteAgentActions_RingOutRequiresOwner(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("non-owner RINGOUT should not call API: %s %s", r.Method, r.URL.Path)
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "RINGOUT",
+		Params: map[string]string{"from": "+14155550100", "to": "+14155550199"},
+	}}, ActionContext{OriginIsOwner: false})
+	if len(results) != 1 || !strings.Contains(results[0], "owner") {
+		t.Fatalf("expected owner refusal, got %+v", results)
+	}
+}
+
+func TestExecuteAgentActions_RingOutWithChatIDStillRequiresOwnerBeforeOOB(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("non-owner RINGOUT with chatid should not call API or OOB path: %s %s", r.Method, r.URL.Path)
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type: "RINGOUT",
+		Params: map[string]string{
+			"from":   "+14155550100",
+			"to":     "+14155550199",
+			"chatid": "target-chat",
+		},
+	}}, ActionContext{
+		OriginIsOwner: false,
+		OOB:           oob.New(oob.Options{}),
+		OwnerDMChat:   "owner-dm",
+		OwnerID:       "owner-1",
+	})
+	if len(results) != 1 || !strings.Contains(results[0], "owner") {
+		t.Fatalf("expected owner refusal before OOB, got %+v", results)
+	}
+}
+
+func TestExecuteAgentActions_RingOutOwnerCreatesCall(t *testing.T) {
+	var called bool
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/restapi/v1.0/account/~/extension/~/ring-out" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		called = true
+		var body ringcentral.CreateRingOutRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode ringout request: %v", err)
+		}
+		if body.From.PhoneNumber != "+14155550100" || body.To.PhoneNumber != "+14155550199" {
+			t.Fatalf("unexpected ringout request: %+v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.RingOut{
+			ID:     "ringout-1",
+			Status: ringcentral.RingOutStatus{CallStatus: "InProgress"},
+		})
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "RINGOUT",
+		Params: map[string]string{"from": "+14155550100", "to": "+14155550199"},
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if !called {
+		t.Fatal("expected RingOut API call")
 	}
 }
 

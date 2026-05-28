@@ -19,6 +19,8 @@ Send these as messages in your RingCentral chat:
 | `/note list\|create\|get\|update\|delete\|lock\|unlock` | Manage notes |
 | `/event list [chatId]\|create\|get\|update\|delete` | Manage calendar events |
 | `/card get\|delete` | Manage adaptive cards |
+| `/video create\|get\|delete` | Create and manage RingCentral Video bridges |
+| `/phone ringout\|status\|cancel\|calllog` | Phone actions and call logs; RingOut is owner-only |
 | `/chatinfo [chatId]` | Show chat details (name, type, members) |
 | `summarize my chat with John` | Summarize a conversation |
 | `/cron list\|add\|delete\|enable\|disable` | Manage scheduled tasks |
@@ -92,6 +94,8 @@ Full CRUD for RingCentral Team Messaging resources directly from chat:
 /task complete <id>                # mark task done
 /note create Meeting Notes | body  # create a note (auto-published)
 /event list                        # list calendar events
+/video create Design Review        # create a Video bridge and return join URL
+/phone calllog direction=Outbound  # list recent extension call logs (owner only)
 ```
 
 Each command supports: `list`, `create`, `get`, `update`, `delete`. Tasks also support `complete`.
@@ -124,6 +128,8 @@ ringclaw
 ├── restart                            # restart
 ├── status                             # check if running
 ├── setup                              # interactive credential wizard
+├── app-url                            # pre-filled Developer Console app URLs
+├── onboard                            # API-assisted non-interactive credential/K8S onboarding
 ├── update [--channel beta|alpha] [--branch X]  # self-update
 ├── upgrade / version                  # aliases
 │
@@ -167,6 +173,17 @@ ringclaw
 │   ├── get <cardId>                  # get card
 │   └── delete <cardId>              # delete card
 │
+├── video                              # RingCentral Video operations
+│   ├── create <title> [--type X]     # create a bridge
+│   ├── get <bridgeId>                # get bridge details
+│   └── delete <bridgeId>             # delete bridge
+│
+├── phone                              # RingCentral Phone operations
+│   ├── ringout <from> <to>           # start two-legged RingOut
+│   ├── status <ringOutId>            # get RingOut status
+│   ├── cancel <ringOutId>            # cancel connecting RingOut
+│   └── calllog [--limit N]           # list extension call logs
+│
 ├── user                               # user operations
 │   ├── search <query>                # search company directory
 │   └── get <personId>               # get person info
@@ -186,6 +203,20 @@ ringclaw message send 123456 "Hello from CLI"
 
 # List tasks in a chat
 ringclaw task list 123456
+
+# Create a RingCentral Video bridge
+ringclaw video create "Design Review" --type Scheduled
+
+# Record Video/Phone capability requirements during onboarding
+ringclaw onboard --from-env --capability video --capability phone
+
+# Render long-lived Kubernetes pods from a multi-bot manifest
+ringclaw onboard --manifest bots.json --output-dir ./rendered-bots --skip-validate \
+  --k8s --k8s-namespace personal-ava
+kubectl apply -f ./rendered-bots/personal-ava-summer/k8s.yaml
+
+# Start RingOut (requires RingOut scope and owner permissions)
+ringclaw phone ringout +14155550100 +14155550199 --caller-id +14155550100
 
 # Search company directory
 ringclaw user search "Alice"

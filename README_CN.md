@@ -17,8 +17,13 @@ curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | 
 # 一键安装 (Windows PowerShell)
 irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
-# 配置（生成 ~/.ringclaw/config.json）并启动
-ringclaw setup
+# 生成预填的 RingCentral 应用创建链接
+ringclaw app-url
+# 为 Personal AVA Pro 的 Private JWT App 增加 Video/Phone scope
+ringclaw app-url --capability video --capability phone
+
+# 通过 API 验证凭据并写入 ~/.ringclaw/config.json
+ringclaw onboard --from-env --capability video --capability phone
 ringclaw start
 ```
 
@@ -31,11 +36,11 @@ ringclaw start
 - **多 Agent 支持** — 通过 ACP/CLI/HTTP 路由消息到 Claude、Codex、Gemini、Kimi 等。[→ Agent 配置](https://ringclaw.github.io/ringclaw/zh/guide/agents.html)
 - **聊天命令** — `/cc`、`/cx`、`/cs` 别名，多 Agent 广播，会话管理。[→ 命令](https://ringclaw.github.io/ringclaw/zh/guide/commands.html)
 - **聊天总结** — 用自然语言总结跨聊天的对话内容。[→ 总结](https://ringclaw.github.io/ringclaw/zh/features/summarize.html)
-- **AI 驱动的操作** — Agent 自动创建笔记、任务、日程和 Adaptive Cards。[→ 操作](https://ringclaw.github.io/ringclaw/zh/features/actions.html)
+- **AI 驱动的操作** — Agent 自动创建笔记、任务、日程、Adaptive Cards、Video bridge 和 owner 授权 RingOut。[→ 操作](https://ringclaw.github.io/ringclaw/zh/features/actions.html)
 - **定时任务 & 心跳** — 定时调度和周期性 Agent 检查。[→ 定时任务](https://ringclaw.github.io/ringclaw/zh/features/cron.html) · [→ 心跳](https://ringclaw.github.io/ringclaw/zh/features/heartbeat.html)
 - **主动推送** — CLI 和 HTTP API 发送消息和媒体文件。[→ 媒体 & API](https://ringclaw.github.io/ringclaw/zh/features/media.html)
 - **安全加固** — API Token 认证、Host 验证、ACP 写权限控制、凭证脱敏。[→ 安全](https://ringclaw.github.io/ringclaw/zh/security/)
-- **完整 CLI** — 命令行管理消息、聊天、任务、笔记、日程、卡片、用户、文件。[→ CLI](https://ringclaw.github.io/ringclaw/zh/guide/commands.html#cli)
+- **完整 CLI** — 命令行管理消息、聊天、任务、笔记、日程、卡片、Video、Phone、用户、文件。[→ CLI](https://ringclaw.github.io/ringclaw/zh/guide/commands.html#cli)
 - **图片解析** — 发送图片给 Bot，AI 自动分析图片内容（仅 ACP 模式）。[→ 图片解析](https://ringclaw.github.io/ringclaw/zh/features/image-analysis.html)
 - **Docker & systemd** — 后台运行，开机自启。[→ 部署](https://ringclaw.github.io/ringclaw/zh/deployment/background.html)
 

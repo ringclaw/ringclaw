@@ -45,14 +45,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println("This wizard will guide you through RingCentral configuration.")
 	fmt.Println("You need to create apps at: https://developers.ringcentral.com/console")
+	fmt.Println("Tip: run 'ringclaw app-url' to generate pre-filled Developer Console create-app links.")
 	fmt.Println()
 
 	// Step 1: Bot App (required)
 	fmt.Println("--- Step 1: Bot App (Required) ---")
 	fmt.Println()
 	fmt.Println("Create a Bot Add-in (No UI) app with:")
-	fmt.Println("  - Scopes: ReadAccounts, TeamMessaging, WebSocketsSubscription")
+	fmt.Println("  - Scopes: ReadAccounts, ReadMessages, TeamMessaging, WebSocketsSubscription")
 	fmt.Println("  - Install it to your account, then copy the token from the Bot tab")
+	fmt.Println("  - Helper: ringclaw app-url --bot-name \"Your RingClaw Bot\"")
 	fmt.Println()
 
 	cfg.RC.BotToken = promptWithDefault(reader, "Bot Token", cfg.RC.BotToken)
@@ -114,6 +116,8 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("A Private App (REST API with JWT) enables:")
 	fmt.Println("  - Summarize conversations from other chats")
 	fmt.Println("  - Cross-chat actions and broader API access")
+	fmt.Println("  - Personal AVA Pro Video/Phone scopes: Video, RingOut, ReadCallLog")
+	fmt.Println("  - Helper: ringclaw app-url --private-name \"Your RingClaw Private App\" --capability video --capability phone")
 	fmt.Println()
 
 	if promptYesNo(reader, "Configure a Private App?") {

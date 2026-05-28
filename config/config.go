@@ -36,8 +36,9 @@ func ParseLogLevel(s string) slog.Level {
 
 // Config holds the application configuration.
 type Config struct {
-	DefaultAgent   string `json:"default_agent"`
-	AgentWorkspace string `json:"agent_workspace,omitempty"`
+	Bot            BotConfig `json:"bot,omitempty"`
+	DefaultAgent   string    `json:"default_agent"`
+	AgentWorkspace string    `json:"agent_workspace,omitempty"`
 	// AgentAllowWorkspaceList is the list of directory roots that /cwd
 	// and Agent.SetCwd are allowed to target. ~/.ringclaw/workspace and
 	// the legacy AgentWorkspace are always implicitly merged in by
@@ -62,6 +63,35 @@ type Config struct {
 	// value is valid (the feature defaults to enabled with stock
 	// paths); see messaging/persona for the full resolution logic.
 	Persona persona.Config `json:"persona,omitempty"`
+}
+
+// BotConfig identifies a long-lived RingClaw bot runtime. In Kubernetes,
+// these fields separate multiple bot pods that may share the same image,
+// agent gateway, and external model provider.
+type BotConfig struct {
+	ID                    string `json:"id,omitempty"`
+	TenantID              string `json:"tenant_id,omitempty"`
+	OwnerUserID           string `json:"owner_user_id,omitempty"`
+	ConversationNamespace string `json:"conversation_namespace,omitempty"`
+}
+
+// EffectiveConversationNamespace returns the namespace used to isolate agent
+// sessions across bots. It is intentionally independent from RingCentral chat
+// IDs so multiple tenants/accounts can share one external AI gateway safely.
+func (b BotConfig) EffectiveConversationNamespace() string {
+	if ns := strings.TrimSpace(b.ConversationNamespace); ns != "" {
+		return ns
+	}
+	id := strings.TrimSpace(b.ID)
+	tenant := strings.TrimSpace(b.TenantID)
+	switch {
+	case tenant != "" && id != "":
+		return tenant + "/" + id
+	case id != "":
+		return id
+	default:
+		return ""
+	}
 }
 
 // OpenclawGatewayConfig holds the connection info for the external openclaw
@@ -93,8 +123,13 @@ type RCConfig struct {
 	JWTToken      string   `json:"jwt_token,omitempty"`
 	ChatIDs       []string `json:"chat_ids,omitempty"`
 	SourceUserIDs []string `json:"source_user_ids,omitempty"`
-	ServerURL     string   `json:"server_url,omitempty"`
-	BotToken      string   `json:"bot_token,omitempty"`
+	// Capabilities records optional Product/AVA capabilities this runtime is
+	// expected to support. It is advisory metadata for onboarding, K8S
+	// rendering, and operator checks; actual enforcement remains the selected
+	// RingCentral app scopes and user permissions.
+	Capabilities []string `json:"capabilities,omitempty"`
+	ServerURL    string   `json:"server_url,omitempty"`
+	BotToken     string   `json:"bot_token,omitempty"`
 
 	// GroupMentionOnly, when true (default), makes the bot only
 	// respond to messages where it is @mentioned in group chats. Bot
@@ -272,14 +307,14 @@ func (rc RCConfig) HasGroupSummary() bool {
 
 // AgentConfig holds configuration for a single agent.
 type AgentConfig struct {
-	Type         string            `json:"type"`                    // "acp", "cli", or "http"
-	Command      string            `json:"command,omitempty"`       // binary path (cli/acp type)
-	Args         []string          `json:"args,omitempty"`          // extra args for command (e.g. ["acp"] for cursor)
-	Aliases      []string          `json:"aliases,omitempty"`       // custom trigger commands (e.g. ["gpt", "4o"])
-	Cwd          string            `json:"cwd,omitempty"`           // working directory (workspace)
-	Env          map[string]string `json:"env,omitempty"`           // extra environment variables (cli/acp type)
-	AllowWrite   bool              `json:"allow_write,omitempty"`   // grant file write permission to ACP agent (default: false)
-	FullAccess   bool              `json:"full_access,omitempty"`   // call session/set_mode "full-access" on ACP session creation
+	Type       string            `json:"type"`                  // "acp", "cli", or "http"
+	Command    string            `json:"command,omitempty"`     // binary path (cli/acp type)
+	Args       []string          `json:"args,omitempty"`        // extra args for command (e.g. ["acp"] for cursor)
+	Aliases    []string          `json:"aliases,omitempty"`     // custom trigger commands (e.g. ["gpt", "4o"])
+	Cwd        string            `json:"cwd,omitempty"`         // working directory (workspace)
+	Env        map[string]string `json:"env,omitempty"`         // extra environment variables (cli/acp type)
+	AllowWrite bool              `json:"allow_write,omitempty"` // grant file write permission to ACP agent (default: false)
+	FullAccess bool              `json:"full_access,omitempty"` // call session/set_mode "full-access" on ACP session creation
 
 	// RestrictedModeID overrides the built-in agent → restricted
 	// modeId map that ringclaw uses for non-owner senders. When
@@ -334,6 +369,9 @@ func DefaultConfig() *Config {
 
 // ConfigPath returns the path to the config file.
 func ConfigPath() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("RINGCLAW_CONFIG")); path != "" {
+		return path, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -395,7 +433,13 @@ func Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	return SaveTo(path, cfg)
+}
 
+// SaveTo saves the configuration to an explicit path. This is used by
+// non-interactive Kubernetes onboarding flows that render config into a
+// projected volume instead of the default ~/.ringclaw/config.json.
+func SaveTo(path string, cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}

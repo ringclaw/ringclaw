@@ -16,17 +16,7 @@ func newCLIClient() (*ringcentral.Client, error) {
 	}
 
 	if cfg.RC.HasPrivateApp() {
-		creds := &ringcentral.Credentials{
-			ClientID:     cfg.RC.ClientID,
-			ClientSecret: cfg.RC.ClientSecret,
-			JWTToken:     cfg.RC.JWTToken,
-			ServerURL:    cfg.RC.ServerURL,
-		}
-		client := ringcentral.NewClient(creds)
-		if err := client.Authenticate(); err != nil {
-			return nil, fmt.Errorf("authentication failed: %w", err)
-		}
-		return client, nil
+		return newPrivateClientFromConfig(cfg)
 	}
 
 	if cfg.RC.BotToken != "" {
@@ -34,6 +24,20 @@ func newCLIClient() (*ringcentral.Client, error) {
 	}
 
 	return nil, fmt.Errorf("no credentials configured. Run 'ringclaw setup' or edit ~/.ringclaw/config.json")
+}
+
+func newPrivateClientFromConfig(cfg *config.Config) (*ringcentral.Client, error) {
+	creds := &ringcentral.Credentials{
+		ClientID:     cfg.RC.ClientID,
+		ClientSecret: cfg.RC.ClientSecret,
+		JWTToken:     cfg.RC.JWTToken,
+		ServerURL:    cfg.RC.ServerURL,
+	}
+	client := ringcentral.NewClient(creds)
+	if err := client.Authenticate(); err != nil {
+		return nil, fmt.Errorf("authentication failed: %w", err)
+	}
+	return client, nil
 }
 
 // defaultChatID returns the first chat ID from config, or empty string.

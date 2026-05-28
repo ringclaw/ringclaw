@@ -17,8 +17,13 @@ curl -sSL https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.sh | 
 # One-line install (Windows PowerShell)
 irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
-# Configure (creates ~/.ringclaw/config.json) and start
-ringclaw setup
+# Generate pre-filled RingCentral app creation URLs
+ringclaw app-url
+# Include Video/Phone scopes on the Private JWT App for Personal AVA Pro
+ringclaw app-url --capability video --capability phone
+
+# Validate credentials through APIs and write ~/.ringclaw/config.json
+ringclaw onboard --from-env --capability video --capability phone
 ringclaw start
 ```
 
@@ -31,11 +36,11 @@ All configuration lives in `~/.ringclaw/config.json`. On first start, RingClaw a
 - **Multi-Agent Support** — route messages to Claude, Codex, Gemini, Kimi, and more via ACP/CLI/HTTP. [→ Agents](https://ringclaw.github.io/ringclaw/guide/agents.html)
 - **Chat Commands** — `/cc`, `/cx`, `/cs` aliases, multi-agent broadcast, session management. [→ Commands](https://ringclaw.github.io/ringclaw/guide/commands.html)
 - **Chat Summarization** — summarize conversations across chats with natural language. [→ Summarize](https://ringclaw.github.io/ringclaw/features/summarize.html)
-- **AI-Driven Actions** — agents auto-create notes, tasks, events, and adaptive cards. [→ Actions](https://ringclaw.github.io/ringclaw/features/actions.html)
+- **AI-Driven Actions** — agents auto-create notes, tasks, events, adaptive cards, Video bridges, and owner-approved RingOut calls. [→ Actions](https://ringclaw.github.io/ringclaw/features/actions.html)
 - **Cron & Heartbeat** — scheduled tasks and periodic agent check-ins. [→ Cron](https://ringclaw.github.io/ringclaw/features/cron.html) · [→ Heartbeat](https://ringclaw.github.io/ringclaw/features/heartbeat.html)
 - **Proactive Messaging** — CLI and HTTP API for sending messages and media. [→ Media & API](https://ringclaw.github.io/ringclaw/features/media.html)
 - **Security** — API token auth, Host validation, ACP write permissions, credential redaction. [→ Security](https://ringclaw.github.io/ringclaw/security/)
-- **Full CLI** — manage messages, chats, tasks, notes, events, cards, users, files from the command line. [→ CLI](https://ringclaw.github.io/ringclaw/guide/commands.html#cli-command-map)
+- **Full CLI** — manage messages, chats, tasks, notes, events, cards, Video, Phone, users, files from the command line. [→ CLI](https://ringclaw.github.io/ringclaw/guide/commands.html#cli-command-map)
 - **Image Analysis** — send images to the bot for AI-powered visual analysis (ACP agents). [→ Image Analysis](https://ringclaw.github.io/ringclaw/features/image-analysis.html)
 - **Docker & systemd** — background mode, auto-start on boot. [→ Deployment](https://ringclaw.github.io/ringclaw/deployment/background.html)
 

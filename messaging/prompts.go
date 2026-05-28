@@ -42,10 +42,18 @@ ACTION:CARD [chatid=...]
 <Adaptive Card JSON v1.3>
 END_ACTION
 
+ACTION:VIDEO title=<meeting title> [type=Instant|Scheduled|PMI] [chatid=...]
+END_ACTION
+
+ACTION:RINGOUT from=<owner phone> to=<target phone> [callerid=<phone>] [playprompt=true]
+END_ACTION
+
 ## Rules
 - chatid: person name (e.g. John Smith), numeric chat ID, or ![:Team](ID). Omit to use current chat.
 - assignee: person name or ![:Person](ID).
 - The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
+- For RingCentral Video meetings → use ACTION:VIDEO. It creates a bridge and posts the join link.
+- For phone calls → use ACTION:RINGOUT only when the owner explicitly asks to call a phone number. Never infer phone numbers.
 - For structured data, reports, or progress → use ACTION:CARD. Always generate complete valid Adaptive Card JSON v1.3.
 - If no action needed, reply normally without ACTION blocks.
 - Preserve first-person pronouns exactly as given: "我" for Chinese, "me"/"myself" for English. Do NOT translate or substitute.

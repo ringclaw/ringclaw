@@ -15,10 +15,10 @@ func recentCutoff() string {
 	return time.Now().AddDate(0, -3, 0).Format(time.RFC3339)
 }
 
-// IsActionCommand checks if text starts with /task, /note, or /event.
+// IsActionCommand checks if text starts with a RingCentral resource command.
 func IsActionCommand(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
-	for _, cmd := range []string{"/task", "/note", "/event", "/card"} {
+	for _, cmd := range []string{"/task", "/note", "/event", "/card", "/video", "/phone"} {
 		if lower == cmd || strings.HasPrefix(lower, cmd+" ") {
 			return true
 		}
@@ -26,7 +26,7 @@ func IsActionCommand(text string) bool {
 	return false
 }
 
-// HandleActionCommand routes /task, /note, /event commands.
+// HandleActionCommand routes RingCentral resource commands.
 func HandleActionCommand(ctx context.Context, client *ringcentral.Client, chatID, text string) string {
 	parts := strings.Fields(text)
 	if len(parts) < 2 {
@@ -46,8 +46,12 @@ func HandleActionCommand(ctx context.Context, client *ringcentral.Client, chatID
 		return handleEvent(ctx, client, chatID, action, args, text)
 	case "/card":
 		return handleCard(ctx, client, chatID, action, args)
+	case "/video":
+		return handleVideo(ctx, client, action, args, text)
+	case "/phone":
+		return handlePhone(ctx, client, action, args)
 	default:
-		return "Unknown command. Use /task, /note, /event, or /card."
+		return "Unknown command. Use /task, /note, /event, /card, /video, or /phone."
 	}
 }
 
@@ -540,6 +544,161 @@ func cardDelete(ctx context.Context, client *ringcentral.Client, cardID string) 
 	return fmt.Sprintf("Card `%s` deleted.", cardID)
 }
 
+// --- Video handlers ---
+
+func handleVideo(ctx context.Context, client *ringcentral.Client, action string, args []string, _ string) string {
+	switch action {
+	case "create":
+		title, bridgeType := parseVideoCreateArgs(args)
+		if title == "" {
+			return "Usage: /video create <title> [type=Instant|Scheduled|PMI]"
+		}
+		return videoCreate(ctx, client, title, bridgeType)
+	case "get":
+		if len(args) == 0 {
+			return "Usage: /video get <bridgeId>"
+		}
+		return videoGet(ctx, client, args[0])
+	case "delete":
+		if len(args) == 0 {
+			return "Usage: /video delete <bridgeId>"
+		}
+		return videoDelete(ctx, client, args[0])
+	default:
+		return formatActionHelp("/video")
+	}
+}
+
+func parseVideoCreateArgs(args []string) (string, string) {
+	bridgeType := "Instant"
+	var titleParts []string
+	for _, arg := range args {
+		key, value, ok := strings.Cut(arg, "=")
+		if ok && strings.EqualFold(strings.TrimSpace(key), "type") {
+			if v := strings.TrimSpace(value); v != "" {
+				bridgeType = v
+			}
+			continue
+		}
+		titleParts = append(titleParts, arg)
+	}
+	return strings.TrimSpace(strings.Join(titleParts, " ")), bridgeType
+}
+
+func videoCreate(ctx context.Context, client *ringcentral.Client, title, bridgeType string) string {
+	bridge, err := client.CreateVideoBridge(ctx, &ringcentral.CreateVideoBridgeRequest{Name: title, Type: bridgeType})
+	if err != nil {
+		slog.Error("create video bridge failed", "error", err)
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return fmt.Sprintf("Video meeting created: `%s` — %s\n%s", bridge.ID, bridge.Name, bridge.Discovery.Web)
+}
+
+func videoGet(ctx context.Context, client *ringcentral.Client, bridgeID string) string {
+	bridge, err := client.GetVideoBridge(ctx, bridgeID)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**Video bridge** `%s`\n", bridge.ID))
+	sb.WriteString(fmt.Sprintf("- Name: %s\n", bridge.Name))
+	sb.WriteString(fmt.Sprintf("- Type: %s\n", bridge.Type))
+	if bridge.Discovery.Web != "" {
+		sb.WriteString(fmt.Sprintf("- Join: %s\n", bridge.Discovery.Web))
+	}
+	return sb.String()
+}
+
+func videoDelete(ctx context.Context, client *ringcentral.Client, bridgeID string) string {
+	if err := client.DeleteVideoBridge(ctx, bridgeID); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return fmt.Sprintf("Video bridge `%s` deleted.", bridgeID)
+}
+
+// --- Phone handlers ---
+
+func handlePhone(ctx context.Context, client *ringcentral.Client, action string, args []string) string {
+	switch action {
+	case "ringout":
+		if len(args) < 2 {
+			return "Usage: /phone ringout <fromPhone> <toPhone> [callerid=<phone>] [playprompt=true]"
+		}
+		params := map[string]string{
+			"from": args[0],
+			"to":   args[1],
+		}
+		for _, pair := range parseKeyValues(strings.Join(args[2:], " ")) {
+			params[pair.key] = pair.value
+		}
+		return phoneRingOut(ctx, client, params)
+	case "status":
+		if len(args) == 0 {
+			return "Usage: /phone status <ringOutId>"
+		}
+		return phoneRingOutStatus(ctx, client, args[0])
+	case "cancel":
+		if len(args) == 0 {
+			return "Usage: /phone cancel <ringOutId>"
+		}
+		return phoneRingOutCancel(ctx, client, args[0])
+	case "calllog":
+		opts := CallLogOptionsFromPairs(parseKeyValues(strings.Join(args, " ")))
+		if opts.RecordCount == 0 {
+			opts.RecordCount = 10
+		}
+		return phoneCallLog(ctx, client, opts)
+	default:
+		return formatActionHelp("/phone")
+	}
+}
+
+func phoneRingOut(ctx context.Context, client *ringcentral.Client, params map[string]string) string {
+	req, err := ringOutRequestFromParams(params)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	ringOut, err := client.CreateRingOut(ctx, req)
+	if err != nil {
+		slog.Error("create ringout failed", "error", err)
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return fmt.Sprintf("RingOut started: `%s` — %s", ringOut.ID, ringOut.Status.CallStatus)
+}
+
+func phoneRingOutStatus(ctx context.Context, client *ringcentral.Client, ringOutID string) string {
+	ringOut, err := client.GetRingOut(ctx, ringOutID)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return fmt.Sprintf("RingOut `%s`: call=%s caller=%s callee=%s", ringOut.ID, ringOut.Status.CallStatus, ringOut.Status.CallerStatus, ringOut.Status.CalleeStatus)
+}
+
+func phoneRingOutCancel(ctx context.Context, client *ringcentral.Client, ringOutID string) string {
+	if err := client.DeleteRingOut(ctx, ringOutID); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return fmt.Sprintf("RingOut `%s` cancelled.", ringOutID)
+}
+
+func phoneCallLog(ctx context.Context, client *ringcentral.Client, opts ringcentral.CallLogOptions) string {
+	list, err := client.ListExtensionCallLog(ctx, opts)
+	if err != nil {
+		slog.Error("list call log failed", "error", err)
+		return fmt.Sprintf("Error: %v", err)
+	}
+	if len(list.Records) == 0 {
+		return "No call log records found."
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**Call Log** (%d)\n", len(list.Records)))
+	for _, rec := range list.Records {
+		sb.WriteString(fmt.Sprintf("- `%s` %s %s %s -> %s (%ds)\n",
+			rec.ID, rec.StartTime, rec.Direction, rec.From.PhoneNumber, rec.To.PhoneNumber, rec.Duration))
+	}
+	return sb.String()
+}
+
 // --- Helpers ---
 
 type keyValue struct {
@@ -579,6 +738,30 @@ func splitKeyValueParts(s string) []string {
 		parts = append(parts, strings.TrimSpace(current.String()))
 	}
 	return parts
+}
+
+func CallLogOptionsFromPairs(pairs []keyValue) ringcentral.CallLogOptions {
+	var opts ringcentral.CallLogOptions
+	for _, pair := range pairs {
+		switch pair.key {
+		case "view":
+			opts.View = pair.value
+		case "direction":
+			opts.Direction = pair.value
+		case "type":
+			opts.Type = pair.value
+		case "datefrom", "date_from":
+			opts.DateFrom = pair.value
+		case "dateto", "date_to":
+			opts.DateTo = pair.value
+		case "recordcount", "record_count", "limit":
+			var n int
+			if _, err := fmt.Sscanf(pair.value, "%d", &n); err == nil && n > 0 {
+				opts.RecordCount = n
+			}
+		}
+	}
+	return opts
 }
 
 func extractAfter(raw, keyword string) string {
@@ -621,7 +804,11 @@ func formatActionHelp(cmd string) string {
 		return "Usage:\n- /event list [chatId]\n- /event create <title> <startTime> <endTime>\n- /event get <id>\n- /event update <id> title=<value>\n- /event delete <id>"
 	case "/card":
 		return "Usage:\n- /card get <id>\n- /card delete <id>"
+	case "/video":
+		return "Usage:\n- /video create <title> [type=Instant|Scheduled|PMI]\n- /video get <bridgeId>\n- /video delete <bridgeId>"
+	case "/phone":
+		return "Usage:\n- /phone ringout <fromPhone> <toPhone> [callerid=<phone>] [playprompt=true]\n- /phone status <ringOutId>\n- /phone cancel <ringOutId>\n- /phone calllog [direction=Inbound|Outbound] [view=Simple|Detailed] [limit=10]"
 	default:
-		return "Available commands: /task, /note, /event, /card"
+		return "Available commands: /task, /note, /event, /card, /video, /phone"
 	}
 }

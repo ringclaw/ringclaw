@@ -4,7 +4,7 @@ title: AI 驱动操作
 
 # AI 驱动的自动操作
 
-AI Agent 在对话中可以自动创建笔记、任务、日历事件和 Adaptive Card。当用户的请求暗示需要创建这些资源时，Agent 会在回复中附加 ACTION 块，RingClaw 通过 RC API 自动执行。
+AI Agent 在对话中可以自动创建笔记、任务、日历事件、Adaptive Card、RingCentral Video bridge，以及 owner 授权的 RingOut 电话。当用户的请求暗示需要创建这些资源时，Agent 会在回复中附加 ACTION 块，RingClaw 通过 RC API 自动执行。
 
 ## 工作流程
 
@@ -51,6 +51,12 @@ sequenceDiagram
             R->>RC: CreateEvent
         else CARD
             R->>RC: CreateAdaptiveCard
+        else VIDEO
+            R->>RC: CreateVideoBridge
+            R->>RC: SendPost 发送入会链接
+        else RINGOUT
+            R->>R: 要求发送者为 owner
+            R->>RC: CreateRingOut
         else MESSAGE
             R->>R: 解析 chatid / 人名
             R->>RC: SendPost
@@ -71,9 +77,16 @@ END_ACTION
 
 ACTION:EVENT title=Sprint 评审 start=2026-04-01T14:00:00Z end=2026-04-01T15:00:00Z
 END_ACTION
+
+ACTION:VIDEO title=设计评审 type=Scheduled
+END_ACTION
+
+ACTION:RINGOUT from=+14155550100 to=+14155550199 callerid=+14155550100
+END_ACTION
 ```
 
 ACTION 可通过 `chatid=<id>` 参数定向到其他聊天。
+`ACTION:RINGOUT` 仅 owner 可执行，非 owner 触发会被拒绝。
 
 - **非 owner 发送者**：OOB 已配置时（Private App + owner 私聊已解析），系统向 owner 私聊发送富信息 challenge 提示（action 类型、requester 身份、origin / target 聊天名、可选 `Title:` / `Subject:` / `Assignee:`、≤200 字符的 body 预览、效果说明、主机审批命令）。owner 需在主机上执行 `ringclaw approval <id>` 批准。批准后 action 异步在目标聊天执行。OOB 未配置时回退为静默丢弃（强制回到 origin chat）。owner 私聊收到的提示示例：
 
@@ -148,4 +161,19 @@ END_ACTION
 ```
 /card get <id>       # 查看卡片详情
 /card delete <id>    # 删除卡片
+```
+
+## Video 与 Phone 命令
+
+Video bridge 创建基于 RingCentral Video REST API，会返回或发送入会链接。Phone 命令先支持低风险的 RingOut 和个人 Call Log；这些命令和 message 命令一样使用解析后的 RingCentral client，最终选中的 app token 必须具备对应 scope。消息桥接中的 RingOut 仍然仅 owner 可执行。
+
+```
+/video create 设计评审 type=Scheduled
+/video get <bridgeId>
+/video delete <bridgeId>
+
+/phone ringout +14155550100 +14155550199 callerid=+14155550100
+/phone status <ringOutId>
+/phone cancel <ringOutId>
+/phone calllog direction=Outbound view=Detailed limit=10
 ```
