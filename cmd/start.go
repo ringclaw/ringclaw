@@ -73,9 +73,13 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	slog.SetDefault(slog.New(logHandler))
 
-	// Validate RC config: bot token is required, private app is optional
+	// Validate RC config: RingClaw runtimes need both the Bot Add-in token
+	// and the Private JWT App credentials produced by onboarding.
 	if cfg.RC.BotToken == "" {
 		return fmt.Errorf("bot token not configured. Add ringcentral.bot_token to ~/.ringclaw/config.json or run 'ringclaw setup' for guided configuration")
+	}
+	if !cfg.RC.HasPrivateApp() {
+		return fmt.Errorf("private app credentials not configured. Add ringcentral.client_id, ringcentral.client_secret, and ringcentral.jwt_token to ~/.ringclaw/config.json or rerun 'ringclaw onboard'")
 	}
 	if len(cfg.RC.ChatIDs) == 0 {
 		return fmt.Errorf("RingCentral chat IDs not configured. Add chat_ids to config file")

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"log/slog"
-	"strings"
 
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/api"
@@ -49,42 +48,27 @@ func initClients(ctx context.Context, cfg *config.Config) (*clients, error) {
 		slog.Info("bot extension ID resolved", "botOwnerID", botOwnerID)
 	}
 
-	var privateClient *ringcentral.Client
-	if cfg.RC.HasPrivateApp() {
-		slog.Info("initializing private app client...")
-		creds := &ringcentral.Credentials{
-			ClientID:     cfg.RC.ClientID,
-			ClientSecret: cfg.RC.ClientSecret,
-			JWTToken:     cfg.RC.JWTToken,
-			ServerURL:    cfg.RC.ServerURL,
-		}
-		privateClient = ringcentral.NewClient(creds)
-		if err := privateClient.Authenticate(); err != nil {
-			slog.Error("private app authentication failed, continuing without it — summarize and cross-chat features will be unavailable. "+
-				"If you see OAU-251, ensure the Private App has 'JWT' grant type enabled in the RingCentral Developer Console "+
-				"(https://developers.ringcentral.com) and the JWT token belongs to a user in the same account as the app.", "error", err)
-			privateClient = nil
-		} else {
-			slog.Info("private app authentication successful")
-			ownerID, err := privateClient.GetExtensionInfo(ctx)
-			if err != nil {
-				slog.Warn("failed to get private app extension info", "error", err)
-			} else {
-				privateClient.SetOwnerID(ownerID)
-				slog.Info("private app owner ID resolved", "ownerID", ownerID)
-			}
-		}
-	} else {
-		slog.Warn("no private app configured — the following features require a Private App and will be unavailable: summarize, directory search, name resolution in ACTION blocks, email-based source_user_ids")
-		for _, id := range cfg.RC.SourceUserIDs {
-			if strings.Contains(id, "@") {
-				slog.Error("source_user_ids contains an email address but Private App is not configured for directory lookup — this entry will be ignored", "email", id)
-			}
-		}
+	slog.Info("initializing private app client...")
+	creds := &ringcentral.Credentials{
+		ClientID:     cfg.RC.ClientID,
+		ClientSecret: cfg.RC.ClientSecret,
+		JWTToken:     cfg.RC.JWTToken,
+		ServerURL:    cfg.RC.ServerURL,
 	}
+	privateClient := ringcentral.NewClient(creds)
+	if err := privateClient.Authenticate(); err != nil {
+		return nil, err
+	}
+	slog.Info("private app authentication successful")
+	ownerID, err := privateClient.GetExtensionInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	privateClient.SetOwnerID(ownerID)
+	slog.Info("private app owner ID resolved", "ownerID", ownerID)
 
 	// Discover bot DM chat
-	if privateClient != nil && privateClient.OwnerID() != "" {
+	if privateClient.OwnerID() != "" {
 		dmChatID, err := botClient.FindDirectChat(ctx, privateClient.OwnerID())
 		if err != nil {
 			slog.Warn("failed to find bot DM chat with installer", "error", err)

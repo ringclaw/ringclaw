@@ -187,6 +187,9 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 	if err := validatePrivateCredentialSet(opts.ClientID, opts.ClientSecret, opts.JWTToken); err != nil {
 		return err
 	}
+	if !opts.AllowPartialUpdate && !hasPrivateCredentialSet(opts.ClientID, opts.ClientSecret, opts.JWTToken) {
+		return fmt.Errorf("private app credentials are required for RingClaw onboarding: --client-id, --client-secret, --jwt-token")
+	}
 
 	cfg.Bot.ID = opts.BotID
 	cfg.Bot.TenantID = opts.TenantID
@@ -221,10 +224,6 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 		Capabilities:          cfg.RC.Capabilities,
 		RequiredScopes:        requiredScopes,
 	}
-	if len(cfg.RC.Capabilities) > 0 && !cfg.RC.HasPrivateApp() {
-		result.CapabilityWarnings = append(result.CapabilityWarnings, "Selected capabilities should be added to a REST API JWT App; no Private App credentials are currently configured.")
-	}
-
 	if !opts.SkipValidate {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -362,6 +361,9 @@ func runOnboardManifest(cmd *cobra.Command, opts onboardOptions) error {
 		if err := validatePrivateCredentialSet(cfg.RC.ClientID, cfg.RC.ClientSecret, cfg.RC.JWTToken); err != nil {
 			return fmt.Errorf("manifest bot %q: %w", merged.BotID, err)
 		}
+		if !opts.AllowPartialUpdate && !cfg.RC.HasPrivateApp() {
+			return fmt.Errorf("manifest bot %q missing private app credentials", merged.BotID)
+		}
 
 		requiredScopes := requiredScopesForCapabilities(cfg.RC.Capabilities)
 		result := onboardResult{
@@ -385,10 +387,6 @@ func runOnboardManifest(cmd *cobra.Command, opts onboardOptions) error {
 				fmt.Sprintf("Ensure the selected RingCentral app has scopes: %s.", strings.Join(requiredScopes, ", ")),
 			)
 		}
-		if len(cfg.RC.Capabilities) > 0 && !cfg.RC.HasPrivateApp() {
-			result.CapabilityWarnings = append(result.CapabilityWarnings, "Selected capabilities should be added to a REST API JWT App; no Private App credentials are currently configured.")
-		}
-
 		if !opts.NoSave {
 			botDir := filepath.Join(opts.OutputDir, sanitizeFileName(merged.BotID))
 			configPath := filepath.Join(botDir, "config.json")
@@ -543,7 +541,7 @@ func normalizeCapabilities(values []string) ([]string, error) {
 }
 
 func requiredScopesForCapabilities(capabilities []string) []string {
-	var scopes []string
+	scopes := []string{"ReadAccounts"}
 	for _, capability := range capabilities {
 		switch capability {
 		case "video":
@@ -666,6 +664,10 @@ func validatePrivateCredentialSet(clientID, clientSecret, jwtToken string) error
 		return fmt.Errorf("private app credentials must be provided together: --client-id, --client-secret, --jwt-token")
 	}
 	return nil
+}
+
+func hasPrivateCredentialSet(clientID, clientSecret, jwtToken string) bool {
+	return strings.TrimSpace(clientID) != "" && strings.TrimSpace(clientSecret) != "" && strings.TrimSpace(jwtToken) != ""
 }
 
 func printOnboardResult(cmd *cobra.Command, result onboardResult) error {

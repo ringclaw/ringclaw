@@ -80,7 +80,7 @@ func TestNormalizeCapabilitiesAndRequiredScopes(t *testing.T) {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
 	scopes := requiredScopesForCapabilities(capabilities)
-	if strings.Join(scopes, ",") != "Video,RingOut,ReadCallLog" {
+	if strings.Join(scopes, ",") != "ReadAccounts,Video,RingOut,ReadCallLog" {
 		t.Fatalf("scopes = %#v", scopes)
 	}
 
@@ -280,6 +280,9 @@ func TestRunOnboardManifest_RenderKubernetesManifestFiles(t *testing.T) {
 	      "bot_id": "personal-ava-summer",
 	      "owner_user_id": "summer.gan",
 	      "bot_token": "bot-token",
+	      "client_id": "client-id",
+	      "client_secret": "client-secret",
+	      "jwt_token": "jwt-token",
 	      "capabilities": ["video", "phone"],
 	      "chat_ids": ["123"],
 	      "source_user_ids": ["summer.gan"]
