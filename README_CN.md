@@ -19,7 +19,7 @@ irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
 # 生成预填的 RingCentral 应用创建链接
 ringclaw app-url
-# 为 Personal AVA Pro 的 Private JWT App 增加 Video/Phone scope
+# 为必填的 Private JWT App 增加 Video/Phone 额外 scope
 ringclaw app-url --capability video --capability phone
 
 # 通过 API 验证凭据并写入 ~/.ringclaw/config.json
@@ -27,7 +27,7 @@ ringclaw onboard --from-env --capability video --capability phone
 ringclaw start
 ```
 
-所有配置都存放在 `~/.ringclaw/config.json` 中。首次启动时，RingClaw 会自动检测已安装的 AI 智能体并更新该文件。不再读取 `RC_BOT_TOKEN` 等环境变量——请使用 `ringclaw setup` 或直接编辑该文件。
+所有配置都存放在 `~/.ringclaw/config.json` 中。有效的 RingClaw 注册必须同时具备 Bot Add-in token 和 Private JWT App 凭据（`client_id`、`client_secret`、`jwt_token`），Private JWT App 至少需要 `ReadAccounts`；Video/Phone 会额外需要 `Video`、`RingOut`、`ReadCallLog`。首次启动时，RingClaw 会自动检测已安装的 AI 智能体并更新该文件。不再读取 `RC_BOT_TOKEN` 等环境变量——请使用 `ringclaw setup` 或直接编辑该文件。
 
 🤖 **AI Agent 自动安装：** 让 AI 帮你完成全部配置 — [AI Agent 安装指南](docs/zh/guide/ai-agent-setup.md)
 

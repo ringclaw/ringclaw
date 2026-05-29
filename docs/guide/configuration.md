@@ -11,6 +11,11 @@ Config file: `~/.ringclaw/config.json`
 > (`RC_*`, `RINGCLAW_*`, `OPENCLAW_GATEWAY_*`) are silently ignored. Use
 > `ringclaw setup` to generate the file interactively, or edit it by hand.
 
+RingClaw startup requires both `ringcentral.bot_token` and the Private JWT App fields
+`ringcentral.client_id`, `ringcentral.client_secret`, and `ringcentral.jwt_token`.
+The JWT app must include at least `ReadAccounts`; Video/Phone capabilities require
+additional `Video`, `RingOut`, and `ReadCallLog` scopes.
+
 ## Full Configuration Example
 
 ```json
@@ -113,16 +118,16 @@ Config file: `~/.ringclaw/config.json`
 |-------|------|---------|------------------------|
 | `bot_token` | string | — | **Required.** RingCentral Public Bot access token. |
 | `chat_ids` | string[] | `[]` | **Required.** Chat IDs the bot is allowed to receive messages from. |
-| `source_user_ids` | string[] | `[]` | Trusted senders. Accepts numeric extension IDs, emails, or E.164 phone numbers. Empty + Private App configured → owner-only. Empty + no Private App → deny all. |
-| `capabilities` | string[] | `[]` | Advisory capability selection written by `ringclaw onboard --capability ...`. Supported values: `video`, `phone`, `call_log`. The selected RingCentral app must still have the matching scopes (`Video`, `RingOut`, `ReadCallLog`). |
+| `source_user_ids` | string[] | `[]` | Trusted senders. Accepts numeric extension IDs, emails, or E.164 phone numbers. Empty defaults to owner-only and requires Private App credentials. |
+| `capabilities` | string[] | `[]` | Advisory capability selection written by `ringclaw onboard --capability ...`. Supported values: `video`, `phone`, `call_log`. The Private JWT App must always have `ReadAccounts`; selected capabilities add matching scopes (`Video`, `RingOut`, `ReadCallLog`). |
 | `allow_group_mention_authorize` | bool (nullable) | `false` (since v0.4.2; v0.4.1 default-on flip reverted) | Controls the OOB approval flow for non-trusted `@bot` in allowed group chats. **Off by default**: set to `true` explicitly to enable. When on, a non-trusted `@bot` triggers a `/approval` challenge in the owner DM; on approval the requester is added to `chat_user_allow[<chatID>]` (chat-scoped only) and persisted. Requires Private App + resolvable owner DM. After deny / expire, the same `(chat, user)` pair is silenced for 24 hours. v0.4.3+ approved users run under the non-owner ceiling (no `fs/*` / `terminal/*` / `session/request_permission`; plain-text replies + RC ACTION blocks remain available). See [Security › Enabling OOB approval for group members](../security/sender-allowlist.md#enabling-oob-approval-for-group-members). |
 | `chat_user_allow` | map[string][]string | `{}` | Per-chat allowlist layered on top of `source_user_ids`: `{"<numericChatID>": ["alice@example.com", "3061708020"]}`. The map **key must be a numeric RC chat / group ID** — see [Security › How to find a chat ID](../security/sender-allowlist.md#how-to-find-a-chat-id). Identifiers may be numeric extension IDs, emails, or E.164 phone numbers (resolved to numeric IDs at startup via the Private App directory). **v0.4.4+: preserved across restarts.** Listed users run under the v0.4.3 non-owner ceiling (read-only ACP mode + fail-closed deny of `fs/*` / `terminal/*` / `session/request_permission`); plain-text replies + RC ACTION blocks remain available. Only widens the **sender** allowlist for that chat — does **not** unlock privileged Layer 1 commands (`/cwd`, `/cron`, `/new`, `/reload`, `/full-access`, summarize NL trigger). |
 | `group_mention_only` | bool (nullable) | `true` | `true` requires `@bot` in group chats (bot DMs are never affected); `false` answers every message in allowed group chats. |
 | `bot_mention_only` | bool (nullable) | — | **Deprecated alias** for `group_mention_only`. Still accepted for backward compatibility: `Load()` migrates it into the new field and logs a `WARN`. Will be removed in a future release. |
 | `server_url` | string | SDK default (`https://platform.ringcentral.com`) | RingCentral API server URL. |
-| `client_id` | string | — | Private App Client ID. All three Private App fields must be set together. |
-| `client_secret` | string | — | Private App Client Secret. Redacted in logs. |
-| `jwt_token` | string | — | Private App JWT. Redacted in logs. |
+| `client_id` | string | — | **Required.** Private JWT App Client ID. Must be set with `client_secret` and `jwt_token`. |
+| `client_secret` | string | — | **Required.** Private JWT App Client Secret. Redacted in logs. |
+| `jwt_token` | string | — | **Required.** Owner-scoped Private JWT App token. Redacted in logs. |
 | `group_summary_group_id` | string | — | Group chat ID allowed to use current-group summarize. Empty disables the feature. |
 | `group_summary_message_limit` | int | `200` | Messages fetched per group-summarize call. `<= 0` falls back to default. |
 

@@ -76,8 +76,9 @@ The current implementation supports the Personal AVA Pro MVP substrate:
 | K8S-oriented Bot identity | `bot.id`, `tenant_id`, `owner_user_id`, `conversation_namespace` in config | Operator/CRD remains a platform phase |
 | Long-lived Bot runtime | `ringclaw start` can run as one Pod per Bot with projected config/secret | Shared shard runtime is future work |
 | AI context isolation | conversation IDs can be prefixed by Bot namespace | Each Bot should use a dedicated namespace and, for hosted AI, dedicated token or tenant key |
-| Video | Video bridge create/get/delete via RingCentral Video REST API | Scope belongs on Private JWT App when used with Personal AVA Pro |
-| Phone | RingOut status/cancel/create and extension Call Log | Uses the same client resolution path as Message; RingOut remains owner-only in the message bridge |
+| Private JWT App | `client_id`, `client_secret`, `jwt_token` are now required for onboarding and runtime start | Base scope must include `ReadAccounts`; Video/Phone add extra scopes |
+| Video | Video bridge create/get/delete via RingCentral Video REST API | Requires Private JWT App with `ReadAccounts` and `Video` scopes |
+| Phone | RingOut status/cancel/create and extension Call Log | Requires Private JWT App with `ReadAccounts`, `RingOut`, `ReadCallLog`; RingOut remains owner-only in the message bridge |
 | Action governance | owner gate, cross-chat audit notice, OOB approval path | External write systems still need Tool Gateway policy integration |
 
 ## Permission Model
@@ -103,13 +104,21 @@ Bot App scopes remain minimal by default:
 ReadAccounts, ReadMessages, TeamMessaging, WebSocketsSubscription
 ```
 
-For Personal AVA Pro, the preferred implementation is a REST API App using JWT auth. That app can receive optional Video/Phone scopes:
+For Personal AVA Pro, the Private JWT App is part of the default RingClaw registration shape, not only a Video/Phone add-on. It must provide `ReadAccounts` so runtime initialization and owner-scoped account checks are available even for message-only Bots.
+
+Base Private JWT App scope:
+
+```text
+ReadAccounts
+```
+
+Video/Phone add extra scopes on the same Private JWT App:
 
 ```text
 Video, RingOut, ReadCallLog
 ```
 
-This avoids expanding every Bot token into a broad action token while keeping phone/video code paths aligned with message: runtime commands use the resolved RingCentral client, and the selected app token must carry the required scopes. RingOut is still owner-only before any API call is made.
+This avoids expanding every Bot token into a broad action token while keeping message, phone, and video code paths aligned: runtime commands use the resolved RingCentral client, and the selected app token must carry the required scopes. RingClaw onboarding and `ringclaw start` now fail fast when `client_id`, `client_secret`, or `jwt_token` is missing. RingOut is still owner-only before any API call is made.
 
 ## Bot Types
 
@@ -180,8 +189,12 @@ sequenceDiagram
   U->>O: Submit bot onboard request
   O->>RC: Validate bot token
   RC-->>O: Bot extension OK
-  O->>RC: Validate private app if provided
-  RC-->>O: Owner extension OK
+  O->>RC: Validate private app with JWT grant
+  RC-->>O: Owner extension OK with ReadAccounts
+  alt Video or Phone selected
+    O->>RC: Validate additional Video / RingOut / ReadCallLog scopes
+    RC-->>O: Capability scopes OK
+  end
   O->>RC: Validate chat IDs and bot membership
   RC-->>O: Chat validation result
   O->>K: Create Secret

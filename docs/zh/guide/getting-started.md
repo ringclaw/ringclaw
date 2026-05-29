@@ -43,7 +43,7 @@ RingCentral 没有公开 REST API 可以直接创建 Developer Console 应用。
 ringclaw app-url
 ```
 
-如果 Personal AVA Pro Bot 需要 Video 和 Phone 能力，请在生成链接时带上额外 scope。生成结果中，Bot App 链接仍保持 messaging-only；Private JWT App 链接会带上 Video、RingOut、ReadCallLog：
+Personal AVA Pro 默认需要两个 App。Bot App 链接仍保持 messaging-only；Private JWT App 即使在 message-only 场景下也必填，并且至少需要 `ReadAccounts`。如果选择 Video/Phone，再额外带上 Video、RingOut、ReadCallLog：
 
 ```bash
 ringclaw app-url --capability video --capability phone
@@ -63,7 +63,7 @@ export RINGCLAW_CAPABILITIES='video,phone'
 ringclaw onboard --from-env --capability video --capability phone
 ```
 
-`--capability video --capability phone` 会把 Bot 需要的 AVA 能力写入配置，并在输出中提示所需 RingCentral scopes。对于这两个能力，推荐在 JWT App 上配置 **Video**、**RingOut**、**ReadCallLog**。
+`--capability video --capability phone` 会把 Bot 需要的 AVA 能力写入配置，并在输出中提示所需 RingCentral scopes。Private JWT App 默认必须具备 **ReadAccounts**。对于 Video/Phone，再额外配置 **Video**、**RingOut**、**ReadCallLog**。如果缺少 `client_id`、`client_secret` 或 `jwt_token`，`ringclaw onboard` 和 `ringclaw start` 会直接失败。
 :::
 
 ::: tip Kubernetes 多 Bot 长期运行
@@ -168,9 +168,9 @@ Secret 保存完整 RingClaw 配置，包括 Bot Token、JWT App 凭据、已选
 
    <a href="/images/rc-chat-id.png" target="_blank"><img src="/images/rc-chat-id.png" width="600" alt="复制对话链接获取 Chat ID" /></a>
 
-### 第三步：创建 Private App（可选）
+### 第三步：创建 Private App
 
-Private App（REST API + JWT）可以启用以下高级功能：
+Private App（REST API + JWT）是 RingClaw 注册的必需配置。它提供 owner-scoped client，用于账号校验、总结、跨聊天操作，以及可选的 Video/Phone 操作：
 - **Summarize** 其他聊天的对话
 - **跨聊天操作**（读取其他聊天消息、在其他聊天创建任务等）
 - **Video/Phone 操作**（创建 RingCentral Video bridge、owner 授权 RingOut、读取个人 Call Log）
@@ -181,7 +181,7 @@ Private App（REST API + JWT）可以启用以下高级功能：
 
 2. 配置应用：
    - **Auth**：JWT auth flow
-   - **Security** → **Application Scopes**：勾选 **Read Accounts**、**Read Messages**、**TeamMessaging**、**WebSocketsSubscription**
+   - **Security** → **Application Scopes**：至少勾选基础必需 scope **Read Accounts**
    - 如需 Personal AVA Pro Video/Phone：添加 **Video**、**RingOut**、**ReadCallLog**
    - **Access**：Private
 3. 点击 **Create** — 获取 **Client ID** 和 **Client Secret**
@@ -202,7 +202,7 @@ ringclaw setup
 向导会：
 - 提示输入 Bot Token（必需）
 - 提示输入要监控的 Chat ID
-- 可选配置 Private App 凭据（Client ID、Secret、JWT Token）
+- 提示输入 Private App 凭据（Client ID、Secret、JWT Token）
 - 通过 RingCentral API 验证凭据有效性
 - 将所有配置保存到 `~/.ringclaw/config.json`
 

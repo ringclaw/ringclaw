@@ -44,7 +44,7 @@ RingCentral does not expose a public REST endpoint for creating Developer Consol
 ringclaw app-url
 ```
 
-For Personal AVA Pro bots that need Video and Phone capabilities, include the extra scopes in the generated links. The Bot App link stays messaging-only; the Private JWT App link receives the Video, RingOut, and ReadCallLog scopes:
+Personal AVA Pro requires both apps. The Bot App link stays messaging-only. The Private JWT App is required even for message-only bots and must include `ReadAccounts`; when Video/Phone is selected, include the extra Video, RingOut, and ReadCallLog scopes:
 
 ```bash
 ringclaw app-url --capability video --capability phone
@@ -64,7 +64,7 @@ export RINGCLAW_CAPABILITIES='video,phone'
 ringclaw onboard --from-env --capability video --capability phone
 ```
 
-`--capability video --capability phone` records the bot's requested AVA capabilities in config and prints the required RingCentral scopes. For these two capabilities, the preferred JWT App scopes are **Video**, **RingOut**, and **ReadCallLog**.
+`--capability video --capability phone` records the bot's requested AVA capabilities in config and prints the required RingCentral scopes. The Private JWT App always needs **ReadAccounts**. For Video/Phone, add **Video**, **RingOut**, and **ReadCallLog**. `ringclaw onboard` and `ringclaw start` fail fast if `client_id`, `client_secret`, or `jwt_token` is missing.
 :::
 
 ::: tip Kubernetes multi-bot runtime
@@ -169,9 +169,9 @@ The Secret stores the full RingClaw config, including Bot Token, JWT App credent
 
    <a href="/images/rc-chat-id.png" target="_blank"><img src="/images/rc-chat-id.png" width="600" alt="Copy conversation link to get Chat ID" /></a>
 
-### Step 3: Create a Private App (Optional)
+### Step 3: Create a Private App
 
-A Private App (REST API with JWT) enables additional features:
+A Private App (REST API with JWT) is required by RingClaw registration. It provides the owner-scoped client used for account checks, summaries, cross-chat actions, and optional Video/Phone actions:
 - **Summarize** conversations from other chats
 - **Cross-chat actions** (read messages, create tasks in other chats)
 - **Video/Phone actions** (create RingCentral Video bridges, start owner-approved RingOut, read extension Call Log)
@@ -182,7 +182,7 @@ A Private App (REST API with JWT) enables additional features:
 
 2. Configure the app:
    - **Auth**: JWT auth flow
-   - **Security** → **Application Scopes**: check **Read Accounts**, **Read Messages**, **TeamMessaging**, **WebSocketsSubscription**
+   - **Security** → **Application Scopes**: check **Read Accounts** as the base required scope
    - For Personal AVA Pro Video/Phone: add **Video**, **RingOut**, and **ReadCallLog**
    - **Access**: Private
 3. Click **Create** — you'll get a **Client ID** and **Client Secret**
@@ -203,7 +203,7 @@ ringclaw setup
 The wizard will:
 - Prompt for Bot Token (required)
 - Prompt for chat IDs to monitor
-- Optionally configure Private App credentials (Client ID, Secret, JWT Token)
+- Prompt for Private App credentials (Client ID, Secret, JWT Token)
 - Validate credentials against the RingCentral API
 - Save everything to `~/.ringclaw/config.json`
 

@@ -10,6 +10,11 @@ title: 配置
 > （`RC_*`、`RINGCLAW_*`、`OPENCLAW_GATEWAY_*`）已被完全废弃并**静默忽略**。
 > 使用 `ringclaw setup` 交互式生成文件，或直接手动编辑。
 
+RingClaw 启动要求同时配置 `ringcentral.bot_token`，以及 Private JWT App 字段
+`ringcentral.client_id`、`ringcentral.client_secret`、`ringcentral.jwt_token`。
+JWT App 至少需要 `ReadAccounts`；Video/Phone 能力还需要额外的 `Video`、
+`RingOut`、`ReadCallLog` scopes。
+
 ## 完整配置示例
 
 ```json
@@ -112,16 +117,16 @@ title: 配置
 |------|------|--------|---------------|
 | `bot_token` | string | — | **必填。** RingCentral Public Bot 的访问 token。 |
 | `chat_ids` | string[] | `[]` | **必填。** Bot 允许接收消息的 chat ID 列表。 |
-| `source_user_ids` | string[] | `[]` | 受信任的发信人。可填数字 extension ID、邮箱、E.164 电话号码。空且已配置 Private App → 仅机主；空且未配置 Private App → 全部拒绝。 |
-| `capabilities` | string[] | `[]` | `ringclaw onboard --capability ...` 写入的能力选择元数据。支持：`video`、`phone`、`call_log`。最终选中的 RingCentral app token 仍必须具备对应 scope（`Video`、`RingOut`、`ReadCallLog`）。 |
+| `source_user_ids` | string[] | `[]` | 受信任的发信人。可填数字 extension ID、邮箱、E.164 电话号码。空值默认 owner-only，并要求已配置 Private App 凭据。 |
+| `capabilities` | string[] | `[]` | `ringclaw onboard --capability ...` 写入的能力选择元数据。支持：`video`、`phone`、`call_log`。Private JWT App 默认必须具备 `ReadAccounts`；选中的能力还需要对应 scope（`Video`、`RingOut`、`ReadCallLog`）。 |
 | `allow_group_mention_authorize` | bool（可空） | `false`（v0.4.2 起；v0.4.1 默认开启的改动已撤回） | 控制 OOB 审批流程。**默认关闭**，必须显式设为 `true` 才生效。开启后，非授信用户在允许群聊里 `@bot` 会在 owner 私聊弹出 `/approval`；批准后该用户被加入 `chat_user_allow[<chatID>]`（仅作用于该群）并持久化到 `config.json`。需要 Private App + 可解析的 owner 私聊；缺失时禁用功能并打 ERROR。拒绝 / 过期之后，同一 `(chat, user)` 进入 24 小时冷却期。v0.4.3+ 被批准用户运行在非-owner ceiling 下（不可调 `fs/*` / `terminal/*` / `session/request_permission`；文字回复 + RC ACTION 块仍可用）。详见 [安全 › 群成员 OOB 审批的完整启用步骤](../security/sender-allowlist.md#群成员-oob-审批的完整启用步骤)。 |
 | `chat_user_allow` | map[string][]string | `{}` | 在 `source_user_ids` 之上叠加的**按群**白名单：`{"<numericChatID>": ["alice@example.com", "3061708020"]}`。map 的 **key 必须是 RC 数字 chat / group ID**——参考 [安全 › 如何获取 chat ID](../security/sender-allowlist.md#如何获取-chat-id)。条目可为数字 extension ID、邮箱或 E.164 电话号码（启动时通过 Private App directory 解析为数字 ID）。**v0.4.4+：重启后保留。** 被列入的用户按 v0.4.3 非-owner 上限运行（只读 ACP mode + fail-closed 拒绝 `fs/*` / `terminal/*` / `session/request_permission`）；文字回复 + RC ACTION 块仍可用。**仅放宽 Layer 0 发信人白名单**，不会解锁特权 Layer 1 命令（`/cwd`、`/cron`、`/new`、`/reload`、`/full-access`、总结自然语言触发）。 |
 | `group_mention_only` | bool（可空） | `true` | `true` 群聊中必须 `@bot`（Bot 私聊不受影响）；`false` 在允许的群聊中对所有消息响应。 |
 | `bot_mention_only` | bool（可空） | — | **已废弃**，`group_mention_only` 的旧名。仍会被读取（向后兼容），`Load()` 会把它迁移到新字段并打 `WARN`。未来版本将移除。 |
 | `server_url` | string | SDK 默认（`https://platform.ringcentral.com`） | RingCentral API 地址。 |
-| `client_id` | string | — | Private App Client ID。Private App 三个字段需一起填。 |
-| `client_secret` | string | — | Private App Client Secret。日志中会脱敏。 |
-| `jwt_token` | string | — | Private App JWT token。日志中会脱敏。 |
+| `client_id` | string | — | **必填。** Private JWT App Client ID，必须与 `client_secret`、`jwt_token` 一起配置。 |
+| `client_secret` | string | — | **必填。** Private JWT App Client Secret。日志中会脱敏。 |
+| `jwt_token` | string | — | **必填。** Owner-scoped Private JWT App token。日志中会脱敏。 |
 | `group_summary_group_id` | string | — | 允许使用"当前群总结"功能的群 ID。留空即禁用。 |
 | `group_summary_message_limit` | int | `200` | 每次群总结拉取的消息条数。`<= 0` 回退默认值。 |
 

@@ -19,7 +19,7 @@ irm https://raw.githubusercontent.com/ringclaw/ringclaw/main/install.ps1 | iex
 
 # Generate pre-filled RingCentral app creation URLs
 ringclaw app-url
-# Include Video/Phone scopes on the Private JWT App for Personal AVA Pro
+# Include extra Video/Phone scopes on the required Private JWT App
 ringclaw app-url --capability video --capability phone
 
 # Validate credentials through APIs and write ~/.ringclaw/config.json
@@ -27,7 +27,7 @@ ringclaw onboard --from-env --capability video --capability phone
 ringclaw start
 ```
 
-All configuration lives in `~/.ringclaw/config.json`. On first start, RingClaw auto-detects installed AI agents and updates the file. Environment variables like `RC_BOT_TOKEN` are no longer read — use `ringclaw setup` or edit the file directly.
+All configuration lives in `~/.ringclaw/config.json`. A valid RingClaw registration requires both the Bot Add-in token and Private JWT App credentials (`client_id`, `client_secret`, `jwt_token`) with at least `ReadAccounts`; Video/Phone add `Video`, `RingOut`, and `ReadCallLog`. On first start, RingClaw auto-detects installed AI agents and updates the file. Environment variables like `RC_BOT_TOKEN` are no longer read — use `ringclaw setup` or edit the file directly.
 
 🤖 **AI Agent Setup:** Let your AI agent handle the full setup — [AI Agent Setup Guide](docs/guide/ai-agent-setup.md)
 
