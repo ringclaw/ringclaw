@@ -130,6 +130,7 @@ ringclaw
 ├── setup                              # 交互式凭据配置
 ├── app-url                            # 生成预填的 Developer Console 应用创建链接
 ├── onboard                            # API 辅助的非交互式凭据/K8S onboarding
+├── runtime start                      # 领取 AVA Control Plane 配置并运行受管 Bot runtime
 ├── update [--channel beta|alpha] [--branch X]  # 自动更新
 ├── upgrade / version                  # 别名
 │

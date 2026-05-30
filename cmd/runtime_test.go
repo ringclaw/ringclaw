@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ringclaw/ringclaw/config"
+	"github.com/spf13/cobra"
 )
 
 func TestRuntimeOptionsApplyEnv(t *testing.T) {
@@ -178,5 +179,88 @@ func TestWriteClaimedRuntimeConfigPersistsConfigForStartup(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("mode = %v, want 0600", got)
+	}
+}
+
+func TestRuntimeStartDryRunClaimsWritesConfigAndReportsHeartbeat(t *testing.T) {
+	origOpts := runtimeOpts
+	origConfig := os.Getenv("RINGCLAW_CONFIG")
+	t.Cleanup(func() {
+		runtimeOpts = origOpts
+		if origConfig == "" {
+			_ = os.Unsetenv("RINGCLAW_CONFIG")
+		} else {
+			_ = os.Setenv("RINGCLAW_CONFIG", origConfig)
+		}
+	})
+
+	var claimed runtimeClaimRequest
+	var heartbeat runtimeHeartbeatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/runtime/v1/claim":
+			if err := json.NewDecoder(r.Body).Decode(&claimed); err != nil {
+				t.Fatalf("decode claim: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(runtimeClaimResult{
+				Config: config.Config{
+					Bot: config.BotConfig{
+						ID:                    "personal-ava-user-1",
+						TenantID:              "account-1",
+						OwnerUserID:           "user-1",
+						ConversationNamespace: "account-1/personal-ava-user-1",
+					},
+					DefaultAgent: "codex",
+					Agents: map[string]config.AgentConfig{
+						"codex": {Type: "http", Endpoint: "https://agent.example", APIKey: "agent-token"},
+					},
+					RC: config.RCConfig{
+						BotToken:      "rc-bot-token",
+						ChatIDs:       []string{"chat-1"},
+						SourceUserIDs: []string{"user-1"},
+						Capabilities:  []string{"summary", "video", "phone"},
+					},
+				},
+			})
+		case "/runtime/v1/heartbeat":
+			if err := json.NewDecoder(r.Body).Decode(&heartbeat); err != nil {
+				t.Fatalf("decode heartbeat: %v", err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "claimed-runtime.json")
+	runtimeOpts = runtimeStartOptions{
+		ControlPlaneURL:   server.URL,
+		BotID:             "personal-ava-user-1",
+		BootstrapToken:    "bootstrap-token",
+		PodName:           "pod-a",
+		ConfigOut:         configPath,
+		HeartbeatInterval: 0,
+		DryRun:            true,
+	}
+
+	if err := runRuntimeStart(&cobra.Command{}, nil); err != nil {
+		t.Fatalf("runRuntimeStart() error = %v", err)
+	}
+	if claimed.BotID != "personal-ava-user-1" || claimed.PodName != "pod-a" || claimed.BootstrapToken != "bootstrap-token" {
+		t.Fatalf("claim request = %#v", claimed)
+	}
+	if heartbeat.Status != runtimeStatusHealthy || strings.Join(heartbeat.Capabilities, ",") != "message,summary,video,phone" {
+		t.Fatalf("heartbeat request = %#v", heartbeat)
+	}
+	if os.Getenv("RINGCLAW_CONFIG") != configPath {
+		t.Fatalf("RINGCLAW_CONFIG = %q, want %q", os.Getenv("RINGCLAW_CONFIG"), configPath)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Bot.ID != "personal-ava-user-1" || loaded.RC.BotToken != "rc-bot-token" {
+		t.Fatalf("loaded dry-run config = %#v", loaded)
 	}
 }

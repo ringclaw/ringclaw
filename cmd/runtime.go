@@ -30,6 +30,7 @@ type runtimeStartOptions struct {
 	PodName           string
 	ConfigOut         string
 	HeartbeatInterval time.Duration
+	DryRun            bool
 }
 
 type runtimeClaimRequest struct {
@@ -80,6 +81,7 @@ func init() {
 	runtimeStartCmd.Flags().StringVar(&runtimeOpts.PodName, "pod-name", "", "Runtime pod name")
 	runtimeStartCmd.Flags().StringVar(&runtimeOpts.ConfigOut, "config-out", "", "Write claimed config to this path before startup")
 	runtimeStartCmd.Flags().DurationVar(&runtimeOpts.HeartbeatInterval, "heartbeat-interval", 30*time.Second, "Runtime heartbeat interval")
+	runtimeStartCmd.Flags().BoolVar(&runtimeOpts.DryRun, "dry-run", false, "Claim config, write it, report one heartbeat, then exit without starting messaging runtime")
 	runtimeCmd.AddCommand(runtimeStartCmd)
 	rootCmd.AddCommand(runtimeCmd)
 }
@@ -124,6 +126,16 @@ func runRuntimeStart(cmd *cobra.Command, args []string) error {
 	}
 	if err := os.Setenv("RINGCLAW_CONFIG", configPath); err != nil {
 		return fmt.Errorf("set RINGCLAW_CONFIG: %w", err)
+	}
+
+	if opts.DryRun {
+		return sendRuntimeHeartbeat(ctx, opts.ControlPlaneURL, runtimeHeartbeatRequest{
+			BotID:          opts.BotID,
+			PodName:        opts.PodName,
+			BootstrapToken: opts.BootstrapToken,
+			Status:         runtimeStatusHealthy,
+			Capabilities:   runtimeHeartbeatCapabilities(cfg),
+		})
 	}
 
 	stopHeartbeat := startRuntimeHeartbeat(ctx, opts, cfg)

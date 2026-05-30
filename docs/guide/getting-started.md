@@ -76,6 +76,18 @@ ringclaw onboard --from-env --config-out "$RINGCLAW_CONFIG"
 ringclaw start -f
 ```
 
+When AVA Control Plane owns onboarding and K8S rendering, the pod can claim its config at startup instead of baking long-lived credentials into the Deployment:
+
+```bash
+ringclaw runtime start \
+  --control-plane https://ava-control-plane.example \
+  --bot-id personal-ava-summer \
+  --bootstrap-token "$RINGCLAW_BOOTSTRAP_TOKEN" \
+  --pod-name "$HOSTNAME"
+```
+
+Use `--dry-run` during rollout checks to claim config, write `RINGCLAW_CONFIG`, send one healthy heartbeat, and exit without connecting to RingCentral. This verifies the Control Plane, bootstrap Secret, pod identity, and heartbeat path before enabling the long-running messaging runtime.
+
 Set `RINGCLAW_BOT_ID` and `RINGCLAW_TENANT_ID` for every bot. RingClaw uses them to namespace AI agent conversations, so multiple bot pods can share the same Codex/Dify/OpenAI-compatible gateway without cross-bot context collisions. For stronger isolation, configure per-bot agent tokens in each pod's Secret and inject them through the agent `env`, `api_key`, or custom headers.
 
 For N-bot rollout, render one config per bot from a manifest:

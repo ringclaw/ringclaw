@@ -130,6 +130,7 @@ ringclaw
 ├── setup                              # interactive credential wizard
 ├── app-url                            # pre-filled Developer Console app URLs
 ├── onboard                            # API-assisted non-interactive credential/K8S onboarding
+├── runtime start                      # claim AVA Control Plane config and run managed bot runtime
 ├── update [--channel beta|alpha] [--branch X]  # self-update
 ├── upgrade / version                  # aliases
 │

@@ -75,6 +75,18 @@ ringclaw onboard --from-env --config-out "$RINGCLAW_CONFIG"
 ringclaw start -f
 ```
 
+当 AVA Control Plane 负责 onboarding 和 K8S 渲染时，Pod 可以在启动时向控制面领取配置，而不是把长期凭据直接写死在 Deployment 中：
+
+```bash
+ringclaw runtime start \
+  --control-plane https://ava-control-plane.example \
+  --bot-id personal-ava-summer \
+  --bootstrap-token "$RINGCLAW_BOOTSTRAP_TOKEN" \
+  --pod-name "$HOSTNAME"
+```
+
+上线检查时可以加 `--dry-run`：RingClaw 会领取配置、写入 `RINGCLAW_CONFIG`、发送一次 healthy heartbeat，然后退出，不会连接 RingCentral 消息 runtime。这样可以先验证 Control Plane、bootstrap Secret、Pod identity 和 heartbeat 链路，再切到长期运行模式。
+
 为每个 Bot 设置 `RINGCLAW_BOT_ID` 和 `RINGCLAW_TENANT_ID`。RingClaw 会用它们给 AI Agent 会话加 namespace，这样多个 Bot Pod 即使共用同一个 Codex / Dify / OpenAI-compatible gateway，也不会因为相同 chat/user 维度导致上下文串线。更强隔离时，为每个 Bot 在 Secret 中配置独立 Agent token，并通过 agent `env`、`api_key` 或 custom headers 注入。
 
 N 个 Bot 批量上线时，可以用 manifest 一次渲染每个 Bot 的独立配置：
