@@ -659,6 +659,11 @@ END_ACTION`
 
 func TestExecuteAgentActions_VideoCreatesBridgeAndPostsLink(t *testing.T) {
 	var posted bool
+	var recorded []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		recorded = append(recorded, event)
+	})
+	defer restore()
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges":
@@ -705,9 +710,23 @@ func TestExecuteAgentActions_VideoCreatesBridgeAndPostsLink(t *testing.T) {
 	if !posted {
 		t.Fatal("expected video join link post")
 	}
+	if len(recorded) != 1 {
+		t.Fatalf("recorded events = %#v, want one", recorded)
+	}
+	if recorded[0].Type != "VIDEO" || recorded[0].Status != "completed" {
+		t.Fatalf("recorded event = %#v", recorded[0])
+	}
+	if recorded[0].Details["target_chat"] != "c1" || recorded[0].Details["bridge_id"] != "bridge-1" {
+		t.Fatalf("recorded details = %#v", recorded[0].Details)
+	}
 }
 
 func TestExecuteAgentActions_RingOutRequiresOwner(t *testing.T) {
+	var recorded []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		recorded = append(recorded, event)
+	})
+	defer restore()
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("non-owner RINGOUT should not call API: %s %s", r.Method, r.URL.Path)
 	})
@@ -719,6 +738,12 @@ func TestExecuteAgentActions_RingOutRequiresOwner(t *testing.T) {
 	}}, ActionContext{OriginIsOwner: false})
 	if len(results) != 1 || !strings.Contains(results[0], "owner") {
 		t.Fatalf("expected owner refusal, got %+v", results)
+	}
+	if len(recorded) != 1 || recorded[0].Type != "RINGOUT" || recorded[0].Status != "blocked" {
+		t.Fatalf("recorded events = %#v", recorded)
+	}
+	if recorded[0].Details["reason"] != "owner_required" {
+		t.Fatalf("recorded details = %#v", recorded[0].Details)
 	}
 }
 

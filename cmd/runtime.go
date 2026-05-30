@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ringclaw/ringclaw/config"
+	"github.com/ringclaw/ringclaw/messaging"
 	"github.com/spf13/cobra"
 )
 
@@ -47,6 +49,15 @@ type runtimeHeartbeatRequest struct {
 	Status         string   `json:"status"`
 	Capabilities   []string `json:"capabilities,omitempty"`
 	LastError      string   `json:"last_error,omitempty"`
+}
+
+type runtimeActionEventRequest struct {
+	BotID          string         `json:"bot_id"`
+	PodName        string         `json:"pod_name,omitempty"`
+	BootstrapToken string         `json:"bootstrap_token"`
+	Type           string         `json:"type"`
+	Status         string         `json:"status"`
+	Details        map[string]any `json:"details,omitempty"`
 }
 
 var runtimeOpts runtimeStartOptions
@@ -117,6 +128,8 @@ func runRuntimeStart(cmd *cobra.Command, args []string) error {
 
 	stopHeartbeat := startRuntimeHeartbeat(ctx, opts, cfg)
 	defer stopHeartbeat()
+	restoreActionRecorder := installRuntimeActionEventRecorder(opts)
+	defer restoreActionRecorder()
 
 	foregroundFlag = true
 	if err := runStart(cmd, args); err != nil {
@@ -162,6 +175,44 @@ func sendRuntimeHeartbeat(ctx context.Context, controlPlaneURL string, req runti
 		return fmt.Errorf("send runtime heartbeat: %w", err)
 	}
 	return nil
+}
+
+func sendRuntimeActionEvent(ctx context.Context, controlPlaneURL string, req runtimeActionEventRequest) error {
+	if err := postJSON(ctx, controlPlaneURL, "/runtime/v1/action-events", req, http.StatusNoContent, nil); err != nil {
+		return fmt.Errorf("send runtime action event: %w", err)
+	}
+	return nil
+}
+
+func installRuntimeActionEventRecorder(opts runtimeStartOptions) func() {
+	return messaging.SetActionEventRecorder(func(_ context.Context, event messaging.ActionEvent) {
+		go func(event messaging.ActionEvent) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			details := copyActionEventDetails(event.Details)
+			if opts.PodName != "" {
+				details["pod_name"] = opts.PodName
+			}
+			if err := sendRuntimeActionEvent(ctx, opts.ControlPlaneURL, runtimeActionEventRequest{
+				BotID:          opts.BotID,
+				PodName:        opts.PodName,
+				BootstrapToken: opts.BootstrapToken,
+				Type:           event.Type,
+				Status:         event.Status,
+				Details:        details,
+			}); err != nil {
+				slog.Warn("failed to report runtime action event", "component", "runtime", "type", event.Type, "status", event.Status, "error", err)
+			}
+		}(event)
+	})
+}
+
+func copyActionEventDetails(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in)+1)
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func writeClaimedRuntimeConfig(path string, cfg *config.Config) (string, error) {

@@ -109,6 +109,38 @@ func TestSendRuntimeHeartbeatUsesBootstrapToken(t *testing.T) {
 	}
 }
 
+func TestSendRuntimeActionEventUsesBootstrapToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/runtime/v1/action-events" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var req runtimeActionEventRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode action event: %v", err)
+		}
+		if req.BotID != "personal-ava-user-1" || req.PodName != "pod-a" || req.BootstrapToken != "bootstrap-token" {
+			t.Fatalf("action event identity = %#v", req)
+		}
+		if req.Type != "VIDEO" || req.Status != "completed" || req.Details["target_chat"] != "chat-1" {
+			t.Fatalf("action event payload = %#v", req)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	err := sendRuntimeActionEvent(context.Background(), server.URL, runtimeActionEventRequest{
+		BotID:          "personal-ava-user-1",
+		PodName:        "pod-a",
+		BootstrapToken: "bootstrap-token",
+		Type:           "VIDEO",
+		Status:         "completed",
+		Details:        map[string]any{"target_chat": "chat-1"},
+	})
+	if err != nil {
+		t.Fatalf("sendRuntimeActionEvent() error = %v", err)
+	}
+}
+
 func TestWriteClaimedRuntimeConfigPersistsConfigForStartup(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "runtime.json")
 	cfg := &config.Config{

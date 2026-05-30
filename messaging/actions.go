@@ -173,23 +173,37 @@ type ActionContext struct {
 func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcentral.Client, chatID string, actions []AgentAction, opts ActionContext) []string {
 	var results []string
 	for _, a := range actions {
+		record := func(status string, targetChat string, crossChat bool, extra map[string]any) {
+			recordAgentActionEvent(ctx, ActionEvent{
+				Type:    a.Type,
+				Status:  status,
+				Details: actionEventDetails(chatID, targetChat, crossChat, extra),
+			})
+		}
 		if a.Type == "RINGOUT" {
 			if !opts.OriginIsOwner {
+				record("blocked", "", false, map[string]any{"reason": "owner_required"})
 				results = append(results, "Refused RINGOUT: only the owner can start phone calls.")
 				continue
 			}
 			req, err := ringOutRequestFromParams(a.Params)
 			if err != nil {
+				record("failed", "", false, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to start RingOut: %v", err))
 				continue
 			}
 			ringOut, err := actionClient.CreateRingOut(ctx, req)
 			if err != nil {
 				slog.Error("action: create ringout failed", "error", err)
+				record("failed", "", false, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to start RingOut: %v", err))
 				continue
 			}
 			slog.Info("action: started ringout", "ringOutID", ringOut.ID, "status", ringOut.Status.CallStatus)
+			record("completed", "", false, map[string]any{
+				"ringout_id":  ringOut.ID,
+				"call_status": ringOut.Status.CallStatus,
+			})
 			continue
 		}
 
@@ -204,11 +218,13 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					resolved, err := resolveChatParam(ctx, actionClient, cid, chatID)
 					if err != nil {
 						slog.Error("action: failed to resolve chatid", "chatid", cid, "error", err)
+						record("failed", chatID, false, map[string]any{"error": err.Error(), "reason": "resolve_chat_failed"})
 						results = append(results, fmt.Sprintf("Failed to resolve chat '%s': %v", cid, err))
 						continue
 					}
 					targetChat = resolved
 					if resolved != chatID {
+						record("approval_required", targetChat, true, map[string]any{"requester_id": opts.RequesterID})
 						results = append(results, crossChatOOBChallenge(ctx, actionClient, a, chatID, targetChat, opts))
 						continue
 					}
@@ -220,6 +236,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				resolved, err := resolveChatParam(ctx, actionClient, cid, chatID)
 				if err != nil {
 					slog.Error("action: failed to resolve chatid", "chatid", cid, "error", err)
+					record("failed", chatID, false, map[string]any{"error": err.Error(), "reason": "resolve_chat_failed"})
 					results = append(results, fmt.Sprintf("Failed to resolve chat '%s': %v", cid, err))
 					continue
 				}
@@ -241,6 +258,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				slog.Warn("action: cross-chat ACTION refused (fail-closed on pre-notice)",
 					"type", a.Type, "origin", chatID, "target", targetChat,
 					"requesterID", opts.RequesterID, "error", err)
+				record("blocked", targetChat, true, map[string]any{"error": err.Error(), "reason": "cross_chat_notice_failed"})
 				results = append(results, fmt.Sprintf("Refused cross-chat %s: %v", a.Type, err))
 				continue
 			}
@@ -258,6 +276,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			})
 			if err != nil {
 				slog.Error("action: create note failed", "error", err)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to create note: %v", err))
 				continue
 			}
@@ -265,10 +284,12 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				slog.Error("action: publish note failed", "noteID", note.ID, "error", pubErr)
 			}
 			slog.Info("action: created note", "noteID", note.ID, "chatID", targetChat, "title", title)
+			record("completed", targetChat, crossChat, map[string]any{"note_id": note.ID})
 
 		case "TASK":
 			subject := a.Params["subject"]
 			if subject == "" {
+				record("skipped", targetChat, crossChat, map[string]any{"reason": "missing_subject"})
 				continue
 			}
 			req := &ringcentral.CreateTaskRequest{Subject: subject}
@@ -276,6 +297,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				resolvedID, err := resolveAssigneeParam(ctx, actionClient, aid)
 				if err != nil {
 					slog.Error("action: failed to resolve assignee", "assignee", aid, "error", err)
+					record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "reason": "resolve_assignee_failed"})
 					results = append(results, fmt.Sprintf("Failed to resolve assignee '%s': %v", aid, err))
 					continue
 				}
@@ -284,16 +306,19 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			task, err := actionClient.CreateTask(ctx, targetChat, req)
 			if err != nil {
 				slog.Error("action: create task failed", "error", err)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to create task: %v", err))
 				continue
 			}
 			slog.Info("action: created task", "taskID", task.ID, "chatID", targetChat, "subject", subject)
+			record("completed", targetChat, crossChat, map[string]any{"task_id": task.ID})
 
 		case "EVENT":
 			title := a.Params["title"]
 			startTime := a.Params["start"]
 			endTime := a.Params["end"]
 			if title == "" || startTime == "" || endTime == "" {
+				record("skipped", targetChat, crossChat, map[string]any{"reason": "missing_event_fields"})
 				continue
 			}
 			event, err := actionClient.CreateEvent(ctx, &ringcentral.CreateEventRequest{
@@ -303,18 +328,22 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			})
 			if err != nil {
 				slog.Error("action: create event failed", "error", err)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to create event: %v", err))
 				continue
 			}
 			slog.Info("action: created event", "eventID", event.ID, "title", title)
+			record("completed", targetChat, crossChat, map[string]any{"event_id": event.ID})
 
 		case "CARD":
 			cardJSON := a.Body
 			if cardJSON == "" {
+				record("skipped", targetChat, crossChat, map[string]any{"reason": "empty_card"})
 				continue
 			}
 			if !json.Valid([]byte(cardJSON)) {
 				slog.Error("action: invalid adaptive card JSON")
+				record("failed", targetChat, crossChat, map[string]any{"reason": "invalid_card_json"})
 				results = append(results, "Failed to create card: invalid JSON")
 				continue
 			}
@@ -322,22 +351,27 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
 			if err != nil {
 				slog.Error("action: create adaptive card failed", "error", err)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to create card: %v", err))
 				continue
 			}
 			slog.Info("action: created adaptive card", "cardID", card.ID, "chatID", targetChat)
+			record("completed", targetChat, crossChat, map[string]any{"card_id": card.ID})
 
 		case "MESSAGE":
 			body := strings.TrimSpace(a.Body)
 			if body == "" {
+				record("skipped", targetChat, crossChat, map[string]any{"reason": "empty_message"})
 				continue
 			}
 			if err := SendTextReply(ctx, actionClient, targetChat, body); err != nil {
 				slog.Error("action: send message failed", "error", err, "chatID", targetChat)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to send message: %v", err))
 				continue
 			}
 			slog.Info("action: sent message", "chatID", targetChat, "text", util.Truncate(body, 60))
+			record("completed", targetChat, crossChat, nil)
 
 		case "VIDEO":
 			title := a.Params["title"]
@@ -354,16 +388,19 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			})
 			if err != nil {
 				slog.Error("action: create video bridge failed", "error", err)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to create video meeting: %v", err))
 				continue
 			}
 			text := formatVideoBridgeMessage(bridge)
 			if err := SendTextReply(ctx, actionClient, targetChat, text); err != nil {
 				slog.Error("action: send video bridge link failed", "error", err, "chatID", targetChat)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "bridge_id": bridge.ID, "reason": "post_video_link_failed"})
 				results = append(results, fmt.Sprintf("Created video meeting but failed to post link: %v", err))
 				continue
 			}
 			slog.Info("action: created video bridge", "bridgeID", bridge.ID, "chatID", targetChat, "title", title)
+			record("completed", targetChat, crossChat, map[string]any{"bridge_id": bridge.ID})
 
 		default:
 			slog.Warn("action: unknown action type, sending body as message", "type", a.Type)
@@ -373,6 +410,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					slog.Error("action: failed to send unknown action as message", "error", err)
 				}
 			}
+			record("skipped", targetChat, crossChat, map[string]any{"reason": "unknown_action_type"})
 			results = append(results, fmt.Sprintf("Unknown action type: %s", a.Type))
 		}
 	}
