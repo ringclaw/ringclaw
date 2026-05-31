@@ -143,7 +143,18 @@ The current local setup flow is:
 ringclaw setup -> ~/.ringclaw/config.json -> ringclaw start
 ```
 
-The platform onboarding flow should become:
+The current Personal AVA Pro MVP uses AVA Control Plane as the product control plane and RingClaw as the long-lived runtime:
+
+```text
+FIJI Onboarding
+  -> AVA Control Plane
+  -> Token Pool / Runtime Spec
+  -> K8S Secret + Deployment
+  -> RingClaw Runtime Pod
+  -> runtime claim / heartbeat
+```
+
+The longer-term RingClaw platform onboarding flow can still evolve toward:
 
 ```text
 Onboard Request -> Validation -> Secret -> RingClawBot CR -> Operator -> Runtime Pod
@@ -297,19 +308,28 @@ spec:
     replicas: 1
 ```
 
-Sensitive values must live in K8S Secret, not in the CRD:
+Sensitive values must live in K8S Secret or be delivered through runtime claim, not in the CRD. The current AVA Control Plane MVP keeps the bootstrap credential and ACP/Agent token in the bootstrap Secret, while RC Bot token and Private JWT credentials are delivered by `/runtime/v1/claim`:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: personal-ava-summer-gan-secret
+  name: personal-ava-summer-gan-bootstrap
 type: Opaque
 stringData:
-  bot_token: "<redacted>"
-  client_id: "<redacted>"
-  client_secret: "<redacted>"
-  jwt_token: "<redacted>"
+  BOT_ID: "personal-ava-summer-gan"
+  BOOTSTRAP_TOKEN: "<redacted>"
+  CONTROL_PLANE_URL: "http://ava-control-plane"
+  OPENAI_API_KEY: "<agent-token-redacted>"
+```
+
+Runtime claim response then provides the per-Bot RingClaw runtime config:
+
+```text
+RingClaw Pod -> POST /runtime/v1/claim
+  <- ringcentral.bot_token
+  <- ringcentral.client_id / client_secret / jwt_token
+  <- agents.<default_agent>.api_key
 ```
 
 ## Rendered Runtime Config
@@ -509,8 +529,9 @@ prepare -> summarize -> draft -> ask approval -> execute
 
 ## Security Requirements
 
-- Bot Token, Client Secret, JWT, API tokens must only be stored in K8S Secrets.
-- Secret values must never be returned by control-plane APIs.
+- Bot Token, Client Secret, JWT, and Agent API tokens must never be returned to FIJI/browser control APIs.
+- Current AVA Control Plane MVP stores the ACP/Agent token in the K8S bootstrap Secret as `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, and returns RC/JWT credentials only to the runtime claim endpoint.
+- Long-term platformization can move the Agent token out of the bootstrap Secret and rely on claim/rotation for all runtime secrets.
 - Bot App scopes should remain messaging-only by default; Video, RingOut, and ReadCallLog should normally belong to the owner-scoped Private JWT App.
 - Phone and Video commands should use the same resolved RingCentral client path as Message commands; missing scopes should surface as RingCentral permission errors.
 - `ACTION:RINGOUT` must be rejected before chat override, OOB challenge, or API execution unless the origin sender is the owner.
