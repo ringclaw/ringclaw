@@ -77,8 +77,8 @@ The current implementation supports the Personal AVA Pro MVP substrate:
 | Long-lived Bot runtime | `ringclaw start` can run as one Pod per Bot with projected config/secret | Shared shard runtime is future work |
 | AI context isolation | conversation IDs can be prefixed by Bot namespace | Each Bot should use a dedicated namespace and, for hosted AI, dedicated token or tenant key |
 | Private JWT App | `client_id`, `client_secret`, `jwt_token` are now required for onboarding and runtime start | Base scope must include `ReadAccounts`; Video/Phone add extra scopes |
-| Video | Video bridge create/get/delete via RingCentral Video REST API | Requires Private JWT App with `ReadAccounts` and `Video` scopes |
-| Phone | RingOut status/cancel/create and extension Call Log | Requires Private JWT App with `ReadAccounts`, `RingOut`, `ReadCallLog`; RingOut remains owner-only in the message bridge |
+| Video | Video bridge list/create/get/delete via RingCentral Video REST API | Requires Private JWT App with `ReadAccounts` and `Video` scopes |
+| Phone | RingOut status/cancel/create plus extension Call Log and missed-call query | Requires Private JWT App with `ReadAccounts`, `RingOut`, `ReadCallLog`; RingOut remains owner-only in the message bridge |
 | Action governance | owner gate, cross-chat audit notice, OOB approval path | External write systems still need Tool Gateway policy integration |
 
 ## Permission Model
@@ -118,7 +118,7 @@ Video/Phone add extra scopes on the same Private JWT App:
 Video, RingOut, ReadCallLog
 ```
 
-This avoids expanding every Bot token into a broad action token while keeping message, phone, and video code paths aligned: runtime commands use the resolved RingCentral client, and the selected app token must carry the required scopes. RingClaw onboarding and `ringclaw start` now fail fast when `client_id`, `client_secret`, or `jwt_token` is missing. RingOut is still owner-only before any API call is made.
+This avoids expanding every Bot token into a broad action token while keeping message, phone, and video code paths aligned: runtime commands use the resolved RingCentral client, and the selected app token must carry the required scopes. RingClaw onboarding and `ringclaw start` now fail fast when `client_id`, `client_secret`, or `jwt_token` is missing. RingOut is still owner-only before any API call is made; when `from` is omitted, RingClaw does not synthesize a caller and lets RingOut use the current Private JWT App user's default callback settings.
 
 ## Bot Types
 

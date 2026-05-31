@@ -166,7 +166,7 @@ Manage cards via chat commands:
 
 ## Video & Phone Commands
 
-Video bridge creation uses RingCentral Video REST API and posts or prints the join URL. Phone commands use the low-risk RingOut and extension Call Log APIs. These commands use the same resolved RingCentral client path as message commands; the selected app token must carry the required scopes. RingOut is owner-only inside the message bridge.
+Video bridge commands use RingCentral Video REST APIs and post or print the join URL. Phone commands use RingOut plus extension Call Log APIs, including a missed-call convenience view. These commands use the same resolved RingCentral client path as message commands; the selected app token must carry the required scopes. RingOut is owner-only inside the message bridge.
 
 ```
 /video create Design Review type=Scheduled
@@ -177,5 +177,8 @@ Video bridge creation uses RingCentral Video REST API and posts or prints the jo
 /phone status <ringOutId>
 /phone cancel <ringOutId>
 /phone calllog direction=Outbound view=Detailed limit=10
+/phone calllog result=Missed limit=25
 /phone missed limit=25
 ```
+
+`/phone missed` is shorthand for inbound call logs with `result=Missed`. For CLI usage, the equivalent is `ringclaw phone calllog --result Missed --limit 25`; JSON output applies the same result filter.

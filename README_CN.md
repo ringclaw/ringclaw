@@ -36,7 +36,7 @@ ringclaw start
 - **多 Agent 支持** — 通过 ACP/CLI/HTTP 路由消息到 Claude、Codex、Gemini、Kimi 等。[→ Agent 配置](https://ringclaw.github.io/ringclaw/zh/guide/agents.html)
 - **聊天命令** — `/cc`、`/cx`、`/cs` 别名，多 Agent 广播，会话管理。[→ 命令](https://ringclaw.github.io/ringclaw/zh/guide/commands.html)
 - **聊天总结** — 用自然语言总结跨聊天的对话内容。[→ 总结](https://ringclaw.github.io/ringclaw/zh/features/summarize.html)
-- **AI 驱动的操作** — Agent 自动创建笔记、任务、日程、Adaptive Cards、Video bridge 和 owner 授权 RingOut。[→ 操作](https://ringclaw.github.io/ringclaw/zh/features/actions.html)
+- **AI 驱动的操作** — Agent 自动创建笔记、任务、日程、Adaptive Cards、Video bridge、owner 授权 RingOut 和未接来电摘要。[→ 操作](https://ringclaw.github.io/ringclaw/zh/features/actions.html)
 - **定时任务 & 心跳** — 定时调度和周期性 Agent 检查。[→ 定时任务](https://ringclaw.github.io/ringclaw/zh/features/cron.html) · [→ 心跳](https://ringclaw.github.io/ringclaw/zh/features/heartbeat.html)
 - **主动推送** — CLI 和 HTTP API 发送消息和媒体文件。[→ 媒体 & API](https://ringclaw.github.io/ringclaw/zh/features/media.html)
 - **安全加固** — API Token 认证、Host 验证、ACP 写权限控制、凭证脱敏。[→ 安全](https://ringclaw.github.io/ringclaw/zh/security/)

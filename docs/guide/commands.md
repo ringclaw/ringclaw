@@ -19,8 +19,8 @@ Send these as messages in your RingCentral chat:
 | `/note list\|create\|get\|update\|delete\|lock\|unlock` | Manage notes |
 | `/event list [chatId]\|create\|get\|update\|delete` | Manage calendar events |
 | `/card get\|delete` | Manage adaptive cards |
-| `/video create\|get\|delete` | Create and manage RingCentral Video bridges |
-| `/phone ringout\|status\|cancel\|calllog` | Phone actions and call logs; RingOut is owner-only |
+| `/video list\|create\|get\|delete` | Create and manage RingCentral Video bridges |
+| `/phone ringout\|status\|cancel\|calllog\|missed` | Phone actions and call logs; RingOut is owner-only |
 | `/chatinfo [chatId]` | Show chat details (name, type, members) |
 | `summarize my chat with John` | Summarize a conversation |
 | `/cron list\|add\|delete\|enable\|disable` | Manage scheduled tasks |
@@ -176,15 +176,17 @@ ringclaw
 │   └── delete <cardId>              # delete card
 │
 ├── video                              # RingCentral Video operations
+│   ├── list                           # list Video bridges
 │   ├── create <title> [--type X]     # create a bridge
 │   ├── get <bridgeId>                # get bridge details
 │   └── delete <bridgeId>             # delete bridge
 │
 ├── phone                              # RingCentral Phone operations
-│   ├── ringout <from> <to>           # start two-legged RingOut
+│   ├── ringout <to> [--from X]       # start two-legged RingOut
 │   ├── status <ringOutId>            # get RingOut status
 │   ├── cancel <ringOutId>            # cancel connecting RingOut
-│   └── calllog [--limit N]           # list extension call logs
+│   ├── calllog [--limit N]           # list extension call logs
+│   └── missed [limit=N]              # list missed inbound calls
 │
 ├── user                               # user operations
 │   ├── search <query>                # search company directory

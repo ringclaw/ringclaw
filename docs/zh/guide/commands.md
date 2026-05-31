@@ -19,8 +19,8 @@ title: 聊天命令
 | `/note list\|create\|get\|update\|delete\|lock\|unlock` | 管理笔记 |
 | `/event list [chatId]\|create\|get\|update\|delete` | 管理日历事件 |
 | `/card get\|delete` | 管理 Adaptive Card |
-| `/video create\|get\|delete` | 创建和管理 RingCentral Video bridge |
-| `/phone ringout\|status\|cancel\|calllog` | 电话动作和通话记录；RingOut 仅 owner 可执行 |
+| `/video list\|create\|get\|delete` | 创建和管理 RingCentral Video bridge |
+| `/phone ringout\|status\|cancel\|calllog\|missed` | 电话动作和通话记录；RingOut 仅 owner 可执行 |
 | `/chatinfo [chatId]` | 查看聊天详情（名称、类型、成员数） |
 | `总结我和 John 的聊天` | 总结某个对话 |
 | `/cron list\|add\|delete\|enable\|disable` | 管理定时任务 |
@@ -176,15 +176,17 @@ ringclaw
 │   └── delete <cardId>              # 删除卡片
 │
 ├── video                              # RingCentral Video 操作
+│   ├── list                           # 列出 Video bridge
 │   ├── create <title> [--type X]     # 创建 bridge
 │   ├── get <bridgeId>                # 获取 bridge 详情
 │   └── delete <bridgeId>             # 删除 bridge
 │
 ├── phone                              # RingCentral Phone 操作
-│   ├── ringout <from> <to>           # 发起双腿 RingOut
+│   ├── ringout <to> [--from X]       # 发起双腿 RingOut
 │   ├── status <ringOutId>            # 查看 RingOut 状态
 │   ├── cancel <ringOutId>            # 取消连接中的 RingOut
-│   └── calllog [--limit N]           # 查看个人通话记录
+│   ├── calllog [--limit N]           # 查看个人通话记录
+│   └── missed [limit=N]              # 查看未接来电
 │
 ├── user                               # 用户操作
 │   ├── search <query>                # 搜索公司目录

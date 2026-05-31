@@ -166,7 +166,7 @@ END_ACTION
 
 ## Video 与 Phone 命令
 
-Video bridge 创建基于 RingCentral Video REST API，会返回或发送入会链接。Phone 命令先支持低风险的 RingOut 和个人 Call Log；这些命令和 message 命令一样使用解析后的 RingCentral client，最终选中的 app token 必须具备对应 scope。消息桥接中的 RingOut 仍然仅 owner 可执行。
+Video bridge 命令基于 RingCentral Video REST API，会返回或发送入会链接。Phone 命令支持 RingOut 和个人 Call Log，并提供未接来电快捷视图；这些命令和 message 命令一样使用解析后的 RingCentral client，最终选中的 app token 必须具备对应 scope。消息桥接中的 RingOut 仍然仅 owner 可执行。
 
 ```
 /video create 设计评审 type=Scheduled
@@ -177,5 +177,8 @@ Video bridge 创建基于 RingCentral Video REST API，会返回或发送入会�
 /phone status <ringOutId>
 /phone cancel <ringOutId>
 /phone calllog direction=Outbound view=Detailed limit=10
+/phone calllog result=Missed limit=25
 /phone missed limit=25
 ```
+
+`/phone missed` 是 inbound call log + `result=Missed` 的快捷方式。CLI 中等价命令为 `ringclaw phone calllog --result Missed --limit 25`；JSON 输出也会应用相同的 result 过滤。
