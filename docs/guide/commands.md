@@ -96,6 +96,7 @@ Full CRUD for RingCentral Team Messaging resources directly from chat:
 /event list                        # list calendar events
 /video create Design Review        # create a Video bridge and return join URL
 /phone calllog direction=Outbound  # list recent extension call logs (owner only)
+/phone missed                      # list missed inbound calls (owner only)
 ```
 
 Each command supports: `list`, `create`, `get`, `update`, `delete`. Tasks also support `complete`.

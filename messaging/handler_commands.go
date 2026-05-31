@@ -180,6 +180,7 @@ func buildHelpCard() json.RawMessage {
 				mono("/event create \"Standup\" 2026-04-10T09:00:00Z 2026-04-10T09:30:00Z"),
 				mono("/video create \"Design Review\" type=Scheduled"),
 				mono("/phone calllog direction=Outbound limit=5"),
+				mono("/phone missed limit=25"),
 				mono("/cron add \"0 9 * * 1-5\" morning standup summary"),
 				mono("/chatinfo 158994374662"),
 			},

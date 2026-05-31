@@ -138,6 +138,7 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 					ID:        "call-e2e",
 					StartTime: "2026-05-26T10:00:00Z",
 					Direction: "Outbound",
+					Result:    "Missed",
 					From:      ringcentral.CallLogParty{PhoneNumber: "+14155550100"},
 					To:        ringcentral.CallLogParty{PhoneNumber: "+14155550199"},
 					Duration:  12,
@@ -169,6 +170,7 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 	oldPlayPrompt := phonePlayPrompt
 	oldCallLogView := callLogView
 	oldCallLogDirection := callLogDirection
+	oldCallLogResult := callLogResult
 	oldCallLogLimit := callLogLimit
 	defer func() {
 		jsonOutput = oldJSON
@@ -177,6 +179,7 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 		phonePlayPrompt = oldPlayPrompt
 		callLogView = oldCallLogView
 		callLogDirection = oldCallLogDirection
+		callLogResult = oldCallLogResult
 		callLogLimit = oldCallLogLimit
 	}()
 
@@ -210,6 +213,7 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 
 	callLogView = "Detailed"
 	callLogDirection = "Outbound"
+	callLogResult = "Missed"
 	callLogLimit = 1
 	if err := phoneCallLogCmd.RunE(phoneCallLogCmd, nil); err != nil {
 		t.Fatalf("phone calllog RunE() error = %v", err)

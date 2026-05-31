@@ -768,6 +768,14 @@ func handlePhone(ctx context.Context, client *ringcentral.Client, action string,
 			opts.RecordCount = 10
 		}
 		return phoneCallLog(ctx, client, opts)
+	case "missed":
+		opts := CallLogOptionsFromPairs(parseKeyValues(strings.Join(args, " ")))
+		if opts.RecordCount == 0 {
+			opts.RecordCount = 25
+		}
+		opts.Direction = "Inbound"
+		opts.Result = "Missed"
+		return phoneCallLog(ctx, client, opts)
 	default:
 		return formatActionHelp("/phone")
 	}
@@ -811,12 +819,37 @@ func phoneCallLog(ctx context.Context, client *ringcentral.Client, opts ringcent
 		return "No call log records found."
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**Call Log** (%d)\n", len(list.Records)))
-	for _, rec := range list.Records {
-		sb.WriteString(fmt.Sprintf("- `%s` %s %s %s -> %s (%ds)\n",
-			rec.ID, rec.StartTime, rec.Direction, rec.From.PhoneNumber, rec.To.PhoneNumber, rec.Duration))
+	records := filterCallLogRecords(list.Records, opts)
+	if len(records) == 0 {
+		if strings.EqualFold(opts.Result, "Missed") {
+			return "No missed call records found."
+		}
+		return "No call log records found."
+	}
+	sb.WriteString(fmt.Sprintf("**Call Log** (%d)\n", len(records)))
+	for _, rec := range records {
+		result := strings.TrimSpace(rec.Result)
+		if result == "" {
+			result = "Unknown"
+		}
+		sb.WriteString(fmt.Sprintf("- `%s` %s %s [%s] %s -> %s (%ds)\n",
+			rec.ID, rec.StartTime, rec.Direction, result, rec.From.PhoneNumber, rec.To.PhoneNumber, rec.Duration))
 	}
 	return sb.String()
+}
+
+func filterCallLogRecords(records []ringcentral.CallLogRecord, opts ringcentral.CallLogOptions) []ringcentral.CallLogRecord {
+	result := strings.TrimSpace(opts.Result)
+	if result == "" {
+		return records
+	}
+	filtered := make([]ringcentral.CallLogRecord, 0, len(records))
+	for _, rec := range records {
+		if strings.EqualFold(strings.TrimSpace(rec.Result), result) {
+			filtered = append(filtered, rec)
+		}
+	}
+	return filtered
 }
 
 // --- Helpers ---
@@ -870,6 +903,8 @@ func CallLogOptionsFromPairs(pairs []keyValue) ringcentral.CallLogOptions {
 			opts.Direction = pair.value
 		case "type":
 			opts.Type = pair.value
+		case "result":
+			opts.Result = pair.value
 		case "datefrom", "date_from":
 			opts.DateFrom = pair.value
 		case "dateto", "date_to":
@@ -927,7 +962,7 @@ func formatActionHelp(cmd string) string {
 	case "/video":
 		return "Usage:\n- /video list\n- /video create <title> [type=Instant|Scheduled|PMI]\n- /video get <bridgeId>\n- /video delete <bridgeId>"
 	case "/phone":
-		return "Usage:\n- /phone ringout <toPhone> [from=<phone>] [callerid=<phone>] [playprompt=true]\n- /phone status <ringOutId>\n- /phone cancel <ringOutId>\n- /phone calllog [direction=Inbound|Outbound] [view=Simple|Detailed] [limit=10]"
+		return "Usage:\n- /phone ringout <toPhone> [from=<phone>] [callerid=<phone>] [playprompt=true]\n- /phone status <ringOutId>\n- /phone cancel <ringOutId>\n- /phone calllog [direction=Inbound|Outbound] [result=Missed] [view=Simple|Detailed] [limit=10]\n- /phone missed [limit=25]"
 	default:
 		return "Available commands: /task, /note, /event, /card, /video, /phone"
 	}

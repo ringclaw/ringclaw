@@ -293,6 +293,27 @@ func TestHandleActionCommand_PhoneRingOutPermissionErrorIsActionable(t *testing.
 	}
 }
 
+func TestHandleActionCommand_PhoneMissedCallsFiltersByResult(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/restapi/v1.0/account/~/extension/~/call-log" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.CallLogList{
+			Records: []ringcentral.CallLogRecord{
+				{ID: "missed-1", StartTime: "2026-06-01T10:00:00Z", Direction: "Inbound", Result: "Missed", From: ringcentral.CallLogParty{PhoneNumber: "+12125550100"}, To: ringcentral.CallLogParty{PhoneNumber: "+14155550100"}},
+				{ID: "answered-1", StartTime: "2026-06-01T11:00:00Z", Direction: "Inbound", Result: "Call connected", From: ringcentral.CallLogParty{PhoneNumber: "+12125550101"}, To: ringcentral.CallLogParty{PhoneNumber: "+14155550100"}},
+			},
+		})
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/phone missed")
+	if !strings.Contains(result, "missed-1") || strings.Contains(result, "answered-1") || !strings.Contains(result, "Missed") {
+		t.Fatalf("expected only missed calls with result displayed, got %q", result)
+	}
+}
+
 func TestExtractAfter(t *testing.T) {
 	tests := []struct {
 		raw, keyword, want string

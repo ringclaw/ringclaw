@@ -96,6 +96,7 @@ title: 聊天命令
 /event list                      # 列出日历事件
 /video create 设计评审           # 创建 Video bridge 并返回入会链接
 /phone calllog direction=Outbound # 查看最近的个人通话记录（仅 owner）
+/phone missed                    # 查看未接来电（仅 owner）
 ```
 
 每个命令支持：`list`、`create`、`get`、`update`、`delete`。任务还支持 `complete`。

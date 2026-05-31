@@ -177,4 +177,5 @@ Video bridge creation uses RingCentral Video REST API and posts or prints the jo
 /phone status <ringOutId>
 /phone cancel <ringOutId>
 /phone calllog direction=Outbound view=Detailed limit=10
+/phone missed limit=25
 ```

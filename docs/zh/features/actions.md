@@ -177,4 +177,5 @@ Video bridge 创建基于 RingCentral Video REST API，会返回或发送入会�
 /phone status <ringOutId>
 /phone cancel <ringOutId>
 /phone calllog direction=Outbound view=Detailed limit=10
+/phone missed limit=25
 ```

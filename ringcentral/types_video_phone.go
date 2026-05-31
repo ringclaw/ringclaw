@@ -108,6 +108,7 @@ type CallLogOptions struct {
 	View        string
 	Direction   string
 	Type        string
+	Result      string
 	DateFrom    string
 	DateTo      string
 }

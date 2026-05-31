@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
@@ -15,6 +16,7 @@ var (
 	callLogView      string
 	callLogDirection string
 	callLogType      string
+	callLogResult    string
 	callLogDateFrom  string
 	callLogDateTo    string
 	callLogLimit     int
@@ -28,6 +30,7 @@ func init() {
 	phoneCallLogCmd.Flags().StringVar(&callLogView, "view", "Simple", "Call log view: Simple or Detailed")
 	phoneCallLogCmd.Flags().StringVar(&callLogDirection, "direction", "", "Call direction: Inbound or Outbound")
 	phoneCallLogCmd.Flags().StringVar(&callLogType, "type", "", "Call log type, for example Voice")
+	phoneCallLogCmd.Flags().StringVar(&callLogResult, "result", "", "Client-side result filter, for example Missed")
 	phoneCallLogCmd.Flags().StringVar(&callLogDateFrom, "date-from", "", "Start time filter in ISO8601")
 	phoneCallLogCmd.Flags().StringVar(&callLogDateTo, "date-to", "", "End time filter in ISO8601")
 	phoneCallLogCmd.Flags().IntVar(&callLogLimit, "limit", 10, "Number of call log records")
@@ -152,6 +155,7 @@ var phoneCallLogCmd = &cobra.Command{
 			View:        callLogView,
 			Direction:   callLogDirection,
 			Type:        callLogType,
+			Result:      callLogResult,
 			DateFrom:    callLogDateFrom,
 			DateTo:      callLogDateTo,
 		})
@@ -161,14 +165,29 @@ var phoneCallLogCmd = &cobra.Command{
 		if jsonOutput {
 			printJSON(list)
 		} else {
-			fmt.Printf("Call logs (%d)\n", len(list.Records))
-			for _, rec := range list.Records {
-				fmt.Printf("  %s  %s  %s  %s -> %s  %ds\n",
-					rec.ID, rec.StartTime, rec.Direction, rec.From.PhoneNumber, rec.To.PhoneNumber, rec.Duration)
+			records := filterCLIPhoneCallLogRecords(list.Records, callLogResult)
+			fmt.Printf("Call logs (%d)\n", len(records))
+			for _, rec := range records {
+				fmt.Printf("  %s  %s  %s  %s  %s -> %s  %ds\n",
+					rec.ID, rec.StartTime, rec.Direction, rec.Result, rec.From.PhoneNumber, rec.To.PhoneNumber, rec.Duration)
 			}
 		}
 		return nil
 	},
+}
+
+func filterCLIPhoneCallLogRecords(records []ringcentral.CallLogRecord, result string) []ringcentral.CallLogRecord {
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return records
+	}
+	filtered := make([]ringcentral.CallLogRecord, 0, len(records))
+	for _, rec := range records {
+		if strings.EqualFold(strings.TrimSpace(rec.Result), result) {
+			filtered = append(filtered, rec)
+		}
+	}
+	return filtered
 }
 
 func printRingOut(ringOut *ringcentral.RingOut) {
