@@ -87,113 +87,20 @@ func (c *Client) CreateConversation(ctx context.Context, memberIDs []string) (*C
 	return &chat, nil
 }
 
-// CurrentExtensionProfile contains the current JWT owner's basic extension info.
-type CurrentExtensionProfile struct {
-	ID                 string
-	ExtensionNumber    string
-	PrimaryPhoneNumber string
-}
-
-type currentExtensionResponse struct {
-	ID              int64  `json:"id"`
-	ExtensionNumber string `json:"extensionNumber"`
-	Contact         struct {
-		BusinessPhone string `json:"businessPhone"`
-		PhoneNumber   string `json:"phoneNumber"`
-		MobilePhone   string `json:"mobilePhone"`
-	} `json:"contact"`
-	PhoneNumbers []ExtensionPhoneNumber `json:"phoneNumbers"`
-}
-
-// ExtensionPhoneNumber describes a phone number assigned to an extension.
-type ExtensionPhoneNumber struct {
-	PhoneNumber string `json:"phoneNumber"`
-	Type        string `json:"type"`
-	UsageType   string `json:"usageType"`
-	Primary     bool   `json:"primary"`
-}
-
-type extensionPhoneNumberList struct {
-	Records []ExtensionPhoneNumber `json:"records"`
-}
-
-// GetCurrentExtensionProfile fetches the current JWT owner's extension profile.
-func (c *Client) GetCurrentExtensionProfile(ctx context.Context) (*CurrentExtensionProfile, error) {
-	respBody, err := c.doRequest(ctx, http.MethodGet, "/restapi/v1.0/account/~/extension/~", "", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var info currentExtensionResponse
-	if err := json.Unmarshal(respBody, &info); err != nil {
-		return nil, fmt.Errorf("parse extension info: %w", err)
-	}
-	return &CurrentExtensionProfile{
-		ID:                 fmt.Sprintf("%d", info.ID),
-		ExtensionNumber:    strings.TrimSpace(info.ExtensionNumber),
-		PrimaryPhoneNumber: firstNonEmptyPhone(info.Contact.BusinessPhone, info.Contact.PhoneNumber, info.Contact.MobilePhone, selectRingOutPhoneNumber(info.PhoneNumbers)),
-	}, nil
-}
-
 // GetExtensionInfo fetches current user's extension info to get the owner ID.
 func (c *Client) GetExtensionInfo(ctx context.Context) (string, error) {
-	profile, err := c.GetCurrentExtensionProfile(ctx)
+	respBody, err := c.doRequest(ctx, http.MethodGet, "/restapi/v1.0/account/~/extension/~", "", nil)
 	if err != nil {
 		return "", err
 	}
-	return profile.ID, nil
-}
 
-// ResolveDefaultRingOutFromNumber returns the current JWT owner's default RingOut callback number.
-func (c *Client) ResolveDefaultRingOutFromNumber(ctx context.Context) (string, error) {
-	profile, err := c.GetCurrentExtensionProfile(ctx)
-	if err != nil {
-		return "", err
+	var info struct {
+		ID int64 `json:"id"`
 	}
-	if profile.PrimaryPhoneNumber != "" {
-		return profile.PrimaryPhoneNumber, nil
+	if err := json.Unmarshal(respBody, &info); err != nil {
+		return "", fmt.Errorf("parse extension info: %w", err)
 	}
-
-	respBody, err := c.doRequest(ctx, http.MethodGet, "/restapi/v1.0/account/~/extension/~/phone-number", "", nil)
-	if err != nil {
-		return "", err
-	}
-	var list extensionPhoneNumberList
-	if err := json.Unmarshal(respBody, &list); err != nil {
-		return "", fmt.Errorf("parse extension phone numbers: %w", err)
-	}
-	if phone := selectRingOutPhoneNumber(list.Records); phone != "" {
-		return phone, nil
-	}
-	return "", fmt.Errorf("current extension has no phone number available for RingOut; configure a direct number or callback number for the owner account")
-}
-
-func firstNonEmptyPhone(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
-func selectRingOutPhoneNumber(numbers []ExtensionPhoneNumber) string {
-	for _, number := range numbers {
-		if number.Primary && strings.TrimSpace(number.PhoneNumber) != "" {
-			return strings.TrimSpace(number.PhoneNumber)
-		}
-	}
-	for _, number := range numbers {
-		if strings.EqualFold(number.UsageType, "DirectNumber") && strings.TrimSpace(number.PhoneNumber) != "" {
-			return strings.TrimSpace(number.PhoneNumber)
-		}
-	}
-	for _, number := range numbers {
-		if strings.TrimSpace(number.PhoneNumber) != "" {
-			return strings.TrimSpace(number.PhoneNumber)
-		}
-	}
-	return ""
+	return fmt.Sprintf("%d", info.ID), nil
 }
 
 // FindDirectChat finds or creates a Direct (1:1) chat between the current

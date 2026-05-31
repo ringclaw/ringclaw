@@ -19,7 +19,7 @@ func TestCreateRingOut_RequestAndResponse(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.From.PhoneNumber != "+14155550100" || body.To.PhoneNumber != "+14155550199" {
+		if body.From == nil || body.From.PhoneNumber != "+14155550100" || body.To.PhoneNumber != "+14155550199" {
 			t.Fatalf("unexpected request body: %+v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -35,7 +35,7 @@ func TestCreateRingOut_RequestAndResponse(t *testing.T) {
 	defer srv.Close()
 
 	ringOut, err := client.CreateRingOut(context.Background(), &CreateRingOutRequest{
-		From: PhoneNumberRef{PhoneNumber: "+14155550100"},
+		From: &PhoneNumberRef{PhoneNumber: "+14155550100"},
 		To:   PhoneNumberRef{PhoneNumber: "+14155550199"},
 	})
 	if err != nil {
@@ -43,6 +43,31 @@ func TestCreateRingOut_RequestAndResponse(t *testing.T) {
 	}
 	if ringOut.ID != "ringout-1" || ringOut.Status.CallStatus != "InProgress" {
 		t.Fatalf("unexpected ringout: %+v", ringOut)
+	}
+}
+
+func TestCreateRingOut_OmitsFromWhenCurrentTokenIdentityShouldBeUsed(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if _, ok := body["from"]; ok {
+			t.Fatalf("from should be omitted when caller relies on current token identity/default callback: %+v", body["from"])
+		}
+		to, _ := body["to"].(map[string]any)
+		if to["phoneNumber"] != "+14155550199" {
+			t.Fatalf("unexpected request body: %+v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(RingOut{ID: "ringout-1"})
+	})
+	defer srv.Close()
+
+	if _, err := client.CreateRingOut(context.Background(), &CreateRingOutRequest{
+		To: PhoneNumberRef{PhoneNumber: "+14155550199"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

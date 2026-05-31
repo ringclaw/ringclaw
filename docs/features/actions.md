@@ -87,7 +87,7 @@ END_ACTION
 
 Actions may target a different chat via the `chatid=<id>` parameter.
 `ACTION:RINGOUT` is owner-only and is refused for non-owner senders.
-When `from` is omitted, RingClaw resolves the current Private JWT App owner's main extension phone number before calling RingOut.
+When `from` is omitted, RingClaw does not synthesize a caller. RingOut runs under the current Private JWT App user's token and uses that user's default callback settings, matching how message sending derives identity from the token.
 
 - **Non-owner senders**: when OOB is configured (Private App + owner DM resolved), a context-rich challenge prompt is posted to the owner DM (action type, requester label with email, origin / target chat names, optional `Title:` / `Subject:` / `Assignee:` lines, a body preview capped at 200 characters, effect description, and host approve / deny commands). The owner must run `ringclaw approval <id>` on the host machine to approve. On approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. Example owner DM prompt:
 
@@ -173,7 +173,7 @@ Video bridge creation uses RingCentral Video REST API and posts or prints the jo
 /video get <bridgeId>
 /video delete <bridgeId>
 
-/phone ringout +14155550100 +14155550199 callerid=+14155550100
+/phone ringout +14155550199 callerid=+14155550100
 /phone status <ringOutId>
 /phone cancel <ringOutId>
 /phone calllog direction=Outbound view=Detailed limit=10

@@ -774,7 +774,7 @@ func handlePhone(ctx context.Context, client *ringcentral.Client, action string,
 }
 
 func phoneRingOut(ctx context.Context, client *ringcentral.Client, params map[string]string) string {
-	req, err := ringOutRequestFromParams(ctx, client, params)
+	req, err := ringOutRequestFromParams(params)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}

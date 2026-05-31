@@ -248,18 +248,20 @@ func TestHandleActionCommand_PhoneRingOut(t *testing.T) {
 	}
 }
 
-func TestHandleActionCommand_PhoneRingOutDefaultsFromCurrentExtension(t *testing.T) {
+func TestHandleActionCommand_PhoneRingOutUsesCurrentTokenIdentityWithoutFromLookup(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~":
-			w.Write([]byte(`{"id":12345678,"contact":{"businessPhone":"+14155550100"}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
-			var body ringcentral.CreateRingOutRequest
+			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode ringout request: %v", err)
 			}
-			if body.From.PhoneNumber != "+14155550100" || body.To.PhoneNumber != "+14155550199" {
+			if _, ok := body["from"]; ok {
+				t.Fatalf("from should be omitted so RingOut uses current token identity/default callback, got %+v", body["from"])
+			}
+			to, _ := body["to"].(map[string]any)
+			if to["phoneNumber"] != "+14155550199" {
 				t.Fatalf("unexpected ringout request: %+v", body)
 			}
 			json.NewEncoder(w).Encode(ringcentral.RingOut{
@@ -915,9 +917,6 @@ func TestExecuteAgentActions_RingOutOwnerCreatesCall(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~":
-			w.Write([]byte(`{"id":12345678,"contact":{"businessPhone":"+14155550100"}}`))
-			return
 		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
 			// Continue below.
 		default:
@@ -928,7 +927,10 @@ func TestExecuteAgentActions_RingOutOwnerCreatesCall(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode ringout request: %v", err)
 		}
-		if body.From.PhoneNumber != "+14155550100" || body.To.PhoneNumber != "+14155550199" {
+		if body.From != nil {
+			t.Fatalf("from should be omitted so RingOut uses current token identity/default callback: %+v", body.From)
+		}
+		if body.To.PhoneNumber != "+14155550199" {
 			t.Fatalf("unexpected ringout request: %+v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")

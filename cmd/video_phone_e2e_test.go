@@ -98,16 +98,6 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 			requireBearer(t, r)
 			w.WriteHeader(http.StatusNoContent)
 
-		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~":
-			record("extension-profile")
-			requireBearer(t, r)
-			json.NewEncoder(w).Encode(map[string]any{
-				"id": 12345678,
-				"contact": map[string]string{
-					"businessPhone": "+14155550100",
-				},
-			})
-
 		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
 			record("ringout-create")
 			requireBearer(t, r)
@@ -115,7 +105,7 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode ringout request: %v", err)
 			}
-			if body.From.PhoneNumber != "+14155550100" || body.To.PhoneNumber != "+14155550199" || body.CallerID == nil || body.CallerID.PhoneNumber != "+14155550100" || !body.PlayPrompt {
+			if body.From != nil || body.To.PhoneNumber != "+14155550199" || body.CallerID == nil || body.CallerID.PhoneNumber != "+14155550100" || !body.PlayPrompt {
 				t.Fatalf("unexpected ringout body: %+v", body)
 			}
 			json.NewEncoder(w).Encode(ringcentral.RingOut{

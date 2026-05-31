@@ -217,7 +217,7 @@ ringclaw onboard --manifest bots.json --output-dir ./rendered-bots --skip-valida
 kubectl apply -f ./rendered-bots/personal-ava-summer/k8s.yaml
 
 # 发起 RingOut（需要 RingOut scope 和 owner 权限）
-ringclaw phone ringout +14155550100 +14155550199 --caller-id +14155550100
+ringclaw phone ringout +14155550199 --caller-id +14155550100
 
 # 搜索公司目录
 ringclaw user search "Alice"

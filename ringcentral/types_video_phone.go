@@ -80,7 +80,7 @@ type PhoneNumberRef struct {
 
 // CreateRingOutRequest creates a two-legged RingOut call.
 type CreateRingOutRequest struct {
-	From       PhoneNumberRef  `json:"from"`
+	From       *PhoneNumberRef `json:"from,omitempty"`
 	To         PhoneNumberRef  `json:"to"`
 	CallerID   *PhoneNumberRef `json:"callerId,omitempty"`
 	PlayPrompt bool            `json:"playPrompt,omitempty"`
