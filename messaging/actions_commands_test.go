@@ -675,6 +675,43 @@ func TestExecuteAgentActions_EventSuccess(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_EventNormalizesLocalDateTimeToRFC3339(t *testing.T) {
+	var got ringcentral.CreateEventRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode event request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"id": "e1", "title": got.Title})
+	}))
+	defer srv.Close()
+
+	client := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
+	})
+	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	actions := []AgentAction{{
+		Type: "EVENT",
+		Params: map[string]string{
+			"title": "明天12点会议",
+			"start": "2026-06-01 12:00",
+			"end":   "2026-06-01 13:00",
+		},
+	}}
+
+	results := ExecuteAgentActions(context.Background(), client, client, "chat-1", actions, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	wantStart := time.Date(2026, 6, 1, 12, 0, 0, 0, time.Local).Format(time.RFC3339)
+	wantEnd := time.Date(2026, 6, 1, 13, 0, 0, 0, time.Local).Format(time.RFC3339)
+	if got.StartTime != wantStart || got.EndTime != wantEnd {
+		t.Fatalf("event time = %q ~ %q, want %q ~ %q", got.StartTime, got.EndTime, wantStart, wantEnd)
+	}
+}
+
 func TestExecuteAgentActions_EventSkippedMissingFields(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not make any request for event with missing fields")

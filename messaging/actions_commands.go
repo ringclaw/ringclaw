@@ -467,6 +467,10 @@ func eventListGroup(ctx context.Context, client *ringcentral.Client, groupID str
 }
 
 func eventCreate(ctx context.Context, client *ringcentral.Client, title, startTime, endTime string) string {
+	startTime, endTime, err := normalizeEventDateTimes(startTime, endTime)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
 	event, err := client.CreateEvent(ctx, &ringcentral.CreateEventRequest{
 		Title:     title,
 		StartTime: startTime,
@@ -507,10 +511,18 @@ func eventUpdate(ctx context.Context, client *ringcentral.Client, eventID, field
 		switch pair.key {
 		case "title":
 			req.Title = pair.value
-		case "starttime", "start_time":
-			req.StartTime = pair.value
-		case "endtime", "end_time":
-			req.EndTime = pair.value
+		case "start", "starttime", "start_time":
+			normalized, err := normalizeEventDateTime(pair.value)
+			if err != nil {
+				return fmt.Sprintf("Error: invalid event start time: %v", err)
+			}
+			req.StartTime = normalized
+		case "end", "endtime", "end_time":
+			normalized, err := normalizeEventDateTime(pair.value)
+			if err != nil {
+				return fmt.Sprintf("Error: invalid event end time: %v", err)
+			}
+			req.EndTime = normalized
 		case "location":
 			req.Location = pair.value
 		case "description":
@@ -531,6 +543,39 @@ func eventDelete(ctx context.Context, client *ringcentral.Client, eventID string
 		return fmt.Sprintf("Error: %v", err)
 	}
 	return fmt.Sprintf("Event `%s` deleted.", eventID)
+}
+
+func normalizeEventDateTimes(startTime, endTime string) (string, string, error) {
+	normalizedStart, err := normalizeEventDateTime(startTime)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid event start time: %w", err)
+	}
+	normalizedEnd, err := normalizeEventDateTime(endTime)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid event end time: %w", err)
+	}
+	return normalizedStart, normalizedEnd, nil
+}
+
+func normalizeEventDateTime(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("empty value")
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.Format(time.RFC3339), nil
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+	} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return parsed.Format(time.RFC3339), nil
+		}
+	}
+	return "", fmt.Errorf("%q must be ISO8601/RFC3339, e.g. 2026-06-01T12:00:00Z", value)
 }
 
 // --- Card handlers ---

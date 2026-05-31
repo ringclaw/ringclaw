@@ -329,6 +329,12 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				record("skipped", targetChat, crossChat, map[string]any{"reason": "missing_event_fields"})
 				continue
 			}
+			startTime, endTime, err := normalizeEventDateTimes(startTime, endTime)
+			if err != nil {
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "reason": "invalid_event_time"})
+				results = append(results, fmt.Sprintf("Failed to create event: %v", err))
+				continue
+			}
 			event, err := actionClient.CreateEvent(ctx, &ringcentral.CreateEventRequest{
 				Title:     title,
 				StartTime: startTime,
@@ -720,6 +726,12 @@ func awaitCrossChatOOB(actionClient *ringcentral.Client, challenge *oob.Challeng
 		if title == "" || startTime == "" || endTime == "" {
 			logSendError(SendTextReply(ctx, actionClient, originChat,
 				fmt.Sprintf("Cross-chat %s failed: missing title/time.", a.Type)))
+			return
+		}
+		startTime, endTime, err := normalizeEventDateTimes(startTime, endTime)
+		if err != nil {
+			logSendError(SendTextReply(ctx, actionClient, originChat,
+				fmt.Sprintf("Cross-chat %s failed: invalid event time: %v", a.Type, err)))
 			return
 		}
 		event, err := actionClient.CreateEvent(ctx, &ringcentral.CreateEventRequest{
