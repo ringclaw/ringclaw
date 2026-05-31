@@ -204,7 +204,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			if err != nil {
 				slog.Error("action: create ringout failed", "error", err)
 				record("failed", "", false, map[string]any{"error": err.Error()})
-				results = append(results, fmt.Sprintf("Failed to start RingOut: %v", err))
+				results = append(results, fmt.Sprintf("Failed to start RingOut: %s", friendlyPhoneAPIError(err)))
 				continue
 			}
 			slog.Info("action: started ringout", "ringOutID", ringOut.ID, "status", ringOut.Status.CallStatus)
@@ -475,6 +475,9 @@ func ringOutRequestFromParams(params map[string]string) (*ringcentral.CreateRing
 	if from == "" || to == "" {
 		return nil, fmt.Errorf("missing from/to phone number")
 	}
+	if isExtensionOnlyRingOutFrom(from) {
+		return nil, fmt.Errorf("from=%s looks like an extension. RingOut `from` must be a reachable callback phone number, preferably E.164 such as +14155550100; use your direct number or a configured RingOut callback number instead", from)
+	}
 	req := &ringcentral.CreateRingOutRequest{
 		From: ringcentral.PhoneNumberRef{PhoneNumber: from},
 		To:   ringcentral.PhoneNumberRef{PhoneNumber: to},
@@ -486,6 +489,39 @@ func ringOutRequestFromParams(params map[string]string) (*ringcentral.CreateRing
 		req.PlayPrompt = true
 	}
 	return req, nil
+}
+
+func isExtensionOnlyRingOutFrom(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "+") {
+		return false
+	}
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, value)
+	return digits == value && len(digits) >= 2 && len(digits) <= 6
+}
+
+func friendlyPhoneAPIError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "permissionName\":\"RingOut") ||
+		strings.Contains(msg, "[RingOut] permission") ||
+		strings.Contains(msg, "permissionName: RingOut"):
+		return "RingOut permission is missing. Ask an admin to add `RingOut` to the Private JWT App, regenerate or rotate the JWT token, then rerun RC JWT preflight/onboarding."
+	case strings.Contains(msg, "permissionName\":\"ReadCallLog") ||
+		strings.Contains(msg, "[ReadCallLog] permission") ||
+		strings.Contains(msg, "permissionName: ReadCallLog"):
+		return "ReadCallLog permission is missing. Ask an admin to add `ReadCallLog` to the Private JWT App, regenerate or rotate the JWT token, then rerun RC JWT preflight/onboarding."
+	default:
+		return msg
+	}
 }
 
 // announceCrossChatOrRefuse posts a metadata-only heads-up to the

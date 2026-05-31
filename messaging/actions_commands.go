@@ -737,7 +737,7 @@ func phoneRingOut(ctx context.Context, client *ringcentral.Client, params map[st
 	ringOut, err := client.CreateRingOut(ctx, req)
 	if err != nil {
 		slog.Error("create ringout failed", "error", err)
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %s", friendlyPhoneAPIError(err))
 	}
 	return fmt.Sprintf("RingOut started: `%s` — %s", ringOut.ID, ringOut.Status.CallStatus)
 }
@@ -745,14 +745,14 @@ func phoneRingOut(ctx context.Context, client *ringcentral.Client, params map[st
 func phoneRingOutStatus(ctx context.Context, client *ringcentral.Client, ringOutID string) string {
 	ringOut, err := client.GetRingOut(ctx, ringOutID)
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %s", friendlyPhoneAPIError(err))
 	}
 	return fmt.Sprintf("RingOut `%s`: call=%s caller=%s callee=%s", ringOut.ID, ringOut.Status.CallStatus, ringOut.Status.CallerStatus, ringOut.Status.CalleeStatus)
 }
 
 func phoneRingOutCancel(ctx context.Context, client *ringcentral.Client, ringOutID string) string {
 	if err := client.DeleteRingOut(ctx, ringOutID); err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %s", friendlyPhoneAPIError(err))
 	}
 	return fmt.Sprintf("RingOut `%s` cancelled.", ringOutID)
 }
@@ -761,7 +761,7 @@ func phoneCallLog(ctx context.Context, client *ringcentral.Client, opts ringcent
 	list, err := client.ListExtensionCallLog(ctx, opts)
 	if err != nil {
 		slog.Error("list call log failed", "error", err)
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %s", friendlyPhoneAPIError(err))
 	}
 	if len(list.Records) == 0 {
 		return "No call log records found."

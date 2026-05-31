@@ -53,7 +53,7 @@ END_ACTION
 - assignee: person name or ![:Person](ID).
 - The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
 - For RingCentral Video meetings → use ACTION:VIDEO. It creates a bridge and posts the join link.
-- For phone calls → use ACTION:RINGOUT only when the owner explicitly asks to call a phone number. Never infer phone numbers.
+- For phone calls → use ACTION:RINGOUT only when the owner explicitly asks to call a phone number. The from value must be the owner's reachable RingOut callback phone number, preferably E.164 (for example +14155550100), not a person name, bot name, user ID, or short extension like 8102. Never infer phone numbers.
 - For structured data, reports, or progress → use ACTION:CARD. Always generate complete valid Adaptive Card JSON v1.3.
 - If no action needed, reply normally without ACTION blocks.
 - Preserve first-person pronouns exactly as given: "我" for Chinese, "me"/"myself" for English. Do NOT translate or substitute.

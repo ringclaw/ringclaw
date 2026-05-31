@@ -210,6 +210,19 @@ func TestHandleActionCommand_PhoneRingOut(t *testing.T) {
 	}
 }
 
+func TestHandleActionCommand_PhoneRingOutPermissionErrorIsActionable(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errorCode":"InsufficientPermissions","message":"In order to call this API endpoint, application needs to have [RingOut] permission","permissionName":"RingOut"}`))
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/phone ringout +14155550100 +12123753080")
+	if !strings.Contains(result, "Private JWT App") || !strings.Contains(result, "RingOut") {
+		t.Fatalf("expected actionable RingOut permission message, got %q", result)
+	}
+}
+
 func TestExtractAfter(t *testing.T) {
 	tests := []struct {
 		raw, keyword, want string
@@ -860,6 +873,37 @@ func TestExecuteAgentActions_RingOutOwnerCreatesCall(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected RingOut API call")
+	}
+}
+
+func TestExecuteAgentActions_RingOutRejectsExtensionOnlyFromBeforeAPI(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("extension-only from should not call RingOut API: %s %s", r.Method, r.URL.Path)
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "RINGOUT",
+		Params: map[string]string{"from": "8102", "to": "+12123753080"},
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 1 || !strings.Contains(results[0], "RingOut callback number") || !strings.Contains(results[0], "8102") {
+		t.Fatalf("expected extension-only from guidance, got %+v", results)
+	}
+}
+
+func TestExecuteAgentActions_RingOutPermissionErrorIsActionable(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errorCode":"InsufficientPermissions","message":"In order to call this API endpoint, application needs to have [RingOut] permission","permissionName":"RingOut"}`))
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "RINGOUT",
+		Params: map[string]string{"from": "+14155550100", "to": "+12123753080"},
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 1 || !strings.Contains(results[0], "Private JWT App") || !strings.Contains(results[0], "RingOut") {
+		t.Fatalf("expected actionable RingOut permission message, got %+v", results)
 	}
 }
 
