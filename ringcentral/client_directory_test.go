@@ -87,6 +87,48 @@ func TestGetExtensionInfo_Success(t *testing.T) {
 	}
 }
 
+func TestResolveDefaultRingOutFromNumber_UsesCurrentExtensionContact(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/restapi/v1.0/account/~/extension/~" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":12345678,"contact":{"businessPhone":"+14155550100"}}`))
+	})
+	defer srv.Close()
+
+	phone, err := client.ResolveDefaultRingOutFromNumber(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if phone != "+14155550100" {
+		t.Errorf("expected contact business phone, got %q", phone)
+	}
+}
+
+func TestResolveDefaultRingOutFromNumber_FallsBackToExtensionPhoneNumbers(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/restapi/v1.0/account/~/extension/~":
+			w.Write([]byte(`{"id":12345678}`))
+		case "/restapi/v1.0/account/~/extension/~/phone-number":
+			w.Write([]byte(`{"records":[{"phoneNumber":"+14155550101","primary":false},{"phoneNumber":"+14155550100","primary":true}]}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	phone, err := client.ResolveDefaultRingOutFromNumber(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if phone != "+14155550100" {
+		t.Errorf("expected primary extension phone number, got %q", phone)
+	}
+}
+
 func TestGetExtensionInfo_HTTPError(t *testing.T) {
 	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

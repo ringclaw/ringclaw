@@ -248,6 +248,36 @@ func TestHandleActionCommand_PhoneRingOut(t *testing.T) {
 	}
 }
 
+func TestHandleActionCommand_PhoneRingOutDefaultsFromCurrentExtension(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~":
+			w.Write([]byte(`{"id":12345678,"contact":{"businessPhone":"+14155550100"}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
+			var body ringcentral.CreateRingOutRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode ringout request: %v", err)
+			}
+			if body.From.PhoneNumber != "+14155550100" || body.To.PhoneNumber != "+14155550199" {
+				t.Fatalf("unexpected ringout request: %+v", body)
+			}
+			json.NewEncoder(w).Encode(ringcentral.RingOut{
+				ID:     "ringout-1",
+				Status: ringcentral.RingOutStatus{CallStatus: "InProgress"},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/phone ringout +14155550199")
+	if !strings.Contains(result, "ringout-1") || !strings.Contains(result, "InProgress") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
 func TestHandleActionCommand_PhoneRingOutPermissionErrorIsActionable(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -693,7 +723,7 @@ END_ACTION`
 func TestParseAgentActions_VideoAndRingOutParams(t *testing.T) {
 	reply := `ACTION:VIDEO title=Design Review type=Scheduled chatid=team
 END_ACTION
-ACTION:RINGOUT from=+14155550100 to=+14155550199 callerid=+14155550100
+ACTION:RINGOUT to=+14155550199 callerid=+14155550100
 END_ACTION`
 
 	_, actions := ParseAgentActions(reply)
@@ -703,7 +733,7 @@ END_ACTION`
 	if actions[0].Type != "VIDEO" || actions[0].Params["title"] != "Design Review" || actions[0].Params["type"] != "Scheduled" {
 		t.Fatalf("unexpected video action: %+v", actions[0])
 	}
-	if actions[1].Type != "RINGOUT" || actions[1].Params["from"] != "+14155550100" || actions[1].Params["to"] != "+14155550199" {
+	if actions[1].Type != "RINGOUT" || actions[1].Params["from"] != "" || actions[1].Params["to"] != "+14155550199" {
 		t.Fatalf("unexpected ringout action: %+v", actions[1])
 	}
 }
@@ -883,7 +913,14 @@ func TestExecuteAgentActions_RingOutWithChatIDStillRequiresOwnerBeforeOOB(t *tes
 func TestExecuteAgentActions_RingOutOwnerCreatesCall(t *testing.T) {
 	var called bool
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/restapi/v1.0/account/~/extension/~/ring-out" {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~":
+			w.Write([]byte(`{"id":12345678,"contact":{"businessPhone":"+14155550100"}}`))
+			return
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
+			// Continue below.
+		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		called = true
@@ -904,7 +941,7 @@ func TestExecuteAgentActions_RingOutOwnerCreatesCall(t *testing.T) {
 
 	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
 		Type:   "RINGOUT",
-		Params: map[string]string{"from": "+14155550100", "to": "+14155550199"},
+		Params: map[string]string{"to": "+14155550199"},
 	}}, ActionContext{OriginIsOwner: true})
 	if len(results) != 0 {
 		t.Fatalf("unexpected results: %+v", results)

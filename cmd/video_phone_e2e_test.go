@@ -98,6 +98,16 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 			requireBearer(t, r)
 			w.WriteHeader(http.StatusNoContent)
 
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~":
+			record("extension-profile")
+			requireBearer(t, r)
+			json.NewEncoder(w).Encode(map[string]any{
+				"id": 12345678,
+				"contact": map[string]string{
+					"businessPhone": "+14155550100",
+				},
+			})
+
 		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
 			record("ringout-create")
 			requireBearer(t, r)
@@ -196,8 +206,9 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 	}
 
 	phoneCallerID = "+14155550100"
+	phoneFrom = ""
 	phonePlayPrompt = true
-	if err := phoneRingOutCmd.RunE(phoneRingOutCmd, []string{"+14155550100", "+14155550199"}); err != nil {
+	if err := phoneRingOutCmd.RunE(phoneRingOutCmd, []string{"+14155550199"}); err != nil {
 		t.Fatalf("phone ringout RunE() error = %v", err)
 	}
 	if err := phoneStatusCmd.RunE(phoneStatusCmd, []string{"ringout-e2e"}); err != nil {

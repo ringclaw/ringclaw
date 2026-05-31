@@ -194,7 +194,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, "Refused RINGOUT: only the owner can start phone calls.")
 				continue
 			}
-			req, err := ringOutRequestFromParams(a.Params)
+			req, err := ringOutRequestFromParams(ctx, actionClient, a.Params)
 			if err != nil {
 				record("failed", "", false, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to start RingOut: %v", err))
@@ -469,11 +469,21 @@ func formatVideoBridgeMessage(bridge *ringcentral.VideoBridge) string {
 	return fmt.Sprintf("Video meeting created: **%s** (`%s`)", title, bridge.ID)
 }
 
-func ringOutRequestFromParams(params map[string]string) (*ringcentral.CreateRingOutRequest, error) {
+func ringOutRequestFromParams(ctx context.Context, client *ringcentral.Client, params map[string]string) (*ringcentral.CreateRingOutRequest, error) {
 	from := strings.TrimSpace(params["from"])
 	to := strings.TrimSpace(params["to"])
-	if from == "" || to == "" {
-		return nil, fmt.Errorf("missing from/to phone number")
+	if to == "" {
+		return nil, fmt.Errorf("missing to phone number")
+	}
+	if from == "" {
+		if client == nil {
+			return nil, fmt.Errorf("missing from phone number and no RingCentral client is available to resolve the current owner")
+		}
+		defaultFrom, err := client.ResolveDefaultRingOutFromNumber(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve current owner RingOut phone number: %w", err)
+		}
+		from = defaultFrom
 	}
 	if isExtensionOnlyRingOutFrom(from) {
 		return nil, fmt.Errorf("from=%s looks like an extension. RingOut `from` must be a reachable callback phone number, preferably E.164 such as +14155550100; use your direct number or a configured RingOut callback number instead", from)

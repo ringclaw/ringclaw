@@ -10,6 +10,7 @@ import (
 
 var (
 	phoneCallerID    string
+	phoneFrom        string
 	phonePlayPrompt  bool
 	callLogView      string
 	callLogDirection string
@@ -20,6 +21,7 @@ var (
 )
 
 func init() {
+	phoneRingOutCmd.Flags().StringVar(&phoneFrom, "from", "", "Owner callback phone number. Defaults to the current JWT owner's main extension phone number")
 	phoneRingOutCmd.Flags().StringVar(&phoneCallerID, "caller-id", "", "Caller ID phone number")
 	phoneRingOutCmd.Flags().BoolVar(&phonePlayPrompt, "play-prompt", false, "Play a prompt before connecting the RingOut call")
 
@@ -43,10 +45,10 @@ var phoneCmd = &cobra.Command{
 }
 
 var phoneRingOutCmd = &cobra.Command{
-	Use:     "ringout <fromPhone> <toPhone>",
+	Use:     "ringout <toPhone>",
 	Short:   "Start a two-legged RingOut call",
-	Example: "  ringclaw phone ringout +14155550100 +14155550199 --caller-id +14155550100",
-	Args:    cobra.ExactArgs(2),
+	Example: "  ringclaw phone ringout +14155550199 --caller-id +14155550100",
+	Args:    cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newCLIClient()
 		if err != nil {
@@ -55,9 +57,21 @@ var phoneRingOutCmd = &cobra.Command{
 		ctx, cancel := notifyContext(context.Background())
 		defer cancel()
 
+		from := phoneFrom
+		to := args[0]
+		if len(args) == 2 {
+			from = args[0]
+			to = args[1]
+		}
+		if from == "" {
+			from, err = client.ResolveDefaultRingOutFromNumber(ctx)
+			if err != nil {
+				return fmt.Errorf("resolve current owner RingOut phone number: %w", err)
+			}
+		}
 		req := &ringcentral.CreateRingOutRequest{
-			From:       ringcentral.PhoneNumberRef{PhoneNumber: args[0]},
-			To:         ringcentral.PhoneNumberRef{PhoneNumber: args[1]},
+			From:       ringcentral.PhoneNumberRef{PhoneNumber: from},
+			To:         ringcentral.PhoneNumberRef{PhoneNumber: to},
 			PlayPrompt: phonePlayPrompt,
 		}
 		if phoneCallerID != "" {

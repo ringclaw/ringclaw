@@ -81,12 +81,13 @@ END_ACTION
 ACTION:VIDEO title=设计评审 type=Scheduled
 END_ACTION
 
-ACTION:RINGOUT from=+14155550100 to=+14155550199 callerid=+14155550100
+ACTION:RINGOUT to=+14155550199 callerid=+14155550100
 END_ACTION
 ```
 
 ACTION 可通过 `chatid=<id>` 参数定向到其他聊天。
 `ACTION:RINGOUT` 仅 owner 可执行，非 owner 触发会被拒绝。
+当省略 `from` 时，RingClaw 会先解析当前 Private JWT App owner 的主 extension 电话号码，再调用 RingOut。
 
 - **非 owner 发送者**：OOB 已配置时（Private App + owner 私聊已解析），系统向 owner 私聊发送富信息 challenge 提示（action 类型、requester 身份、origin / target 聊天名、可选 `Title:` / `Subject:` / `Assignee:`、≤200 字符的 body 预览、效果说明、主机审批命令）。owner 需在主机上执行 `ringclaw approval <id>` 批准。批准后 action 异步在目标聊天执行。OOB 未配置时回退为静默丢弃（强制回到 origin chat）。owner 私聊收到的提示示例：
 

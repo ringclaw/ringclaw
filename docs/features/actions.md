@@ -81,12 +81,13 @@ END_ACTION
 ACTION:VIDEO title=Design Review type=Scheduled
 END_ACTION
 
-ACTION:RINGOUT from=+14155550100 to=+14155550199 callerid=+14155550100
+ACTION:RINGOUT to=+14155550199 callerid=+14155550100
 END_ACTION
 ```
 
 Actions may target a different chat via the `chatid=<id>` parameter.
 `ACTION:RINGOUT` is owner-only and is refused for non-owner senders.
+When `from` is omitted, RingClaw resolves the current Private JWT App owner's main extension phone number before calling RingOut.
 
 - **Non-owner senders**: when OOB is configured (Private App + owner DM resolved), a context-rich challenge prompt is posted to the owner DM (action type, requester label with email, origin / target chat names, optional `Title:` / `Subject:` / `Assignee:` lines, a body preview capped at 200 characters, effect description, and host approve / deny commands). The owner must run `ringclaw approval <id>` on the host machine to approve. On approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. Example owner DM prompt:
 

@@ -736,14 +736,19 @@ func friendlyVideoAPIError(err error) string {
 func handlePhone(ctx context.Context, client *ringcentral.Client, action string, args []string) string {
 	switch action {
 	case "ringout":
-		if len(args) < 2 {
-			return "Usage: /phone ringout <fromPhone> <toPhone> [callerid=<phone>] [playprompt=true]"
+		if len(args) == 0 {
+			return "Usage: /phone ringout <toPhone> [from=<phone>] [callerid=<phone>] [playprompt=true]"
 		}
-		params := map[string]string{
-			"from": args[0],
-			"to":   args[1],
+		params := map[string]string{}
+		keyValueStart := 1
+		if len(args) >= 2 && !strings.Contains(args[1], "=") {
+			params["from"] = args[0]
+			params["to"] = args[1]
+			keyValueStart = 2
+		} else {
+			params["to"] = args[0]
 		}
-		for _, pair := range parseKeyValues(strings.Join(args[2:], " ")) {
+		for _, pair := range parseKeyValues(strings.Join(args[keyValueStart:], " ")) {
 			params[pair.key] = pair.value
 		}
 		return phoneRingOut(ctx, client, params)
@@ -769,7 +774,7 @@ func handlePhone(ctx context.Context, client *ringcentral.Client, action string,
 }
 
 func phoneRingOut(ctx context.Context, client *ringcentral.Client, params map[string]string) string {
-	req, err := ringOutRequestFromParams(params)
+	req, err := ringOutRequestFromParams(ctx, client, params)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
@@ -922,7 +927,7 @@ func formatActionHelp(cmd string) string {
 	case "/video":
 		return "Usage:\n- /video list\n- /video create <title> [type=Instant|Scheduled|PMI]\n- /video get <bridgeId>\n- /video delete <bridgeId>"
 	case "/phone":
-		return "Usage:\n- /phone ringout <fromPhone> <toPhone> [callerid=<phone>] [playprompt=true]\n- /phone status <ringOutId>\n- /phone cancel <ringOutId>\n- /phone calllog [direction=Inbound|Outbound] [view=Simple|Detailed] [limit=10]"
+		return "Usage:\n- /phone ringout <toPhone> [from=<phone>] [callerid=<phone>] [playprompt=true]\n- /phone status <ringOutId>\n- /phone cancel <ringOutId>\n- /phone calllog [direction=Inbound|Outbound] [view=Simple|Detailed] [limit=10]"
 	default:
 		return "Available commands: /task, /note, /event, /card, /video, /phone"
 	}
