@@ -101,6 +101,20 @@ Full CRUD for RingCentral Team Messaging resources directly from chat:
 
 Each command supports: `list`, `create`, `get`, `update`, `delete`. Tasks also support `complete`.
 
+The same Video and Phone capabilities are available through natural language when a default agent is configured. Example prompts:
+
+```text
+Tell me what important meetings I have today.
+Show my recent meeting list.
+Create a video meeting for release planning.
+
+Check today's calls and tell me if I have missing calls. Summarize next actions.
+Show today's call summary and next actions.
+Call +12123753080.
+```
+
+These route through intent classification and agent ACTION blocks (`ACTION:VIDEO`, `ACTION:VIDEO_LIST`, `ACTION:RINGOUT`, `ACTION:PHONE_CALLLOG`) rather than command-only shortcuts.
+
 ## Adaptive Cards
 
 AI agents can generate [Adaptive Cards](https://adaptivecards.io/) for rich structured display (progress reports, dashboards, forms, etc.). When the agent includes an `ACTION:CARD` block in its response, RingClaw automatically posts the card to the chat:

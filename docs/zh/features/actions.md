@@ -54,9 +54,15 @@ sequenceDiagram
         else VIDEO
             R->>RC: CreateVideoBridge
             R->>RC: SendPost 发送入会链接
+        else VIDEO_LIST
+            R->>RC: ListVideoBridges
+            R->>RC: SendPost 发送会议列表 / 重要会议摘要
         else RINGOUT
             R->>R: 要求发送者为 owner
             R->>RC: CreateRingOut
+        else PHONE_CALLLOG
+            R->>RC: ListExtensionCallLog
+            R->>RC: SendPost 发送 missed call 摘要和 next actions
         else MESSAGE
             R->>R: 解析 chatid / 人名
             R->>RC: SendPost
@@ -81,7 +87,13 @@ END_ACTION
 ACTION:VIDEO title=设计评审 type=Scheduled
 END_ACTION
 
+ACTION:VIDEO_LIST scope=today important=true limit=5
+END_ACTION
+
 ACTION:RINGOUT to=+14155550199 callerid=+14155550100
+END_ACTION
+
+ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
 END_ACTION
 ```
 
@@ -168,7 +180,10 @@ END_ACTION
 
 Video bridge 命令基于 RingCentral Video REST API，会返回或发送入会链接。Phone 命令支持 RingOut 和个人 Call Log，并提供未接来电快捷视图；这些命令和 message 命令一样使用解析后的 RingCentral client，最终选中的 app token 必须具备对应 scope。消息桥接中的 RingOut 仍然仅 owner 可执行。
 
+Video 和 Phone 是 Personal AVA Pro 的默认产品能力。即使 `ringcentral.capabilities` 只配置了 `message` / `summary`，RingClaw action 层也默认允许 Video / Phone；真实 API 调用是否成功仍取决于 Private JWT App 的 scopes 和用户权限。
+
 ```
+/video list
 /video create 设计评审 type=Scheduled
 /video get <bridgeId>
 /video delete <bridgeId>
@@ -182,3 +197,116 @@ Video bridge 命令基于 RingCentral Video REST API，会返回或发送入会�
 ```
 
 `/phone missed` 是 inbound call log + `result=Missed` 的快捷方式。CLI 中等价命令为 `ringclaw phone calllog --result Missed --limit 25`；JSON 输出也会应用相同的 result 过滤。
+
+## Video 与 Phone 自然语言能力
+
+Video / Phone 的自然语言请求和 message / task / event 使用同一条链路：
+
+```text
+用户消息
+  -> matchesIntentTrigger
+  -> classifyIntent = video | phone
+  -> default agent 输出 ACTION 块
+  -> ExecuteAgentActions
+  -> RingCentral API
+  -> SendPost 发回当前聊天
+```
+
+RingClaw 不再保留独立的 `matchesVideoMeetingListIntent` fast-path。会议列表查询统一表达为 `ACTION:VIDEO_LIST`，通话记录查询统一表达为 `ACTION:PHONE_CALLLOG`。
+
+### Video 示例
+
+Agent 可以创建 RingCentral Video bridge：
+
+```text
+Create a video meeting for release planning.
+创建一个视频会议讨论发布计划。
+帮我开一个明天的 RCV 会议。
+```
+
+预期 ACTION：
+
+```text
+ACTION:VIDEO title=发布计划讨论 type=Scheduled
+END_ACTION
+```
+
+Agent 也可以查询会议列表，并整理今天的重要会议：
+
+```text
+Tell me what important meetings I have today.
+告诉我今天有啥重要会议。
+Show my recent meeting list.
+查询我最近的 meeting list。
+```
+
+预期 ACTION：
+
+```text
+ACTION:VIDEO_LIST scope=today important=true limit=5
+END_ACTION
+```
+
+`ACTION:VIDEO_LIST` 参数：
+
+| 参数 | 可选值 | 含义 |
+| --- | --- | --- |
+| `scope` | `today`, `recent` | `today` 按 bridge `createTime` / `updateTime` 过滤；如果 RC Video API 没返回时间，记录不会被隐藏 |
+| `important` | `true`, `false` | 按重要会议摘要格式输出 |
+| `limit` | 正整数 | 限制返回会议数量 |
+| `chatid` | 可选 | 发送到指定聊天，仍受跨聊天治理规则约束 |
+
+### Phone 示例
+
+Agent 可以发起 RingOut：
+
+```text
+Call +12123753080.
+给 2123753080 打电话。
+帮我外呼 +12123753080。
+```
+
+预期 ACTION：
+
+```text
+ACTION:RINGOUT to=+12123753080
+END_ACTION
+```
+
+Agent 也可以查询今天的 call log，整理 missed call、call summary 和 next actions：
+
+```text
+Check today's calls and tell me if I have missing calls. Summarize next actions.
+查询我今天 calls 的记录，告诉我有没有 missing 的 call，给我整理下接下来的 action。
+查询我今天 call log，帮我整理下 call summary，以及我接下来的 action。
+```
+
+预期 ACTION：
+
+```text
+ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
+END_ACTION
+```
+
+`ACTION:PHONE_CALLLOG` 参数：
+
+| 参数 | 可选值 | 含义 |
+| --- | --- | --- |
+| `scope` | `today`, `recent` | `today` 会向 Call Log API 发送 `dateFrom` / `dateTo`，并按 `startTime` 再过滤一次 |
+| `missing` | `true`, `false` | 突出 missed / missing calls |
+| `summary` | `true`, `false` | 输出总通话数、未接数、入站、出站、已接 / accepted 数量 |
+| `next_actions` | `true`, `false` | 输出后续行动建议，特别是 missed call follow-up |
+| `limit` | 正整数 | 设置 `recordCount`；默认 `10` |
+| `direction` | `Inbound`, `Outbound` | 可选 Call Log API 方向过滤 |
+| `result` | `Missed`, `Accepted` 等 | 可选 Call Log API 结果过滤 |
+| `view` | `Simple`, `Detailed` | 可选 Call Log API view |
+
+### 所需 scopes
+
+Private JWT App 需要包含：
+
+```text
+Video       -> ACTION:VIDEO, ACTION:VIDEO_LIST
+RingOut     -> ACTION:RINGOUT
+ReadCallLog -> ACTION:PHONE_CALLLOG, /phone calllog, /phone missed
+```

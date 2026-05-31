@@ -54,9 +54,15 @@ sequenceDiagram
         else VIDEO
             R->>RC: CreateVideoBridge
             R->>RC: SendPost with join URL
+        else VIDEO_LIST
+            R->>RC: ListVideoBridges
+            R->>RC: SendPost with meeting list / important meeting summary
         else RINGOUT
             R->>R: Require owner sender
             R->>RC: CreateRingOut
+        else PHONE_CALLLOG
+            R->>RC: ListExtensionCallLog
+            R->>RC: SendPost with missed-call summary and next actions
         else MESSAGE
             R->>R: Resolve chatid / person name
             R->>RC: SendPost
@@ -81,7 +87,13 @@ END_ACTION
 ACTION:VIDEO title=Design Review type=Scheduled
 END_ACTION
 
+ACTION:VIDEO_LIST scope=today important=true limit=5
+END_ACTION
+
 ACTION:RINGOUT to=+14155550199 callerid=+14155550100
+END_ACTION
+
+ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
 END_ACTION
 ```
 
@@ -168,7 +180,10 @@ Manage cards via chat commands:
 
 Video bridge commands use RingCentral Video REST APIs and post or print the join URL. Phone commands use RingOut plus extension Call Log APIs, including a missed-call convenience view. These commands use the same resolved RingCentral client path as message commands; the selected app token must carry the required scopes. RingOut is owner-only inside the message bridge.
 
+Video and Phone are product-default Personal AVA Pro capabilities. They are available in the RingClaw action layer even when `ringcentral.capabilities` only lists `message` / `summary`; the actual API call still depends on Private JWT App scopes and user permissions.
+
 ```
+/video list
 /video create Design Review type=Scheduled
 /video get <bridgeId>
 /video delete <bridgeId>
@@ -182,3 +197,116 @@ Video bridge commands use RingCentral Video REST APIs and post or print the join
 ```
 
 `/phone missed` is shorthand for inbound call logs with `result=Missed`. For CLI usage, the equivalent is `ringclaw phone calllog --result Missed --limit 25`; JSON output applies the same result filter.
+
+## Natural-Language Video & Phone Actions
+
+Natural-language Video and Phone requests now follow the same path as message/task/event actions:
+
+```text
+user message
+  -> matchesIntentTrigger
+  -> classifyIntent = video | phone
+  -> default agent emits ACTION block
+  -> ExecuteAgentActions
+  -> RingCentral API
+  -> SendPost back to the chat
+```
+
+RingClaw no longer keeps a separate `matchesVideoMeetingListIntent` fast-path. Meeting-list queries are represented as `ACTION:VIDEO_LIST`, and call-log queries are represented as `ACTION:PHONE_CALLLOG`.
+
+### Video examples
+
+The agent can create a new RingCentral Video bridge:
+
+```text
+Create a video meeting for release planning.
+创建一个视频会议讨论发布计划。
+帮我开一个明天的 RCV 会议。
+```
+
+Expected action:
+
+```text
+ACTION:VIDEO title=Release planning type=Scheduled
+END_ACTION
+```
+
+The agent can also query meetings and return a list or important-meeting summary:
+
+```text
+Tell me what important meetings I have today.
+告诉我今天有啥重要会议。
+Show my recent meeting list.
+查询我最近的 meeting list。
+```
+
+Expected action:
+
+```text
+ACTION:VIDEO_LIST scope=today important=true limit=5
+END_ACTION
+```
+
+Supported `ACTION:VIDEO_LIST` params:
+
+| Param | Values | Meaning |
+| --- | --- | --- |
+| `scope` | `today`, `recent` | `today` filters by bridge `createTime` / `updateTime`; records without time are kept instead of being hidden |
+| `important` | `true`, `false` | Formats the reply as an important-meeting summary |
+| `limit` | positive integer | Caps the number of returned meetings |
+| `chatid` | optional | Sends the result to a target chat, subject to cross-chat governance |
+
+### Phone examples
+
+The agent can start RingOut calls:
+
+```text
+Call +12123753080.
+给 2123753080 打电话。
+帮我外呼 +12123753080。
+```
+
+Expected action:
+
+```text
+ACTION:RINGOUT to=+12123753080
+END_ACTION
+```
+
+The agent can also query today's call log, summarize missed calls, and produce follow-up actions:
+
+```text
+Check today's calls and tell me if I have missing calls. Summarize next actions.
+查询我今天 calls 的记录，告诉我有没有 missing 的 call，给我整理下接下来的 action。
+查询我今天 call log，帮我整理下 call summary，以及我接下来的 action。
+```
+
+Expected action:
+
+```text
+ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
+END_ACTION
+```
+
+Supported `ACTION:PHONE_CALLLOG` params:
+
+| Param | Values | Meaning |
+| --- | --- | --- |
+| `scope` | `today`, `recent` | `today` sends `dateFrom` / `dateTo` to the Call Log API and filters the response by `startTime` |
+| `missing` | `true`, `false` | Highlights missed/missing calls |
+| `summary` | `true`, `false` | Adds totals for calls, missed calls, inbound, outbound, and answered/accepted calls |
+| `next_actions` | `true`, `false` | Adds follow-up suggestions, especially for missed calls |
+| `limit` | positive integer | Sets `recordCount`; defaults to `10` |
+| `direction` | `Inbound`, `Outbound` | Optional Call Log API direction filter |
+| `result` | `Missed`, `Accepted`, etc. | Optional Call Log API result filter |
+| `view` | `Simple`, `Detailed` | Optional Call Log API view |
+
+### Required scopes
+
+The Private JWT App must include:
+
+```text
+Video       -> ACTION:VIDEO, ACTION:VIDEO_LIST
+RingOut     -> ACTION:RINGOUT
+ReadCallLog -> ACTION:PHONE_CALLLOG, /phone calllog, /phone missed
+```

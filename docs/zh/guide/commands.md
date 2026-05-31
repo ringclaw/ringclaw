@@ -101,6 +101,20 @@ title: 聊天命令
 
 每个命令支持：`list`、`create`、`get`、`update`、`delete`。任务还支持 `complete`。
 
+配置了 default agent 后，同样的 Video / Phone 能力也可以通过自然语言触发。例如：
+
+```text
+告诉我今天有啥重要会议。
+查询我最近的 meeting list。
+创建一个视频会议讨论发布计划。
+
+查询我今天 calls 的记录，告诉我有没有 missing 的 call，给我整理下接下来的 action。
+查询我今天 call log，帮我整理下 call summary，以及我接下来的 action。
+给 2123753080 打电话。
+```
+
+这些请求会走 intent classification 和 agent ACTION 块（`ACTION:VIDEO`、`ACTION:VIDEO_LIST`、`ACTION:RINGOUT`、`ACTION:PHONE_CALLLOG`），不是单独的 command-only shortcut。
+
 ## Adaptive Card（自适应卡片）
 
 AI Agent 可以生成 [Adaptive Card](https://adaptivecards.io/) 用于富文本结构化展示（进度报告、仪表盘、表单等）。当 Agent 在回复中包含 `ACTION:CARD` 块时，RingClaw 会自动将卡片发送到聊天：

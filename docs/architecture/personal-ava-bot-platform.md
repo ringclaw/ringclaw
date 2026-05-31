@@ -77,8 +77,8 @@ The current implementation supports the Personal AVA Pro MVP substrate:
 | Long-lived Bot runtime | `ringclaw start` can run as one Pod per Bot with projected config/secret | Shared shard runtime is future work |
 | AI context isolation | conversation IDs can be prefixed by Bot namespace | Each Bot should use a dedicated namespace and, for hosted AI, dedicated token or tenant key |
 | Private JWT App | `client_id`, `client_secret`, `jwt_token` are now required for onboarding and runtime start | Base scope must include `ReadAccounts`; Video/Phone add extra scopes |
-| Video | Video bridge list/create/get/delete via RingCentral Video REST API | Requires Private JWT App with `ReadAccounts` and `Video` scopes |
-| Phone | RingOut status/cancel/create plus extension Call Log and missed-call query | Requires Private JWT App with `ReadAccounts`, `RingOut`, `ReadCallLog`; RingOut remains owner-only in the message bridge |
+| Video | Video bridge list/create/get/delete via RingCentral Video REST API; natural-language `ACTION:VIDEO` and `ACTION:VIDEO_LIST` for meeting creation, recent meetings, and today's important meetings | Requires Private JWT App with `ReadAccounts` and `Video` scopes |
+| Phone | RingOut status/cancel/create plus extension Call Log and missed-call query; natural-language `ACTION:RINGOUT` and `ACTION:PHONE_CALLLOG` for RingOut, today's call log, missed-call summary, call summary, and next actions | Requires Private JWT App with `ReadAccounts`, `RingOut`, `ReadCallLog`; RingOut remains owner-only in the message bridge |
 | Action governance | owner gate, cross-chat audit notice, OOB approval path | External write systems still need Tool Gateway policy integration |
 
 ## Permission Model
@@ -118,7 +118,46 @@ Video/Phone add extra scopes on the same Private JWT App:
 Video, RingOut, ReadCallLog
 ```
 
-This avoids expanding every Bot token into a broad action token while keeping message, phone, and video code paths aligned: runtime commands use the resolved RingCentral client, and the selected app token must carry the required scopes. RingClaw onboarding and `ringclaw start` now fail fast when `client_id`, `client_secret`, or `jwt_token` is missing. RingOut is still owner-only before any API call is made; when `from` is omitted, RingClaw does not synthesize a caller and lets RingOut use the current Private JWT App user's default callback settings.
+This avoids expanding every Bot token into a broad action token while keeping message, phone, and video code paths aligned: runtime commands and agent actions use the resolved RingCentral client, central endpoint helpers, and the selected app token must carry the required scopes. RingClaw onboarding and `ringclaw start` now fail fast when `client_id`, `client_secret`, or `jwt_token` is missing. RingOut is still owner-only before any API call is made; when `from` is omitted, RingClaw does not synthesize a caller and lets RingOut use the current Private JWT App user's default callback settings.
+
+## Natural-Language Action Flow
+
+Personal AVA Pro treats message, video, and phone as the same product pattern:
+
+```mermaid
+flowchart LR
+  User["User message<br/>Chinese or English"] --> Trigger["matchesIntentTrigger"]
+  Trigger --> Classifier["intent classifier<br/>summarize/task/note/event/video/phone/chat"]
+  Classifier --> Agent["Default agent<br/>ACTION prompt"]
+  Agent --> Action["ExecuteAgentActions"]
+  Action --> RC["RingCentral API"]
+  Action --> Reply["Team Messaging reply"]
+```
+
+The runtime no longer keeps a separate video-list natural-language fast path. Instead:
+
+| User goal | Intent | Agent action | RC API |
+| --- | --- | --- | --- |
+| Create an RCV meeting | `video` | `ACTION:VIDEO` | `CreateVideoBridge` |
+| Query recent meetings | `video` | `ACTION:VIDEO_LIST scope=recent` | `ListVideoBridges` |
+| Ask for today's important meetings | `video` | `ACTION:VIDEO_LIST scope=today important=true` | `ListVideoBridges` |
+| Start a phone call | `phone` | `ACTION:RINGOUT` | `CreateRingOut` |
+| Ask for today's call log | `phone` | `ACTION:PHONE_CALLLOG scope=today summary=true` | `ListExtensionCallLog` |
+| Ask whether there are missing/missed calls and next actions | `phone` | `ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true` | `ListExtensionCallLog` |
+
+Example supported prompts:
+
+```text
+告诉我今天有啥重要会议
+查询我最近的 meeting list
+创建一个视频会议讨论发布计划
+
+查询我今天 calls 的记录，告诉我有没有 missing 的 call，给我整理下接下来的 action
+查询我今天 call log，帮我整理下 call summary，以及我接下来的 action
+给 2123753080 打电话
+```
+
+Video and Phone are default Personal AVA Pro capabilities in the action layer. Operators still need the matching Private JWT App scopes; missing scopes return actionable permission guidance instead of silently disabling the feature.
 
 ## Bot Types
 
