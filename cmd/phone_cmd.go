@@ -162,10 +162,11 @@ var phoneCallLogCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("list call log failed: %w", err)
 		}
+		list.Records = filterCLIPhoneCallLogRecords(list.Records, callLogResult)
 		if jsonOutput {
 			printJSON(list)
 		} else {
-			records := filterCLIPhoneCallLogRecords(list.Records, callLogResult)
+			records := list.Records
 			fmt.Printf("Call logs (%d)\n", len(records))
 			for _, rec := range records {
 				fmt.Printf("  %s  %s  %s  %s  %s -> %s  %ds\n",

@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -227,4 +229,99 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 	if calls["token"] != 8 {
 		t.Fatalf("token calls = %d, want 8; all calls=%#v", calls["token"], calls)
 	}
+}
+
+func TestPhoneCallLogJSONAppliesResultFilter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/oauth/token":
+			json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "e2e-token",
+				"expires_in":   3600,
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/call-log":
+			json.NewEncoder(w).Encode(ringcentral.CallLogList{
+				Records: []ringcentral.CallLogRecord{
+					{ID: "missed-1", Result: "Missed"},
+					{ID: "answered-1", Result: "Call connected"},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	cfgPath := t.TempDir() + "/config.json"
+	t.Setenv("RINGCLAW_CONFIG", cfgPath)
+	if err := config.SaveTo(cfgPath, &config.Config{
+		RC: config.RCConfig{
+			ServerURL:    srv.URL,
+			ClientID:     "client",
+			ClientSecret: "secret",
+			JWTToken:     "jwt",
+		},
+	}); err != nil {
+		t.Fatalf("SaveTo() error = %v", err)
+	}
+
+	oldJSON := jsonOutput
+	oldCallLogView := callLogView
+	oldCallLogDirection := callLogDirection
+	oldCallLogType := callLogType
+	oldCallLogResult := callLogResult
+	oldCallLogLimit := callLogLimit
+	defer func() {
+		jsonOutput = oldJSON
+		callLogView = oldCallLogView
+		callLogDirection = oldCallLogDirection
+		callLogType = oldCallLogType
+		callLogResult = oldCallLogResult
+		callLogLimit = oldCallLogLimit
+	}()
+
+	jsonOutput = true
+	callLogView = "Simple"
+	callLogDirection = ""
+	callLogType = ""
+	callLogResult = "Missed"
+	callLogLimit = 10
+
+	output := captureStdout(t, func() error {
+		return phoneCallLogCmd.RunE(phoneCallLogCmd, nil)
+	})
+	var got ringcentral.CallLogList
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("decode JSON output: %v\n%s", err, output)
+	}
+	if len(got.Records) != 1 || got.Records[0].ID != "missed-1" {
+		t.Fatalf("expected JSON output to include only missed calls, got %+v", got.Records)
+	}
+}
+
+func captureStdout(t *testing.T, fn func() error) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	os.Stdout = w
+	defer func() {
+		os.Stdout = old
+	}()
+
+	runErr := fn()
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatalf("close stdout pipe: %v", closeErr)
+	}
+	if runErr != nil {
+		t.Fatalf("captured function error = %v", runErr)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stdout pipe: %v", err)
+	}
+	return string(data)
 }

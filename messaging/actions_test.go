@@ -314,6 +314,22 @@ func TestHandleActionCommand_PhoneMissedCallsFiltersByResult(t *testing.T) {
 	}
 }
 
+func TestHandleActionCommand_PhoneMissedCallsEmptyResultUsesMissedMessage(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/restapi/v1.0/account/~/extension/~/call-log" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.CallLogList{})
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/phone missed")
+	if result != "No missed call records found." {
+		t.Fatalf("expected missed-call empty state, got %q", result)
+	}
+}
+
 func TestExtractAfter(t *testing.T) {
 	tests := []struct {
 		raw, keyword, want string

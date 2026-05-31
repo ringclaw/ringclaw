@@ -816,6 +816,9 @@ func phoneCallLog(ctx context.Context, client *ringcentral.Client, opts ringcent
 		return fmt.Sprintf("Error: %s", friendlyPhoneAPIError(err))
 	}
 	if len(list.Records) == 0 {
+		if strings.EqualFold(opts.Result, "Missed") {
+			return "No missed call records found."
+		}
 		return "No call log records found."
 	}
 	var sb strings.Builder
