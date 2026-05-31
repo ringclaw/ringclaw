@@ -250,7 +250,7 @@ func TestRuntimeStartDryRunClaimsWritesConfigAndReportsHeartbeat(t *testing.T) {
 	if claimed.BotID != "personal-ava-user-1" || claimed.PodName != "pod-a" || claimed.BootstrapToken != "bootstrap-token" {
 		t.Fatalf("claim request = %#v", claimed)
 	}
-	if heartbeat.Status != runtimeStatusHealthy || strings.Join(heartbeat.Capabilities, ",") != "message,summary,video,phone" {
+	if heartbeat.Status != runtimeStatusHealthy || strings.Join(heartbeat.Capabilities, ",") != "message,summary,video,phone,call_log" {
 		t.Fatalf("heartbeat request = %#v", heartbeat)
 	}
 	if os.Getenv("RINGCLAW_CONFIG") != configPath {

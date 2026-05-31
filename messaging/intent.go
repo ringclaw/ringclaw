@@ -19,6 +19,8 @@ const (
 	IntentTask      Intent = "task"
 	IntentNote      Intent = "note"
 	IntentEvent     Intent = "event"
+	IntentVideo     Intent = "video"
+	IntentPhone     Intent = "phone"
 	IntentChat      Intent = "chat"
 )
 
@@ -30,11 +32,16 @@ var intentTriggers = []string{
 	"创建任务", "添加任务", "新建任务", "加个任务",
 	"创建笔记", "添加笔记", "记一下", "记个笔记",
 	"创建日程", "添加日程", "创建事件", "安排",
+	"创建视频会议", "新建视频会议", "发起视频会议", "开视频会议", "视频会议", "rcv会议", "rcv 会议", "开会链接",
+	"将来的会议", "未来的会议", "今天的会议", "重要会议", "会议列表",
+	"打电话", "拨打", "外呼", "未接电话", "未接来电", "通话记录", "来电记录", "今天calls", "calls的记录", "calls 记录", "call summary",
 	// English
 	"summarize", "summarise", "summary", "recap", "digest",
 	"create task", "add task", "new task",
 	"create note", "add note", "take note",
 	"create event", "add event", "schedule",
+	"video meeting", "video call", "rcv meeting", "start a meeting", "create a meeting link", "meeting list", "meetings today", "important meetings",
+	"ringout", "phone call", "call log", "call logs", "missed call", "missed calls", "missing call", "missing calls", "call summary", "dial ", "call +", "call 1",
 	// Japanese
 	"まとめ", "要約",
 	// Russian
@@ -50,29 +57,6 @@ func matchesIntentTrigger(text string) bool {
 	lower := strings.ToLower(text)
 	for _, kw := range intentTriggers {
 		if strings.Contains(lower, kw) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchesVideoMeetingListIntent(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(text))
-	if lower == "" {
-		return false
-	}
-	if matchesAnySubstring(lower, "创建", "新建", "添加", "create", "schedule", "add ") {
-		return false
-	}
-	hasQuery := matchesAnySubstring(lower, "获取", "查询", "查看", "列出", "看看", "show", "list", "get", "find")
-	hasMeeting := matchesAnySubstring(lower, "会议", "视频会议", "video meeting", "video meetings", "rcv meeting", "rcv meetings")
-	hasVideoOrFuture := matchesAnySubstring(lower, "video", "视频", "rcv", "将来", "未来", "接下来", "后续", "upcoming", "future", "next")
-	return hasQuery && hasMeeting && hasVideoOrFuture
-}
-
-func matchesAnySubstring(text string, values ...string) bool {
-	for _, value := range values {
-		if strings.Contains(text, value) {
 			return true
 		}
 	}
@@ -114,6 +98,8 @@ func parseIntentReply(reply string) Intent {
 		{"task", IntentTask},
 		{"note", IntentNote},
 		{"event", IntentEvent},
+		{"video", IntentVideo},
+		{"phone", IntentPhone},
 		{"chat", IntentChat},
 	} {
 		if strings.Contains(cleaned, candidate.keyword) {

@@ -21,7 +21,7 @@ var crossChatNoticeTimeout = 5 * time.Second
 
 // AgentAction represents a parsed action from the agent's response.
 type AgentAction struct {
-	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE", "VIDEO", "RINGOUT"
+	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE", "VIDEO", "VIDEO_LIST", "RINGOUT", "PHONE_CALLLOG"
 	Params map[string]string
 	Body   string
 }
@@ -105,7 +105,7 @@ func parseActionBlock(block string) *AgentAction {
 // parseActionParams parses "title=xxx start=2026-01-01T10:00:00Z end=2026-01-01T11:00:00Z"
 func parseActionParams(s string) []keyValue {
 	var result []keyValue
-	keys := []string{"title", "subject", "start", "end", "chatid", "assignee", "type", "from", "to", "callerid", "playprompt"}
+	keys := []string{"title", "subject", "start", "end", "chatid", "assignee", "type", "from", "to", "callerid", "playprompt", "scope", "important", "limit", "missing", "summary", "next_actions", "direction", "result", "view"}
 	remaining := s
 	for len(remaining) > 0 {
 		remaining = strings.TrimSpace(remaining)
@@ -416,6 +416,40 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			slog.Info("action: created video bridge", "bridgeID", bridge.ID, "chatID", targetChat, "title", title)
 			record("completed", targetChat, crossChat, map[string]any{"bridge_id": bridge.ID})
 
+		case "VIDEO_LIST":
+			text, count, err := videoListFromParams(ctx, actionClient, a.Params)
+			if err != nil {
+				slog.Error("action: list video bridges failed", "error", err)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
+				results = append(results, fmt.Sprintf("Failed to list video meetings: %s", friendlyVideoAPIError(err)))
+				continue
+			}
+			if err := SendTextReply(ctx, actionClient, targetChat, text); err != nil {
+				slog.Error("action: send video meeting list failed", "error", err, "chatID", targetChat)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "reason": "post_video_list_failed"})
+				results = append(results, fmt.Sprintf("Listed video meetings but failed to post result: %v", err))
+				continue
+			}
+			slog.Info("action: listed video bridges", "chatID", targetChat, "count", count)
+			record("completed", targetChat, crossChat, map[string]any{"count": count})
+
+		case "PHONE_CALLLOG":
+			text, count, err := phoneCallLogFromParams(ctx, actionClient, a.Params)
+			if err != nil {
+				slog.Error("action: list call log failed", "error", err)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
+				results = append(results, fmt.Sprintf("Failed to list call log: %s", friendlyPhoneAPIError(err)))
+				continue
+			}
+			if err := SendTextReply(ctx, actionClient, targetChat, text); err != nil {
+				slog.Error("action: send call log summary failed", "error", err, "chatID", targetChat)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "reason": "post_call_log_failed"})
+				results = append(results, fmt.Sprintf("Listed call log but failed to post result: %v", err))
+				continue
+			}
+			slog.Info("action: listed call log", "chatID", targetChat, "count", count)
+			record("completed", targetChat, crossChat, map[string]any{"count": count})
+
 		default:
 			slog.Warn("action: unknown action type, sending body as message", "type", a.Type)
 			body := strings.TrimSpace(a.Body)
@@ -433,9 +467,11 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 
 func actionCapability(actionType string) string {
 	switch strings.ToUpper(strings.TrimSpace(actionType)) {
-	case "VIDEO":
+	case "VIDEO", "VIDEO_LIST":
 		return "video"
 	case "RINGOUT":
+		return "phone"
+	case "PHONE_CALLLOG":
 		return "phone"
 	default:
 		return ""
@@ -447,6 +483,11 @@ func isActionCapabilityAllowed(capabilities []string, capability string) bool {
 		return true
 	}
 	capability = strings.ToLower(strings.TrimSpace(capability))
+	for _, item := range defaultEnabledCapabilities {
+		if item == capability {
+			return true
+		}
+	}
 	for _, item := range capabilities {
 		if strings.EqualFold(strings.TrimSpace(item), capability) {
 			return true
@@ -467,6 +508,103 @@ func formatVideoBridgeMessage(bridge *ringcentral.VideoBridge) string {
 		return fmt.Sprintf("Video meeting created: **%s**\n%s", title, bridge.Discovery.Web)
 	}
 	return fmt.Sprintf("Video meeting created: **%s** (`%s`)", title, bridge.ID)
+}
+
+func videoListFromParams(ctx context.Context, client *ringcentral.Client, params map[string]string) (string, int, error) {
+	list, err := client.ListVideoBridges(ctx)
+	if err != nil {
+		return "", 0, err
+	}
+	scope := strings.ToLower(strings.TrimSpace(params["scope"]))
+	important := strings.EqualFold(strings.TrimSpace(params["important"]), "true")
+	limit := parsePositiveInt(params["limit"])
+	bridges := filterVideoBridges(list.Records, scope, limit)
+	return formatVideoBridgeList(bridges, scope, important), len(bridges), nil
+}
+
+func filterVideoBridges(records []ringcentral.VideoBridge, scope string, limit int) []ringcentral.VideoBridge {
+	out := make([]ringcentral.VideoBridge, 0, len(records))
+	for _, bridge := range records {
+		if scope == "today" && !videoBridgeIsTodayOrUndated(bridge, time.Now()) {
+			continue
+		}
+		out = append(out, bridge)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func videoBridgeIsTodayOrUndated(bridge ringcentral.VideoBridge, now time.Time) bool {
+	for _, value := range []string{bridge.CreateTime, bridge.UpdateTime} {
+		if t, ok := parseRFC3339Time(value); ok {
+			y1, m1, d1 := t.In(now.Location()).Date()
+			y2, m2, d2 := now.Date()
+			return y1 == y2 && m1 == m2 && d1 == d2
+		}
+	}
+	return bridge.CreateTime == "" && bridge.UpdateTime == ""
+}
+
+func parseRFC3339Time(value string) (time.Time, bool) {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+func parsePositiveInt(value string) int {
+	var out int
+	if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &out); err != nil || out < 1 {
+		return 0
+	}
+	return out
+}
+
+func formatVideoBridgeList(bridges []ringcentral.VideoBridge, scope string, important bool) string {
+	if len(bridges) == 0 {
+		if scope == "today" {
+			return "No video meetings found for today."
+		}
+		return "No video meetings found."
+	}
+	header := "Video meetings"
+	if scope == "today" && important {
+		header = "Important video meetings today"
+	} else if scope == "today" {
+		header = "Video meetings today"
+	} else if scope == "recent" && important {
+		header = "Important recent video meetings"
+	} else if scope == "recent" {
+		header = "Recent video meetings"
+	} else if important {
+		header = "Important video meetings"
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**%s** (%d)\n", header, len(bridges)))
+	for _, bridge := range bridges {
+		name := strings.TrimSpace(bridge.Name)
+		if name == "" {
+			name = "Untitled meeting"
+		}
+		sb.WriteString(fmt.Sprintf("- `%s` **%s**", bridge.ID, name))
+		if bridge.Type != "" {
+			sb.WriteString(fmt.Sprintf(" [%s]", bridge.Type))
+		}
+		if bridge.CreateTime != "" {
+			sb.WriteString(fmt.Sprintf(" created=%s", bridge.CreateTime))
+		}
+		if bridge.Discovery.Web != "" {
+			sb.WriteString(fmt.Sprintf(" — %s", bridge.Discovery.Web))
+		}
+		sb.WriteByte('\n')
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func ringOutRequestFromParams(params map[string]string) (*ringcentral.CreateRingOutRequest, error) {
@@ -491,6 +629,163 @@ func ringOutRequestFromParams(params map[string]string) (*ringcentral.CreateRing
 		req.PlayPrompt = true
 	}
 	return req, nil
+}
+
+func phoneCallLogFromParams(ctx context.Context, client *ringcentral.Client, params map[string]string) (string, int, error) {
+	scope := strings.ToLower(strings.TrimSpace(params["scope"]))
+	opts := ringcentral.CallLogOptions{
+		RecordCount: parsePositiveInt(params["limit"]),
+		View:        strings.TrimSpace(params["view"]),
+		Direction:   strings.TrimSpace(params["direction"]),
+		Result:      strings.TrimSpace(params["result"]),
+	}
+	if opts.RecordCount == 0 {
+		opts.RecordCount = 10
+	}
+	if scope == "today" {
+		opts.DateFrom, opts.DateTo = todayRFC3339Range(time.Now())
+	}
+	list, err := client.ListExtensionCallLog(ctx, opts)
+	if err != nil {
+		return "", 0, err
+	}
+	records := filterPhoneCallLogRecords(list.Records, opts, scope, time.Now())
+	missing := truthyParam(params["missing"])
+	summary := truthyParam(params["summary"])
+	nextActions := truthyParam(params["next_actions"])
+	return formatPhoneCallLogSummary(records, scope, missing, summary, nextActions), len(records), nil
+}
+
+func todayRFC3339Range(now time.Time) (string, string) {
+	local := now.Local()
+	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+	end := start.Add(24*time.Hour - time.Nanosecond)
+	return start.Format(time.RFC3339), end.Format(time.RFC3339)
+}
+
+func filterPhoneCallLogRecords(records []ringcentral.CallLogRecord, opts ringcentral.CallLogOptions, scope string, now time.Time) []ringcentral.CallLogRecord {
+	out := make([]ringcentral.CallLogRecord, 0, len(records))
+	for _, rec := range records {
+		if opts.Direction != "" && !strings.EqualFold(strings.TrimSpace(rec.Direction), opts.Direction) {
+			continue
+		}
+		if opts.Result != "" && !strings.EqualFold(strings.TrimSpace(rec.Result), opts.Result) {
+			continue
+		}
+		if scope == "today" && !callLogRecordIsTodayOrUndated(rec, now) {
+			continue
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+func callLogRecordIsTodayOrUndated(rec ringcentral.CallLogRecord, now time.Time) bool {
+	if t, ok := parseRFC3339Time(rec.StartTime); ok {
+		y1, m1, d1 := t.In(now.Location()).Date()
+		y2, m2, d2 := now.Date()
+		return y1 == y2 && m1 == m2 && d1 == d2
+	}
+	return strings.TrimSpace(rec.StartTime) == ""
+}
+
+func truthyParam(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "y":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatPhoneCallLogSummary(records []ringcentral.CallLogRecord, scope string, missing bool, summary bool, nextActions bool) string {
+	if len(records) == 0 {
+		if scope == "today" {
+			return "No call log records found for today."
+		}
+		return "No call log records found."
+	}
+	stats := summarizeCallLogs(records)
+	header := "Call summary"
+	if scope == "today" {
+		header = "Call summary today"
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**%s**\n", header))
+	if summary || missing {
+		sb.WriteString(fmt.Sprintf("- Total calls: %d\n", len(records)))
+		sb.WriteString(fmt.Sprintf("- Missed calls: %d\n", stats.missed))
+		sb.WriteString(fmt.Sprintf("- Inbound: %d\n", stats.inbound))
+		sb.WriteString(fmt.Sprintf("- Outbound: %d\n", stats.outbound))
+		sb.WriteString(fmt.Sprintf("- Answered/accepted: %d\n", stats.answered))
+	}
+	sb.WriteString("\n**Calls**\n")
+	for _, rec := range records {
+		result := strings.TrimSpace(rec.Result)
+		if result == "" {
+			result = "Unknown"
+		}
+		sb.WriteString(fmt.Sprintf("- `%s` %s %s [%s] %s -> %s (%ds)\n",
+			rec.ID, rec.StartTime, rec.Direction, result, callLogPartyLabel(rec.From), callLogPartyLabel(rec.To), rec.Duration))
+	}
+	if nextActions {
+		sb.WriteString("\n**Next actions**\n")
+		if stats.missed == 0 {
+			sb.WriteString("- No missed-call follow-up needed.\n")
+		} else {
+			for _, rec := range records {
+				if strings.EqualFold(strings.TrimSpace(rec.Result), "Missed") {
+					sb.WriteString(fmt.Sprintf("- Follow up missed call from %s.\n", callLogPartyLabel(rec.From)))
+				}
+			}
+		}
+		if stats.outbound > 0 {
+			sb.WriteString("- Review outbound calls and add notes/tasks for open follow-ups.\n")
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+type callLogStats struct {
+	missed   int
+	inbound  int
+	outbound int
+	answered int
+}
+
+func summarizeCallLogs(records []ringcentral.CallLogRecord) callLogStats {
+	var stats callLogStats
+	for _, rec := range records {
+		if strings.EqualFold(strings.TrimSpace(rec.Direction), "Inbound") {
+			stats.inbound++
+		}
+		if strings.EqualFold(strings.TrimSpace(rec.Direction), "Outbound") {
+			stats.outbound++
+		}
+		result := strings.TrimSpace(rec.Result)
+		if strings.EqualFold(result, "Missed") {
+			stats.missed++
+		}
+		if strings.EqualFold(result, "Accepted") || strings.EqualFold(result, "Call connected") || strings.EqualFold(result, "Answered") {
+			stats.answered++
+		}
+	}
+	return stats
+}
+
+func callLogPartyLabel(p ringcentral.CallLogParty) string {
+	name := strings.TrimSpace(p.Name)
+	number := strings.TrimSpace(p.PhoneNumber)
+	switch {
+	case name != "" && number != "":
+		return fmt.Sprintf("%s (%s)", name, number)
+	case name != "":
+		return name
+	case number != "":
+		return number
+	default:
+		return "Unknown"
+	}
 }
 
 func isExtensionOnlyRingOutFrom(value string) bool {

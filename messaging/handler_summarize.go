@@ -47,6 +47,20 @@ func (h *Handler) classifyAndRoute(ctx context.Context, client *ringcentral.Clie
 	case IntentTask, IntentNote, IntentEvent:
 		h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		return true
+	case IntentVideo:
+		if !h.isCapabilityEnabled("video") {
+			logSendError(SendTextReply(ctx, client, post.GroupID, capabilityDisabledMessage("video")))
+			return true
+		}
+		h.sendToDefaultAgent(ctx, client, readClient, post, text)
+		return true
+	case IntentPhone:
+		if !h.isCapabilityEnabled("phone") {
+			logSendError(SendTextReply(ctx, client, post.GroupID, capabilityDisabledMessage("phone")))
+			return true
+		}
+		h.sendToDefaultAgent(ctx, client, readClient, post, text)
+		return true
 	default:
 		return false
 	}

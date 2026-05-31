@@ -274,7 +274,7 @@ func startRuntimeHeartbeat(ctx context.Context, opts runtimeStartOptions, cfg *c
 }
 
 func runtimeHeartbeatCapabilities(cfg *config.Config) []string {
-	out := []string{"message"}
+	out := []string{"message", "summary", "video", "phone", "call_log"}
 	for _, capability := range cfg.RC.Capabilities {
 		if strings.TrimSpace(capability) != "" && !containsRuntimeString(out, capability) {
 			out = append(out, capability)

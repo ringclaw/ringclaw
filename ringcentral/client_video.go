@@ -6,12 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 )
 
 // ListVideoBridges lists RingCentral Video meeting bridges for the authenticated extension.
 func (c *Client) ListVideoBridges(ctx context.Context) (*VideoBridgeList, error) {
-	resp, err := c.doRequest(ctx, http.MethodGet, "/rcvideo/v2/account/~/extension/~/bridges", "", nil)
+	resp, err := c.doRequest(ctx, http.MethodGet, videoBridgesEndpoint(), "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +33,7 @@ func (c *Client) CreateVideoBridge(ctx context.Context, req *CreateVideoBridgeRe
 	if err != nil {
 		return nil, fmt.Errorf("marshal video bridge: %w", err)
 	}
-	resp, err := c.doRequest(ctx, http.MethodPost, "/rcvideo/v2/account/~/extension/~/bridges", "application/json", bytes.NewReader(data))
+	resp, err := c.doRequest(ctx, http.MethodPost, videoBridgesEndpoint(), "application/json", bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +46,7 @@ func (c *Client) CreateVideoBridge(ctx context.Context, req *CreateVideoBridgeRe
 
 // GetVideoBridge retrieves a RingCentral Video bridge by ID.
 func (c *Client) GetVideoBridge(ctx context.Context, bridgeID string) (*VideoBridge, error) {
-	path := fmt.Sprintf("/rcvideo/v2/bridges/%s", url.PathEscape(bridgeID))
+	path := videoBridgeEndpoint(bridgeID)
 	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
 		return nil, err
@@ -68,7 +67,7 @@ func (c *Client) UpdateVideoBridge(ctx context.Context, bridgeID string, req *Up
 	if err != nil {
 		return nil, fmt.Errorf("marshal video bridge update: %w", err)
 	}
-	path := fmt.Sprintf("/rcvideo/v2/bridges/%s", url.PathEscape(bridgeID))
+	path := videoBridgeEndpoint(bridgeID)
 	resp, err := c.doRequest(ctx, http.MethodPatch, path, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -82,7 +81,7 @@ func (c *Client) UpdateVideoBridge(ctx context.Context, bridgeID string, req *Up
 
 // DeleteVideoBridge deletes a RingCentral Video bridge by ID.
 func (c *Client) DeleteVideoBridge(ctx context.Context, bridgeID string) error {
-	path := fmt.Sprintf("/rcvideo/v2/bridges/%s", url.PathEscape(bridgeID))
+	path := videoBridgeEndpoint(bridgeID)
 	_, err := c.doRequest(ctx, http.MethodDelete, path, "", nil)
 	return err
 }

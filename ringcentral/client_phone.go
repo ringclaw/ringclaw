@@ -19,7 +19,7 @@ func (c *Client) CreateRingOut(ctx context.Context, req *CreateRingOutRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("marshal ringout: %w", err)
 	}
-	resp, err := c.doRequest(ctx, http.MethodPost, "/restapi/v1.0/account/~/extension/~/ring-out", "application/json", bytes.NewReader(data))
+	resp, err := c.doRequest(ctx, http.MethodPost, ringOutsEndpoint(), "application/json", bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func (c *Client) CreateRingOut(ctx context.Context, req *CreateRingOutRequest) (
 
 // GetRingOut retrieves the status of an in-progress RingOut call.
 func (c *Client) GetRingOut(ctx context.Context, ringOutID string) (*RingOut, error) {
-	path := fmt.Sprintf("/restapi/v1.0/account/~/extension/~/ring-out/%s", url.PathEscape(ringOutID))
+	path := ringOutEndpoint(ringOutID)
 	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
 	if err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func (c *Client) GetRingOut(ctx context.Context, ringOutID string) (*RingOut, er
 
 // DeleteRingOut cancels a RingOut call while it is still in progress.
 func (c *Client) DeleteRingOut(ctx context.Context, ringOutID string) error {
-	path := fmt.Sprintf("/restapi/v1.0/account/~/extension/~/ring-out/%s", url.PathEscape(ringOutID))
+	path := ringOutEndpoint(ringOutID)
 	_, err := c.doRequest(ctx, http.MethodDelete, path, "", nil)
 	return err
 }
@@ -69,6 +69,9 @@ func (c *Client) ListExtensionCallLog(ctx context.Context, opts CallLogOptions) 
 	if opts.Direction != "" {
 		params.Set("direction", opts.Direction)
 	}
+	if opts.Result != "" {
+		params.Set("result", opts.Result)
+	}
 	if opts.Type != "" {
 		params.Set("type", opts.Type)
 	}
@@ -78,7 +81,7 @@ func (c *Client) ListExtensionCallLog(ctx context.Context, opts CallLogOptions) 
 	if opts.DateTo != "" {
 		params.Set("dateTo", opts.DateTo)
 	}
-	path := "/restapi/v1.0/account/~/extension/~/call-log"
+	path := extensionCallLogEndpoint()
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}

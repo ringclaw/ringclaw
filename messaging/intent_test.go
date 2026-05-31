@@ -40,11 +40,25 @@ func TestMatchesIntentTrigger(t *testing.T) {
 		{"schedule a meeting", true},
 		{"add event tomorrow 3pm", true},
 
+		// Should match — video
+		{"创建一个视频会议讨论发布计划", true},
+		{"帮我开一个明天的 RCV 会议", true},
+		{"create a video meeting for release planning", true},
+		{"schedule an RCV meeting tomorrow", true},
+
+		// Should match — phone
+		{"给 2123753080 打电话", true},
+		{"帮我外呼 +12123753080", true},
+		{"show my missed calls", true},
+		{"list recent call logs", true},
+
 		// Should NOT match — normal chat
 		{"hello", false},
 		{"what is the weather today", false},
 		{"help me write a function", false},
 		{"fix the bug in auth.go", false},
+		{"review this video file", false},
+		{"explain phone number formatting", false},
 		{"/cron list", false},
 		{"/task create something", false},
 		{"how are you", false},
@@ -97,11 +111,15 @@ func TestParseIntentReply(t *testing.T) {
 		{"Task", IntentTask},
 		{"note", IntentNote},
 		{"event", IntentEvent},
+		{"video", IntentVideo},
+		{"phone", IntentPhone},
 		{"chat", IntentChat},
 		{"Chat", IntentChat},
 		// Agent may add extra text
 		{"The intent is summarize.", IntentSummarize},
 		{"I think the intent is task.", IntentTask},
+		{"The primary intent is video.", IntentVideo},
+		{"The primary intent is phone.", IntentPhone},
 		{"This is a normal chat message.", IntentChat},
 		// Unrecognized -> chat
 		{"", IntentChat},
@@ -133,7 +151,7 @@ func (a *classifyIntentAgent) Chat(_ context.Context, _, _ string) (string, erro
 func (a *classifyIntentAgent) ResetSession(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (a *classifyIntentAgent) SetCwd(_ string)        {}
+func (a *classifyIntentAgent) SetCwd(_ string) {}
 func (a *classifyIntentAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "classify-test", Type: "test"}
 }
@@ -167,6 +185,22 @@ func TestClassifyIntent_Event(t *testing.T) {
 	intent := classifyIntent(context.Background(), ag, "schedule a meeting")
 	if intent != IntentEvent {
 		t.Errorf("expected IntentEvent, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_Video(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "video"}
+	intent := classifyIntent(context.Background(), ag, "创建一个视频会议")
+	if intent != IntentVideo {
+		t.Errorf("expected IntentVideo, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_Phone(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "phone"}
+	intent := classifyIntent(context.Background(), ag, "call +12123753080")
+	if intent != IntentPhone {
+		t.Errorf("expected IntentPhone, got %v", intent)
 	}
 }
 

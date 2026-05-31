@@ -151,6 +151,112 @@ func TestClassifyAndRoute_IntentEvent(t *testing.T) {
 	}
 }
 
+func TestClassifyAndRoute_IntentVideo(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	ag := &intentTestAgent{intentReply: "video", chatReply: "ACTION:VIDEO title=设计评审\nEND_ACTION"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+	h.SetCapabilities([]string{"message", "summary", "video", "phone"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	handled := h.classifyAndRoute(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"},
+		"创建一个视频会议讨论设计评审", false)
+	if !handled {
+		t.Fatal("expected video intent to be handled")
+	}
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a reply for video intent")
+	}
+}
+
+func TestClassifyAndRoute_IntentPhone(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	ag := &intentTestAgent{intentReply: "phone", chatReply: "ACTION:RINGOUT to=+12123753080\nEND_ACTION"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+	h.SetCapabilities([]string{"message", "summary", "video", "phone"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	handled := h.classifyAndRoute(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"},
+		"call +12123753080", false)
+	if !handled {
+		t.Fatal("expected phone intent to be handled")
+	}
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a reply for phone intent")
+	}
+}
+
+func TestClassifyAndRoute_IntentVideoAllowedByDefaultCapabilities(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	ag := &intentTestAgent{intentReply: "video", chatReply: "video routed"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+	h.SetCapabilities([]string{"message", "summary", "phone"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	handled := h.classifyAndRoute(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"},
+		"create a video meeting", false)
+	if !handled {
+		t.Fatal("expected video intent to be handled")
+	}
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 || strings.Contains(got[len(got)-1], "Video capability is not enabled") {
+		t.Fatalf("video should be enabled by default, got %v", got)
+	}
+	if !strings.Contains(got[len(got)-1], "video routed") {
+		t.Fatalf("expected video route to default agent, got %v", got)
+	}
+}
+
+func TestClassifyAndRoute_IntentPhoneAllowedByDefaultCapabilities(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	ag := &intentTestAgent{intentReply: "phone", chatReply: "phone routed"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+	h.SetCapabilities([]string{"message", "summary", "video"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	handled := h.classifyAndRoute(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"},
+		"给 +12123753080 打电话", false)
+	if !handled {
+		t.Fatal("expected phone intent to be handled")
+	}
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 || strings.Contains(got[len(got)-1], "Phone capability is not enabled") {
+		t.Fatalf("phone should be enabled by default, got %v", got)
+	}
+	if !strings.Contains(got[len(got)-1], "phone routed") {
+		t.Fatalf("expected phone route to default agent, got %v", got)
+	}
+}
+
 func TestClassifyAndRoute_IntentChat(t *testing.T) {
 	ag := &intentTestAgent{intentReply: "chat", chatReply: "hello"}
 	h := newTestHandler()
@@ -609,8 +715,8 @@ func TestExecuteSummarize_NonBotWraps(t *testing.T) {
 // turn into a phantom empty post.
 func TestExecuteSummarize_EmptyReplyDeletesPlaceholder(t *testing.T) {
 	var (
-		patchedTexts    []string
-		deletedPostIDs  []string
+		patchedTexts   []string
+		deletedPostIDs []string
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -689,7 +795,7 @@ func (a *errorAgent) Chat(_ context.Context, _, _ string) (string, error) { retu
 func (a *errorAgent) ResetSession(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (a *errorAgent) SetCwd(_ string)        {}
+func (a *errorAgent) SetCwd(_ string) {}
 func (a *errorAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "error-agent", Type: "test"}
 }

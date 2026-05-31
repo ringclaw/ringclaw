@@ -777,6 +777,40 @@ END_ACTION`
 	}
 }
 
+func TestParseAgentActions_VideoListParams(t *testing.T) {
+	reply := `ACTION:VIDEO_LIST scope=today important=true limit=5
+END_ACTION`
+
+	_, actions := ParseAgentActions(reply)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if actions[0].Type != "VIDEO_LIST" ||
+		actions[0].Params["scope"] != "today" ||
+		actions[0].Params["important"] != "true" ||
+		actions[0].Params["limit"] != "5" {
+		t.Fatalf("unexpected video list action: %+v", actions[0])
+	}
+}
+
+func TestParseAgentActions_PhoneCallLogParams(t *testing.T) {
+	reply := `ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
+END_ACTION`
+
+	_, actions := ParseAgentActions(reply)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if actions[0].Type != "PHONE_CALLLOG" ||
+		actions[0].Params["scope"] != "today" ||
+		actions[0].Params["missing"] != "true" ||
+		actions[0].Params["summary"] != "true" ||
+		actions[0].Params["next_actions"] != "true" ||
+		actions[0].Params["limit"] != "10" {
+		t.Fatalf("unexpected phone call log action: %+v", actions[0])
+	}
+}
+
 func TestExecuteAgentActions_VideoCreatesBridgeAndPostsLink(t *testing.T) {
 	var posted bool
 	var recorded []ActionEvent
@@ -841,14 +875,144 @@ func TestExecuteAgentActions_VideoCreatesBridgeAndPostsLink(t *testing.T) {
 	}
 }
 
-func TestExecuteAgentActions_VideoBlockedWhenCapabilityDisabled(t *testing.T) {
+func TestExecuteAgentActions_PhoneCallLogTodayPostsSummaryAndNextActions(t *testing.T) {
+	var posted string
+	var listed bool
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/call-log":
+			listed = true
+			q := r.URL.Query()
+			if q.Get("recordCount") != "10" || q.Get("dateFrom") == "" || q.Get("dateTo") == "" {
+				t.Fatalf("expected today call-log query, got %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.CallLogList{
+				Records: []ringcentral.CallLogRecord{
+					{
+						ID:        "missed-1",
+						StartTime: time.Now().UTC().Format(time.RFC3339),
+						Direction: "Inbound",
+						Result:    "Missed",
+						From:      ringcentral.CallLogParty{PhoneNumber: "+12125550100", Name: "Customer A"},
+						To:        ringcentral.CallLogParty{PhoneNumber: "+14155550100"},
+					},
+					{
+						ID:        "answered-1",
+						StartTime: time.Now().UTC().Format(time.RFC3339),
+						Direction: "Outbound",
+						Result:    "Accepted",
+						Duration:  320,
+						From:      ringcentral.CallLogParty{PhoneNumber: "+14155550100"},
+						To:        ringcentral.CallLogParty{PhoneNumber: "+12125550199", Name: "Partner B"},
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			var body ringcentral.CreatePostRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post request: %v", err)
+			}
+			posted = body.Text
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type: "PHONE_CALLLOG",
+		Params: map[string]string{
+			"scope":        "today",
+			"missing":      "true",
+			"summary":      "true",
+			"next_actions": "true",
+			"limit":        "10",
+		},
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if !listed {
+		t.Fatal("expected call log API call")
+	}
+	if !strings.Contains(posted, "Call summary today") ||
+		!strings.Contains(posted, "Missed calls: 1") ||
+		!strings.Contains(posted, "Customer A") ||
+		!strings.Contains(posted, "Next actions") {
+		t.Fatalf("unexpected posted call summary: %q", posted)
+	}
+}
+
+func TestExecuteAgentActions_VideoListTodayPostsImportantMeetings(t *testing.T) {
+	var posted string
+	var listed bool
+	now := time.Now().UTC().Format(time.RFC3339)
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges":
+			listed = true
+			json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
+				Records: []ringcentral.VideoBridge{{
+					ID:         "bridge-1",
+					Name:       "客户升级复盘",
+					Type:       "Scheduled",
+					CreateTime: now,
+					Discovery:  ringcentral.VideoBridgeDiscovery{Web: "https://v.ringcentral.com/join/important"},
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			var body ringcentral.CreatePostRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post request: %v", err)
+			}
+			posted = body.Text
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "VIDEO_LIST",
+		Params: map[string]string{"scope": "today", "important": "true", "limit": "5"},
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if !listed {
+		t.Fatal("expected Video list API call")
+	}
+	if !strings.Contains(posted, "Important video meetings today") ||
+		!strings.Contains(posted, "客户升级复盘") ||
+		!strings.Contains(posted, "https://v.ringcentral.com/join/important") {
+		t.Fatalf("unexpected posted video list: %q", posted)
+	}
+}
+
+func TestExecuteAgentActions_VideoAllowedByDefaultCapabilities(t *testing.T) {
 	var recorded []ActionEvent
 	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
 		recorded = append(recorded, event)
 	})
 	defer restore()
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("disabled VIDEO action should not call API: %s %s", r.Method, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges":
+			json.NewEncoder(w).Encode(ringcentral.VideoBridge{
+				ID:        "bridge-1",
+				Name:      "Design Review",
+				Discovery: ringcentral.VideoBridgeDiscovery{Web: "https://v.ringcentral.com/join/123"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
 	})
 	defer srv.Close()
 
@@ -859,14 +1023,11 @@ func TestExecuteAgentActions_VideoBlockedWhenCapabilityDisabled(t *testing.T) {
 		OriginIsOwner: true,
 		Capabilities:  []string{"message", "summary"},
 	})
-	if len(results) != 1 || !strings.Contains(results[0], "Video capability is not enabled") {
-		t.Fatalf("expected video capability refusal, got %+v", results)
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
 	}
-	if len(recorded) != 1 || recorded[0].Type != "VIDEO" || recorded[0].Status != "blocked" {
+	if len(recorded) != 1 || recorded[0].Type != "VIDEO" || recorded[0].Status != "completed" {
 		t.Fatalf("recorded events = %#v", recorded)
-	}
-	if recorded[0].Details["reason"] != "capability_disabled" {
-		t.Fatalf("recorded details = %#v", recorded[0].Details)
 	}
 }
 
@@ -896,32 +1057,36 @@ func TestExecuteAgentActions_RingOutRequiresOwner(t *testing.T) {
 	}
 }
 
-func TestExecuteAgentActions_RingOutBlockedWhenPhoneCapabilityDisabled(t *testing.T) {
+func TestExecuteAgentActions_RingOutAllowedByDefaultCapabilities(t *testing.T) {
 	var recorded []ActionEvent
 	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
 		recorded = append(recorded, event)
 	})
 	defer restore()
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("disabled RINGOUT action should not call API: %s %s", r.Method, r.URL.Path)
+		if r.Method != http.MethodPost || r.URL.Path != "/restapi/v1.0/account/~/extension/~/ring-out" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.RingOut{
+			ID:     "ringout-1",
+			Status: ringcentral.RingOutStatus{CallStatus: "InProgress"},
+		})
 	})
 	defer srv.Close()
 
 	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
 		Type:   "RINGOUT",
-		Params: map[string]string{"from": "+14155550100", "to": "+14155550199"},
+		Params: map[string]string{"to": "+14155550199"},
 	}}, ActionContext{
 		OriginIsOwner: true,
 		Capabilities:  []string{"message", "summary", "video"},
 	})
-	if len(results) != 1 || !strings.Contains(results[0], "Phone capability is not enabled") {
-		t.Fatalf("expected phone capability refusal, got %+v", results)
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
 	}
-	if len(recorded) != 1 || recorded[0].Type != "RINGOUT" || recorded[0].Status != "blocked" {
+	if len(recorded) != 1 || recorded[0].Type != "RINGOUT" || recorded[0].Status != "completed" {
 		t.Fatalf("recorded events = %#v", recorded)
-	}
-	if recorded[0].Details["reason"] != "capability_disabled" {
-		t.Fatalf("recorded details = %#v", recorded[0].Details)
 	}
 }
 

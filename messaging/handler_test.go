@@ -1174,15 +1174,17 @@ func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
 	var mu sync.Mutex
 	var sentTexts []string
 	var listedVideo bool
+	now := time.Now().UTC().Format(time.RFC3339)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges" {
 			listedVideo = true
 			_ = json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
 				Records: []ringcentral.VideoBridge{{
-					ID:   "bridge-1",
-					Name: "明天12点会议",
-					Type: "Scheduled",
+					ID:         "bridge-1",
+					Name:       "客户升级复盘",
+					Type:       "Scheduled",
+					CreateTime: now,
 					Discovery: ringcentral.VideoBridgeDiscovery{
 						Web: "https://v.ringcentral.com/join/123",
 					},
@@ -1204,6 +1206,10 @@ func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
 	defer srv.Close()
 
 	h := NewHandler(nil, nil, "test")
+	h.SetDefaultAgent("test", &intentTestAgent{
+		intentReply: "video",
+		chatReply:   "ACTION:VIDEO_LIST scope=today important=true limit=5\nEND_ACTION",
+	})
 	h.SetCapabilities([]string{"message", "summary", "video"})
 	client := ringcentral.NewBotClient(srv.URL, "token")
 	client.SetOwnerID("bot-1")
@@ -1213,7 +1219,7 @@ func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
 		ID:        "upcoming-video-meetings-1",
 		GroupID:   "dm-1",
 		CreatorID: "user-1",
-		Text:      "获取我将来的会议",
+		Text:      "告诉我今天有啥重要会议",
 	})
 
 	if !listedVideo {
@@ -1222,8 +1228,78 @@ func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
 	if len(sentTexts) == 0 {
 		t.Fatal("expected a video list reply")
 	}
-	if !strings.Contains(sentTexts[0], "明天12点会议") || !strings.Contains(sentTexts[0], "https://v.ringcentral.com/join/123") {
-		t.Fatalf("expected video meeting in reply, got %q", sentTexts[0])
+	got := sentTexts[len(sentTexts)-1]
+	if !strings.Contains(got, "Important video meetings today") ||
+		!strings.Contains(got, "客户升级复盘") ||
+		!strings.Contains(got, "https://v.ringcentral.com/join/123") {
+		t.Fatalf("expected important video meeting in reply, got %q", got)
+	}
+}
+
+func TestHandleMessage_TodayCallLogSummaryUsesPhoneCallLogAction(t *testing.T) {
+	var mu sync.Mutex
+	var sentTexts []string
+	var listedCallLog bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/call-log" {
+			listedCallLog = true
+			if r.URL.Query().Get("dateFrom") == "" || r.URL.Query().Get("dateTo") == "" {
+				t.Fatalf("expected today call-log query, got %s", r.URL.RawQuery)
+			}
+			_ = json.NewEncoder(w).Encode(ringcentral.CallLogList{
+				Records: []ringcentral.CallLogRecord{{
+					ID:        "missed-1",
+					StartTime: time.Now().UTC().Format(time.RFC3339),
+					Direction: "Inbound",
+					Result:    "Missed",
+					From:      ringcentral.CallLogParty{Name: "Customer A", PhoneNumber: "+12125550100"},
+					To:        ringcentral.CallLogParty{PhoneNumber: "+14155550100"},
+				}},
+			})
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts") {
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			mu.Lock()
+			sentTexts = append(sentTexts, req["text"])
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetDefaultAgent("test", &intentTestAgent{
+		intentReply: "phone",
+		chatReply:   "ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10\nEND_ACTION",
+	})
+	h.SetCapabilities([]string{"message", "summary", "phone"})
+	client := ringcentral.NewBotClient(srv.URL, "token")
+	client.SetOwnerID("bot-1")
+	client.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), client, client, ringcentral.Post{
+		ID:        "today-call-log-summary-1",
+		GroupID:   "dm-1",
+		CreatorID: "user-1",
+		Text:      "查询我今天call log，帮我整理下call summary，以及我接下来的action。",
+	})
+
+	if !listedCallLog {
+		t.Fatal("expected call log API call")
+	}
+	if len(sentTexts) == 0 {
+		t.Fatal("expected a call summary reply")
+	}
+	got := sentTexts[len(sentTexts)-1]
+	if !strings.Contains(got, "Call summary today") ||
+		!strings.Contains(got, "Missed calls: 1") ||
+		!strings.Contains(got, "Next actions") {
+		t.Fatalf("expected call summary with next actions, got %q", got)
 	}
 }
 
@@ -2131,7 +2207,7 @@ func TestHandleMessage_PhoneUsesActionCommandPathLikeMessage(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_VideoCommandBlockedWhenCapabilityDisabled(t *testing.T) {
+func TestHandleMessage_VideoCommandAllowedByDefaultCapabilities(t *testing.T) {
 	srv, sentTexts := newTestRC(t)
 	defer srv.Close()
 
@@ -2150,14 +2226,17 @@ func TestHandleMessage_VideoCommandBlockedWhenCapabilityDisabled(t *testing.T) {
 
 	got := getSentTexts(sentTexts)
 	if len(got) == 0 {
-		t.Fatal("expected a capability disabled reply")
+		t.Fatal("expected a video reply")
 	}
-	if !strings.Contains(got[0], "Video capability is not enabled") {
-		t.Errorf("expected video capability gate, got %q", got[0])
+	if strings.Contains(got[0], "Video capability is not enabled") {
+		t.Errorf("video should be enabled by default, got %q", got[0])
+	}
+	if !strings.Contains(got[0], "Video meeting created") {
+		t.Errorf("expected video command to reach action handler, got %q", got[0])
 	}
 }
 
-func TestHandleMessage_PhoneRingOutCommandBlockedWhenCapabilityDisabled(t *testing.T) {
+func TestHandleMessage_PhoneRingOutCommandAllowedByDefaultCapabilities(t *testing.T) {
 	srv, sentTexts := newTestRC(t)
 	defer srv.Close()
 
@@ -2176,10 +2255,13 @@ func TestHandleMessage_PhoneRingOutCommandBlockedWhenCapabilityDisabled(t *testi
 
 	got := getSentTexts(sentTexts)
 	if len(got) == 0 {
-		t.Fatal("expected a capability disabled reply")
+		t.Fatal("expected a phone reply")
 	}
-	if !strings.Contains(got[0], "Phone capability is not enabled") {
-		t.Errorf("expected phone capability gate, got %q", got[0])
+	if strings.Contains(got[0], "Phone capability is not enabled") {
+		t.Errorf("phone should be enabled by default, got %q", got[0])
+	}
+	if !strings.Contains(got[0], "RingOut started") {
+		t.Errorf("expected phone command to reach action handler, got %q", got[0])
 	}
 }
 
@@ -2235,6 +2317,21 @@ func TestHandleMessage_VideoCommandAllowedWithVideoCapability(t *testing.T) {
 	}
 	if !strings.Contains(got[0], "Video meeting created") {
 		t.Errorf("expected video command to reach action handler, got %q", got[0])
+	}
+}
+
+func TestHandlerCapabilities_DefaultVideoPhoneEnabled(t *testing.T) {
+	h := newTestHandler()
+	h.SetCapabilities([]string{"message", "summary"})
+
+	if !h.isCapabilityEnabled("video") {
+		t.Fatal("video should be enabled by default")
+	}
+	if !h.isCapabilityEnabled("phone") {
+		t.Fatal("phone should be enabled by default")
+	}
+	if !h.isCapabilityEnabled("call_log") {
+		t.Fatal("call_log should be enabled by default through phone")
 	}
 }
 

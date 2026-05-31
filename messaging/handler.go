@@ -19,6 +19,8 @@ import (
 
 const maxSeenMsgs = 10000
 
+var defaultEnabledCapabilities = []string{"message", "summary", "video", "phone", "call_log"}
+
 // AgentFactory creates an agent by config name. Returns nil if the name is unknown.
 type AgentFactory func(ctx context.Context, name string) agent.Agent
 
@@ -219,18 +221,15 @@ func (h *Handler) SetConversationNamespace(namespace string) {
 }
 
 // SetCapabilities installs the AVA/RingClaw runtime capabilities selected at
-// onboarding. An empty list preserves legacy behavior and allows all optional
-// actions, so existing hand-written configs keep working.
+// onboarding. Video and phone are product-default capabilities; scopes and
+// RingCentral permissions still decide whether the backing API call succeeds.
 func (h *Handler) SetCapabilities(capabilities []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(capabilities) == 0 {
-		h.enabledCapabilities = nil
-		return
+	enabled := make(map[string]bool, len(capabilities)+len(defaultEnabledCapabilities))
+	for _, capability := range defaultEnabledCapabilities {
+		enabled[capability] = true
 	}
-	enabled := make(map[string]bool, len(capabilities)+2)
-	enabled["message"] = true
-	enabled["summary"] = true
 	for _, capability := range capabilities {
 		capability = strings.ToLower(strings.TrimSpace(capability))
 		if capability != "" {
@@ -741,15 +740,6 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			return
 		}
 		logSendError(SendTextReply(ctx, client, chatID, HandleActionCommand(ctx, readClient, chatID, text)))
-		return
-	}
-
-	if matchesVideoMeetingListIntent(text) {
-		if !h.isCapabilityEnabled("video") {
-			logSendError(SendTextReply(ctx, client, chatID, capabilityDisabledMessage("video")))
-			return
-		}
-		logSendError(SendTextReply(ctx, client, chatID, HandleActionCommand(ctx, readClient, chatID, "/video list")))
 		return
 	}
 

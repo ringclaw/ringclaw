@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultServerURL = "https://platform.ringcentral.com"
+	defaultServerURL = "https://platform-xmrupxmn.int.rclabenv.com"
 	requestTimeout   = 30 * time.Second
 )
 
@@ -147,7 +147,7 @@ func (c *Client) SendPost(ctx context.Context, chatID, text string) (*Post, erro
 		return nil, fmt.Errorf("marshal post: %w", err)
 	}
 
-	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts", chatID)
+	path := teamMessagingChatPostsEndpoint(chatID)
 	respBody, err := c.doRequest(ctx, http.MethodPost, path, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -169,7 +169,7 @@ func (c *Client) UpdatePost(ctx context.Context, chatID, postID, text string) (*
 		return nil, fmt.Errorf("marshal update: %w", err)
 	}
 
-	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts/%s", chatID, postID)
+	path := teamMessagingChatPostEndpoint(chatID, postID)
 	respBody, err := c.doRequest(ctx, http.MethodPatch, path, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -184,7 +184,7 @@ func (c *Client) UpdatePost(ctx context.Context, chatID, postID, text string) (*
 
 // DeletePost deletes a post by ID.
 func (c *Client) DeletePost(ctx context.Context, chatID, postID string) error {
-	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts/%s", chatID, postID)
+	path := teamMessagingChatPostEndpoint(chatID, postID)
 	_, err := c.doRequest(ctx, http.MethodDelete, path, "", nil)
 	return err
 }
