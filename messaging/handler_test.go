@@ -2074,6 +2074,139 @@ func TestHandleMessage_PhoneUsesActionCommandPathLikeMessage(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_VideoCommandBlockedWhenCapabilityDisabled(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetCapabilities([]string{"message", "summary"})
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "video-disabled-1",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/video create Design Review",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a capability disabled reply")
+	}
+	if !strings.Contains(got[0], "Video capability is not enabled") {
+		t.Errorf("expected video capability gate, got %q", got[0])
+	}
+}
+
+func TestHandleMessage_PhoneRingOutCommandBlockedWhenCapabilityDisabled(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetCapabilities([]string{"message", "summary", "video"})
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "phone-disabled-1",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/phone ringout +14155550100 +14155550199",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a capability disabled reply")
+	}
+	if !strings.Contains(got[0], "Phone capability is not enabled") {
+		t.Errorf("expected phone capability gate, got %q", got[0])
+	}
+}
+
+func TestHandleMessage_PhoneCallLogAllowedWithCallLogCapability(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetCapabilities([]string{"message", "summary", "call_log"})
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "phone-calllog-1",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/phone calllog direction=Outbound",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a call log reply")
+	}
+	if strings.Contains(got[0], "Phone capability is not enabled") {
+		t.Fatalf("call_log capability should allow /phone calllog, got %q", got[0])
+	}
+	if !strings.Contains(got[0], "No call log records") {
+		t.Errorf("expected call log command to reach action handler, got %q", got[0])
+	}
+}
+
+func TestHandleMessage_VideoCommandAllowedWithVideoCapability(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetCapabilities([]string{"message", "summary", "video"})
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "video-enabled-1",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/video create Design Review",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a video reply")
+	}
+	if !strings.Contains(got[0], "Video meeting created") {
+		t.Errorf("expected video command to reach action handler, got %q", got[0])
+	}
+}
+
+func TestHandleMessage_PhoneRingOutCommandAllowedWithPhoneCapability(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetCapabilities([]string{"message", "summary", "phone"})
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "phone-enabled-1",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/phone ringout +14155550100 +14155550199",
+	})
+
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a phone reply")
+	}
+	if !strings.Contains(got[0], "RingOut started") {
+		t.Errorf("expected phone command to reach action handler, got %q", got[0])
+	}
+}
+
 // --- HandleMessage: multi-agent broadcast usage error ---
 
 func TestHandleMessage_MultiAgentNoMessage(t *testing.T) {

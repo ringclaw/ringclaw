@@ -167,6 +167,9 @@ type ActionContext struct {
 	OwnerDMChat   string
 	RequesterID   string
 	OwnerID       string
+	// Capabilities is the runtime capability set selected during onboarding.
+	// Empty means legacy behavior: allow all optional actions.
+	Capabilities []string
 }
 
 // ExecuteAgentActions executes parsed actions against the RC API.
@@ -179,6 +182,11 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				Status:  status,
 				Details: actionEventDetails(chatID, targetChat, crossChat, extra),
 			})
+		}
+		if capability := actionCapability(a.Type); capability != "" && !isActionCapabilityAllowed(opts.Capabilities, capability) {
+			record("blocked", "", false, map[string]any{"reason": "capability_disabled", "capability": capability})
+			results = append(results, capabilityDisabledMessage(capability))
+			continue
 		}
 		if a.Type == "RINGOUT" {
 			if !opts.OriginIsOwner {
@@ -415,6 +423,30 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		}
 	}
 	return results
+}
+
+func actionCapability(actionType string) string {
+	switch strings.ToUpper(strings.TrimSpace(actionType)) {
+	case "VIDEO":
+		return "video"
+	case "RINGOUT":
+		return "phone"
+	default:
+		return ""
+	}
+}
+
+func isActionCapabilityAllowed(capabilities []string, capability string) bool {
+	if len(capabilities) == 0 {
+		return true
+	}
+	capability = strings.ToLower(strings.TrimSpace(capability))
+	for _, item := range capabilities {
+		if strings.EqualFold(strings.TrimSpace(item), capability) {
+			return true
+		}
+	}
+	return false
 }
 
 func formatVideoBridgeMessage(bridge *ringcentral.VideoBridge) string {

@@ -54,6 +54,7 @@ type Handler struct {
 
 	groupSummaryGroupID      string
 	groupSummaryMessageLimit int
+	enabledCapabilities      map[string]bool
 
 	// trustedSenders is the set of user IDs allowed to drive the agent.
 	// Mirrors the Monitor's allowlist as a defense-in-depth check so callers
@@ -215,6 +216,57 @@ func (h *Handler) SetConversationNamespace(namespace string) {
 	h.mu.Lock()
 	h.conversationNamespace = strings.TrimSpace(namespace)
 	h.mu.Unlock()
+}
+
+// SetCapabilities installs the AVA/RingClaw runtime capabilities selected at
+// onboarding. An empty list preserves legacy behavior and allows all optional
+// actions, so existing hand-written configs keep working.
+func (h *Handler) SetCapabilities(capabilities []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(capabilities) == 0 {
+		h.enabledCapabilities = nil
+		return
+	}
+	enabled := make(map[string]bool, len(capabilities)+2)
+	enabled["message"] = true
+	enabled["summary"] = true
+	for _, capability := range capabilities {
+		capability = strings.ToLower(strings.TrimSpace(capability))
+		if capability != "" {
+			enabled[capability] = true
+		}
+	}
+	h.enabledCapabilities = enabled
+}
+
+func (h *Handler) isCapabilityEnabled(capability string) bool {
+	capability = strings.ToLower(strings.TrimSpace(capability))
+	if capability == "" || capability == "message" || capability == "summary" {
+		return true
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.enabledCapabilities == nil {
+		return true
+	}
+	if capability == "call_log" {
+		return h.enabledCapabilities["call_log"] || h.enabledCapabilities["phone"]
+	}
+	return h.enabledCapabilities[capability]
+}
+
+func (h *Handler) actionCapabilities() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.enabledCapabilities == nil {
+		return nil
+	}
+	out := make([]string, 0, len(h.enabledCapabilities))
+	for capability := range h.enabledCapabilities {
+		out = append(out, capability)
+	}
+	return out
 }
 
 // PersonaLoader returns the installed loader (or nil). Used by the
@@ -684,6 +736,10 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 
 	// Explicit action commands: /task, /note, /event (use readClient for API access)
 	if IsActionCommand(text) {
+		if capability := actionCommandCapability(text); capability != "" && !h.isCapabilityEnabled(capability) {
+			logSendError(SendTextReply(ctx, client, chatID, capabilityDisabledMessage(capability)))
+			return
+		}
 		logSendError(SendTextReply(ctx, client, chatID, HandleActionCommand(ctx, readClient, chatID, text)))
 		return
 	}
@@ -947,6 +1003,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			OwnerDMChat:   h.OwnerDMChatID(),
 			RequesterID:   post.CreatorID,
 			OwnerID:       ownerID,
+			Capabilities:  h.actionCapabilities(),
 		})
 		if len(results) > 0 {
 			defer func() {

@@ -721,6 +721,35 @@ func TestExecuteAgentActions_VideoCreatesBridgeAndPostsLink(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_VideoBlockedWhenCapabilityDisabled(t *testing.T) {
+	var recorded []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		recorded = append(recorded, event)
+	})
+	defer restore()
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("disabled VIDEO action should not call API: %s %s", r.Method, r.URL.Path)
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "VIDEO",
+		Params: map[string]string{"title": "Design Review"},
+	}}, ActionContext{
+		OriginIsOwner: true,
+		Capabilities:  []string{"message", "summary"},
+	})
+	if len(results) != 1 || !strings.Contains(results[0], "Video capability is not enabled") {
+		t.Fatalf("expected video capability refusal, got %+v", results)
+	}
+	if len(recorded) != 1 || recorded[0].Type != "VIDEO" || recorded[0].Status != "blocked" {
+		t.Fatalf("recorded events = %#v", recorded)
+	}
+	if recorded[0].Details["reason"] != "capability_disabled" {
+		t.Fatalf("recorded details = %#v", recorded[0].Details)
+	}
+}
+
 func TestExecuteAgentActions_RingOutRequiresOwner(t *testing.T) {
 	var recorded []ActionEvent
 	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
@@ -743,6 +772,35 @@ func TestExecuteAgentActions_RingOutRequiresOwner(t *testing.T) {
 		t.Fatalf("recorded events = %#v", recorded)
 	}
 	if recorded[0].Details["reason"] != "owner_required" {
+		t.Fatalf("recorded details = %#v", recorded[0].Details)
+	}
+}
+
+func TestExecuteAgentActions_RingOutBlockedWhenPhoneCapabilityDisabled(t *testing.T) {
+	var recorded []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		recorded = append(recorded, event)
+	})
+	defer restore()
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("disabled RINGOUT action should not call API: %s %s", r.Method, r.URL.Path)
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "RINGOUT",
+		Params: map[string]string{"from": "+14155550100", "to": "+14155550199"},
+	}}, ActionContext{
+		OriginIsOwner: true,
+		Capabilities:  []string{"message", "summary", "video"},
+	})
+	if len(results) != 1 || !strings.Contains(results[0], "Phone capability is not enabled") {
+		t.Fatalf("expected phone capability refusal, got %+v", results)
+	}
+	if len(recorded) != 1 || recorded[0].Type != "RINGOUT" || recorded[0].Status != "blocked" {
+		t.Fatalf("recorded events = %#v", recorded)
+	}
+	if recorded[0].Details["reason"] != "capability_disabled" {
 		t.Fatalf("recorded details = %#v", recorded[0].Details)
 	}
 }

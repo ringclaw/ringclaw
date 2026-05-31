@@ -26,6 +26,37 @@ func IsActionCommand(text string) bool {
 	return false
 }
 
+func actionCommandCapability(text string) string {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(text)))
+	if len(fields) == 0 {
+		return ""
+	}
+	switch fields[0] {
+	case "/video":
+		return "video"
+	case "/phone":
+		if len(fields) > 1 && fields[1] == "calllog" {
+			return "call_log"
+		}
+		return "phone"
+	default:
+		return ""
+	}
+}
+
+func capabilityDisabledMessage(capability string) string {
+	switch strings.ToLower(strings.TrimSpace(capability)) {
+	case "video":
+		return "Video capability is not enabled for this AVA bot. Enable Video during onboarding and verify the Private JWT App has the Video scope."
+	case "phone":
+		return "Phone capability is not enabled for this AVA bot. Enable Phone during onboarding and verify the Private JWT App has RingOut and ReadCallLog scopes."
+	case "call_log":
+		return "Call log capability is not enabled for this AVA bot. Enable Phone during onboarding or verify the Private JWT App has the ReadCallLog scope."
+	default:
+		return fmt.Sprintf("%s capability is not enabled for this AVA bot.", capability)
+	}
+}
+
 // HandleActionCommand routes RingCentral resource commands.
 func HandleActionCommand(ctx context.Context, client *ringcentral.Client, chatID, text string) string {
 	parts := strings.Fields(text)
