@@ -744,6 +744,15 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		return
 	}
 
+	if matchesVideoMeetingListIntent(text) {
+		if !h.isCapabilityEnabled("video") {
+			logSendError(SendTextReply(ctx, client, chatID, capabilityDisabledMessage("video")))
+			return
+		}
+		logSendError(SendTextReply(ctx, client, chatID, HandleActionCommand(ctx, readClient, chatID, "/video list")))
+		return
+	}
+
 	// AI intent classification: if the message matches loose multilingual keywords,
 	// ask the default agent to classify the intent before routing.
 	if matchesIntentTrigger(text) {

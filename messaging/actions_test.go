@@ -161,6 +161,44 @@ func TestHandleActionCommand_VideoCreate(t *testing.T) {
 	}
 }
 
+func TestHandleActionCommand_VideoList(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/rcvideo/v2/account/~/extension/~/bridges" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
+			Records: []ringcentral.VideoBridge{{
+				ID:   "bridge-1",
+				Name: "明天12点会议",
+				Type: "Scheduled",
+				Discovery: ringcentral.VideoBridgeDiscovery{
+					Web: "https://v.ringcentral.com/join/123",
+				},
+			}},
+		})
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/video list")
+	if !strings.Contains(result, "bridge-1") || !strings.Contains(result, "明天12点会议") || !strings.Contains(result, "https://v.ringcentral.com/join/123") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestHandleActionCommand_VideoPermissionErrorIsActionable(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errorCode":"InsufficientPermissions","message":"In order to call this API endpoint, application needs to have [Video] permission","permissionName":"Video"}`))
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/video list")
+	if !strings.Contains(result, "Private JWT App") || !strings.Contains(result, "Video") {
+		t.Fatalf("expected actionable Video permission message, got %q", result)
+	}
+}
+
 func TestHandleActionCommand_VideoCreateKeepsTitleWordsAfterType(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/rcvideo/v2/account/~/extension/~/bridges" {

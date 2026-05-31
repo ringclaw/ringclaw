@@ -9,6 +9,19 @@ import (
 	"net/url"
 )
 
+// ListVideoBridges lists RingCentral Video meeting bridges for the authenticated extension.
+func (c *Client) ListVideoBridges(ctx context.Context) (*VideoBridgeList, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/rcvideo/v2/account/~/extension/~/bridges", "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var list VideoBridgeList
+	if err := json.Unmarshal(resp, &list); err != nil {
+		return nil, fmt.Errorf("parse video bridge list: %w", err)
+	}
+	return &list, nil
+}
+
 // CreateVideoBridge creates a RingCentral Video meeting bridge.
 func (c *Client) CreateVideoBridge(ctx context.Context, req *CreateVideoBridgeRequest) (*VideoBridge, error) {
 	if req == nil {

@@ -67,6 +67,20 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 				},
 			})
 
+		case r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges":
+			record("video-list")
+			requireBearer(t, r)
+			json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
+				Records: []ringcentral.VideoBridge{{
+					ID:   "bridge-e2e",
+					Name: "E2E Bridge",
+					Type: "Scheduled",
+					Discovery: ringcentral.VideoBridgeDiscovery{
+						Web: "https://v.ringcentral.com/join/e2e",
+					},
+				}},
+			})
+
 		case r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v2/bridges/bridge-e2e":
 			record("video-get")
 			requireBearer(t, r)
@@ -168,6 +182,9 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 
 	jsonOutput = false
 	videoBridgeType = "Scheduled"
+	if err := videoListCmd.RunE(videoListCmd, nil); err != nil {
+		t.Fatalf("video list RunE() error = %v", err)
+	}
 	if err := videoCreateCmd.RunE(videoCreateCmd, []string{"E2E", "Bridge"}); err != nil {
 		t.Fatalf("video create RunE() error = %v", err)
 	}
@@ -197,12 +214,12 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 		t.Fatalf("phone calllog RunE() error = %v", err)
 	}
 
-	for _, name := range []string{"video-create", "video-get", "video-delete", "ringout-create", "ringout-get", "ringout-delete", "calllog"} {
+	for _, name := range []string{"video-list", "video-create", "video-get", "video-delete", "ringout-create", "ringout-get", "ringout-delete", "calllog"} {
 		if calls[name] != 1 {
 			t.Fatalf("calls[%s] = %d, want 1; all calls=%#v", name, calls[name], calls)
 		}
 	}
-	if calls["token"] != 7 {
-		t.Fatalf("token calls = %d, want 7; all calls=%#v", calls["token"], calls)
+	if calls["token"] != 8 {
+		t.Fatalf("token calls = %d, want 8; all calls=%#v", calls["token"], calls)
 	}
 }

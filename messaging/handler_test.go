@@ -1170,6 +1170,63 @@ func TestHandleMessage_ActionCommand(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
+	var mu sync.Mutex
+	var sentTexts []string
+	var listedVideo bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges" {
+			listedVideo = true
+			_ = json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
+				Records: []ringcentral.VideoBridge{{
+					ID:   "bridge-1",
+					Name: "明天12点会议",
+					Type: "Scheduled",
+					Discovery: ringcentral.VideoBridgeDiscovery{
+						Web: "https://v.ringcentral.com/join/123",
+					},
+				}},
+			})
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts") {
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			mu.Lock()
+			sentTexts = append(sentTexts, req["text"])
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{})
+	}))
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetCapabilities([]string{"message", "summary", "video"})
+	client := ringcentral.NewBotClient(srv.URL, "token")
+	client.SetOwnerID("bot-1")
+	client.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), client, client, ringcentral.Post{
+		ID:        "upcoming-video-meetings-1",
+		GroupID:   "dm-1",
+		CreatorID: "user-1",
+		Text:      "获取我将来的会议",
+	})
+
+	if !listedVideo {
+		t.Fatal("expected upcoming meeting query to call Video list API")
+	}
+	if len(sentTexts) == 0 {
+		t.Fatal("expected a video list reply")
+	}
+	if !strings.Contains(sentTexts[0], "明天12点会议") || !strings.Contains(sentTexts[0], "https://v.ringcentral.com/join/123") {
+		t.Fatalf("expected video meeting in reply, got %q", sentTexts[0])
+	}
+}
+
 func TestHandleMessage_UnknownSlashSentToDefault(t *testing.T) {
 	srv, sentTexts := newTestRC(t)
 	defer srv.Close()

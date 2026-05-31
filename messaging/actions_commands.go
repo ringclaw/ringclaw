@@ -624,6 +624,8 @@ func cardDelete(ctx context.Context, client *ringcentral.Client, cardID string) 
 
 func handleVideo(ctx context.Context, client *ringcentral.Client, action string, args []string, _ string) string {
 	switch action {
+	case "list":
+		return videoList(ctx, client)
 	case "create":
 		title, bridgeType := parseVideoCreateArgs(args)
 		if title == "" {
@@ -661,11 +663,35 @@ func parseVideoCreateArgs(args []string) (string, string) {
 	return strings.TrimSpace(strings.Join(titleParts, " ")), bridgeType
 }
 
+func videoList(ctx context.Context, client *ringcentral.Client) string {
+	list, err := client.ListVideoBridges(ctx)
+	if err != nil {
+		slog.Error("list video bridges failed", "error", err)
+		return fmt.Sprintf("Error: %s", friendlyVideoAPIError(err))
+	}
+	if len(list.Records) == 0 {
+		return "No video meetings found."
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**Video meetings** (%d)\n", len(list.Records)))
+	for _, bridge := range list.Records {
+		sb.WriteString(fmt.Sprintf("- `%s` **%s**", bridge.ID, bridge.Name))
+		if bridge.Type != "" {
+			sb.WriteString(fmt.Sprintf(" [%s]", bridge.Type))
+		}
+		if bridge.Discovery.Web != "" {
+			sb.WriteString(fmt.Sprintf(" — %s", bridge.Discovery.Web))
+		}
+		sb.WriteByte('\n')
+	}
+	return strings.TrimSpace(sb.String())
+}
+
 func videoCreate(ctx context.Context, client *ringcentral.Client, title, bridgeType string) string {
 	bridge, err := client.CreateVideoBridge(ctx, &ringcentral.CreateVideoBridgeRequest{Name: title, Type: bridgeType})
 	if err != nil {
 		slog.Error("create video bridge failed", "error", err)
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %s", friendlyVideoAPIError(err))
 	}
 	return fmt.Sprintf("Video meeting created: `%s` — %s\n%s", bridge.ID, bridge.Name, bridge.Discovery.Web)
 }
@@ -673,7 +699,7 @@ func videoCreate(ctx context.Context, client *ringcentral.Client, title, bridgeT
 func videoGet(ctx context.Context, client *ringcentral.Client, bridgeID string) string {
 	bridge, err := client.GetVideoBridge(ctx, bridgeID)
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %s", friendlyVideoAPIError(err))
 	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**Video bridge** `%s`\n", bridge.ID))
@@ -687,9 +713,22 @@ func videoGet(ctx context.Context, client *ringcentral.Client, bridgeID string) 
 
 func videoDelete(ctx context.Context, client *ringcentral.Client, bridgeID string) string {
 	if err := client.DeleteVideoBridge(ctx, bridgeID); err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return fmt.Sprintf("Error: %s", friendlyVideoAPIError(err))
 	}
 	return fmt.Sprintf("Video bridge `%s` deleted.", bridgeID)
+}
+
+func friendlyVideoAPIError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "permissionName\":\"Video") ||
+		strings.Contains(msg, "[Video] permission") ||
+		strings.Contains(msg, "permissionName: Video") {
+		return "Video permission is missing. Ask an admin to add `Video` to the Private JWT App, regenerate or rotate the JWT token, then rerun RC JWT preflight/onboarding."
+	}
+	return msg
 }
 
 // --- Phone handlers ---
@@ -881,7 +920,7 @@ func formatActionHelp(cmd string) string {
 	case "/card":
 		return "Usage:\n- /card get <id>\n- /card delete <id>"
 	case "/video":
-		return "Usage:\n- /video create <title> [type=Instant|Scheduled|PMI]\n- /video get <bridgeId>\n- /video delete <bridgeId>"
+		return "Usage:\n- /video list\n- /video create <title> [type=Instant|Scheduled|PMI]\n- /video get <bridgeId>\n- /video delete <bridgeId>"
 	case "/phone":
 		return "Usage:\n- /phone ringout <fromPhone> <toPhone> [callerid=<phone>] [playprompt=true]\n- /phone status <ringOutId>\n- /phone cancel <ringOutId>\n- /phone calllog [direction=Inbound|Outbound] [view=Simple|Detailed] [limit=10]"
 	default:

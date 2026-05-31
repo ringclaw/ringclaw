@@ -13,6 +13,7 @@ var videoBridgeType string
 
 func init() {
 	videoCreateCmd.Flags().StringVar(&videoBridgeType, "type", "Instant", "Bridge type: Instant, Scheduled, or PMI")
+	videoCmd.AddCommand(videoListCmd)
 	videoCmd.AddCommand(videoCreateCmd)
 	videoCmd.AddCommand(videoGetCmd)
 	videoCmd.AddCommand(videoDeleteCmd)
@@ -22,6 +23,34 @@ func init() {
 var videoCmd = &cobra.Command{
 	Use:   "video",
 	Short: "RingCentral Video bridge operations",
+}
+
+var videoListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List RingCentral Video meeting bridges",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newCLIClient()
+		if err != nil {
+			return err
+		}
+		ctx, cancel := notifyContext(context.Background())
+		defer cancel()
+
+		list, err := client.ListVideoBridges(ctx)
+		if err != nil {
+			return fmt.Errorf("list video bridges failed: %w", err)
+		}
+		if jsonOutput {
+			printJSON(list)
+		} else {
+			fmt.Printf("Video bridges (%d)\n", len(list.Records))
+			for _, bridge := range list.Records {
+				printVideoBridge(&bridge)
+			}
+		}
+		return nil
+	},
 }
 
 var videoCreateCmd = &cobra.Command{

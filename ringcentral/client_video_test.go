@@ -7,6 +7,37 @@ import (
 	"testing"
 )
 
+func TestListVideoBridges(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/rcvideo/v2/account/~/extension/~/bridges" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(VideoBridgeList{
+			Records: []VideoBridge{{
+				ID:   "bridge-1",
+				Name: "Design review",
+				Type: "Scheduled",
+				Discovery: VideoBridgeDiscovery{
+					Web: "https://v.ringcentral.com/join/123",
+				},
+			}},
+		})
+	})
+	defer srv.Close()
+
+	list, err := client.ListVideoBridges(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list.Records) != 1 || list.Records[0].ID != "bridge-1" {
+		t.Fatalf("unexpected list: %+v", list)
+	}
+}
+
 func TestCreateVideoBridge_RequestAndResponse(t *testing.T) {
 	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

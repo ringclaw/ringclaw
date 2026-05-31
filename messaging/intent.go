@@ -56,6 +56,29 @@ func matchesIntentTrigger(text string) bool {
 	return false
 }
 
+func matchesVideoMeetingListIntent(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	if matchesAnySubstring(lower, "创建", "新建", "添加", "create", "schedule", "add ") {
+		return false
+	}
+	hasQuery := matchesAnySubstring(lower, "获取", "查询", "查看", "列出", "看看", "show", "list", "get", "find")
+	hasMeeting := matchesAnySubstring(lower, "会议", "视频会议", "video meeting", "video meetings", "rcv meeting", "rcv meetings")
+	hasVideoOrFuture := matchesAnySubstring(lower, "video", "视频", "rcv", "将来", "未来", "接下来", "后续", "upcoming", "future", "next")
+	return hasQuery && hasMeeting && hasVideoOrFuture
+}
+
+func matchesAnySubstring(text string, values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(text, value) {
+			return true
+		}
+	}
+	return false
+}
+
 // classifyIntent uses the default agent to determine the user's intent.
 // Returns IntentChat if the agent is unavailable or returns an unrecognized response.
 func classifyIntent(ctx context.Context, ag agent.Agent, text string) Intent {

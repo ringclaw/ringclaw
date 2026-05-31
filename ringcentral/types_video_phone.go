@@ -61,6 +61,11 @@ type VideoBridge struct {
 	UpdateTime string               `json:"updateTime,omitempty"`
 }
 
+// VideoBridgeList is the response for listing RingCentral Video bridges.
+type VideoBridgeList struct {
+	Records []VideoBridge `json:"records"`
+}
+
 // VideoBridgeDiscovery contains join and dial-in details.
 type VideoBridgeDiscovery struct {
 	Web  string                 `json:"web"`
