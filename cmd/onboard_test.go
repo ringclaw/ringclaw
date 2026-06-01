@@ -72,15 +72,15 @@ func TestOnboardOptionsApplyEnv(t *testing.T) {
 }
 
 func TestNormalizeCapabilitiesAndRequiredScopes(t *testing.T) {
-	capabilities, err := normalizeCapabilities([]string{"video", "phone", "call-log", "VIDEO"})
+	capabilities, err := normalizeCapabilities([]string{"video", "phone", "call-log", "VIDEO", "sms"})
 	if err != nil {
 		t.Fatalf("normalizeCapabilities() error = %v", err)
 	}
-	if strings.Join(capabilities, ",") != "video,phone,call_log" {
+	if strings.Join(capabilities, ",") != "video,phone,call_log,sms" {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
 	scopes := requiredScopesForCapabilities(capabilities)
-	if strings.Join(scopes, ",") != "ReadAccounts,Video,RingOut,ReadCallLog" {
+	if strings.Join(scopes, ",") != "ReadAccounts,Video,RingOut,ReadCallLog,SMS" {
 		t.Fatalf("scopes = %#v", scopes)
 	}
 

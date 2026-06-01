@@ -27,6 +27,9 @@ func TestPhoneEndpoints(t *testing.T) {
 	if got := ringOutsEndpoint(); got != "/restapi/v1.0/account/~/extension/~/ring-out" {
 		t.Fatalf("ringOutsEndpoint = %q", got)
 	}
+	if got := smsEndpoint(); got != "/restapi/v1.0/account/~/extension/~/sms" {
+		t.Fatalf("smsEndpoint = %q", got)
+	}
 	if got := ringOutEndpoint("ringout-1"); got != "/restapi/v1.0/account/~/extension/~/ring-out/ringout-1" {
 		t.Fatalf("ringOutEndpoint = %q", got)
 	}

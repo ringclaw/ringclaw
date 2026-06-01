@@ -46,6 +46,11 @@ func TestMatchesIntentTrigger(t *testing.T) {
 		{"create a video meeting for release planning", true},
 		{"schedule an RCV meeting tomorrow", true},
 
+		// Should match — sms
+		{"发短信给 +12125550123 说我晚点到", true},
+		{"send sms to +12125550123 saying running late", true},
+		{"send a text message to Alice", true},
+
 		// Should match — phone
 		{"给 2123753080 打电话", true},
 		{"帮我外呼 +12123753080", true},
@@ -112,6 +117,7 @@ func TestParseIntentReply(t *testing.T) {
 		{"note", IntentNote},
 		{"event", IntentEvent},
 		{"video", IntentVideo},
+		{"sms", IntentSMS},
 		{"phone", IntentPhone},
 		{"chat", IntentChat},
 		{"Chat", IntentChat},
@@ -119,6 +125,7 @@ func TestParseIntentReply(t *testing.T) {
 		{"The intent is summarize.", IntentSummarize},
 		{"I think the intent is task.", IntentTask},
 		{"The primary intent is video.", IntentVideo},
+		{"The primary intent is sms.", IntentSMS},
 		{"The primary intent is phone.", IntentPhone},
 		{"This is a normal chat message.", IntentChat},
 		// Unrecognized -> chat
@@ -193,6 +200,14 @@ func TestClassifyIntent_Video(t *testing.T) {
 	intent := classifyIntent(context.Background(), ag, "创建一个视频会议")
 	if intent != IntentVideo {
 		t.Errorf("expected IntentVideo, got %v", intent)
+	}
+}
+
+func TestClassifyIntent_SMS(t *testing.T) {
+	ag := &classifyIntentAgent{reply: "sms"}
+	intent := classifyIntent(context.Background(), ag, "send sms to +12125550123")
+	if intent != IntentSMS {
+		t.Errorf("expected IntentSMS, got %v", intent)
 	}
 }
 

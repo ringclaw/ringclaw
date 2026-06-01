@@ -37,7 +37,7 @@ type developerAppURLSpec struct {
 func init() {
 	appURLCmd.Flags().StringVar(&appURLBotName, "bot-name", "RingClaw Bot", "Name for the RingCentral Bot app")
 	appURLCmd.Flags().StringVar(&appURLPrivateName, "private-name", "RingClaw Private App", "Name for the RingCentral private JWT app")
-	appURLCmd.Flags().StringSliceVar(&appURLCapabilities, "capability", nil, "Additional capability scopes to include: video, phone, call_log")
+	appURLCmd.Flags().StringSliceVar(&appURLCapabilities, "capability", nil, "Additional capability scopes to include: video, phone, call_log, sms")
 	rootCmd.AddCommand(appURLCmd)
 }
 
@@ -146,6 +146,8 @@ func ringclawAppPermissionsForCapabilities(capabilities []string) []string {
 			permissions = appendUnique(permissions, "RingOut", "ReadCallLog")
 		case "call_log", "calllog":
 			permissions = appendUnique(permissions, "ReadCallLog")
+		case "sms":
+			permissions = appendUnique(permissions, "SMS")
 		}
 	}
 	return permissions

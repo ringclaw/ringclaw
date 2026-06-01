@@ -114,6 +114,7 @@ func buildHelpText() string {
 /card get|delete
 /video create|get|delete
 /phone ringout|status|cancel|calllog
+/sms send
 /chatinfo [chatId] - Show chat details
 /cron add|list|delete - Scheduled tasks
 /reload - Re-detect installed agents
@@ -164,6 +165,7 @@ func buildHelpCard() json.RawMessage {
 		{"/card", "get | delete"},
 		{"/video", "create | get | delete"},
 		{"/phone", "ringout | status | cancel | calllog"},
+		{"/sms", "send"},
 		{"/chatinfo", "Show chat details"},
 		{"/cron", "add | list | delete"},
 	}
@@ -178,8 +180,9 @@ func buildHelpCard() json.RawMessage {
 				mono("/task create \"Review PR\" assignee=John"),
 				mono("/note create \"Meeting Notes\""),
 				mono("/event create \"Standup\" 2026-04-10T09:00:00Z 2026-04-10T09:30:00Z"),
-				mono("/video create \"Design Review\" type=Scheduled"),
+				mono("/video create \"Design Review\" type=Scheduled start=2026-04-10T09:00:00Z end=2026-04-10T09:30:00Z"),
 				mono("/phone calllog direction=Outbound limit=5"),
+				mono("/sms send +14155550199 Hello from RingClaw"),
 				mono("/phone missed limit=25"),
 				mono("/cron add \"0 9 * * 1-5\" morning standup summary"),
 				mono("/chatinfo 158994374662"),

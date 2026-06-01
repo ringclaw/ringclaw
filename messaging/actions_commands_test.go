@@ -492,6 +492,109 @@ func TestHandleActionCommand_EventCreateError(t *testing.T) {
 	}
 }
 
+func TestHandleActionCommand_SMSSend(t *testing.T) {
+	var sawSMS bool
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/phone-number" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ringcentral.ExtensionPhoneNumberList{
+				Records: []ringcentral.ExtensionPhoneNumber{{PhoneNumber: "+14155550100", Status: "Normal"}},
+			})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/sms" {
+			sawSMS = true
+			var body ringcentral.CreateSMSRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if body.From.PhoneNumber != "+14155550100" || len(body.To) != 1 || body.To[0].PhoneNumber != "+14155550199" || body.Text != "Hello from RingClaw" {
+				t.Fatalf("unexpected request body: %+v", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(ringcentral.SMSMessage{ID: "sms-1", MessageStatus: "Sent"})
+			return
+		}
+		t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/sms send +14155550199 Hello from RingClaw")
+	if !sawSMS {
+		t.Fatal("expected SMS request")
+	}
+	if !strings.Contains(result, "SMS sent") || !strings.Contains(result, "sms-1") {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestHandleActionCommand_SMSSendResolvesContactName(t *testing.T) {
+	var sawSMS bool
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/directory/entries/search":
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode directory search: %v", err)
+			}
+			if body["searchString"] != "Grace He" {
+				t.Fatalf("unexpected directory search body: %+v", body)
+			}
+			json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{
+				Records: []ringcentral.DirectoryEntry{{ID: "person-grace", FirstName: "Grace", LastName: "He"}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/address-book/contact":
+			if r.URL.Query().Get("searchString") != "Grace He" {
+				t.Fatalf("unexpected contact query: %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.ContactList{
+				Records: []ringcentral.Contact{{
+					ID:          "contact-grace",
+					FirstName:   "Grace",
+					LastName:    "He",
+					MobilePhone: "+12123753080",
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/phone-number":
+			json.NewEncoder(w).Encode(ringcentral.ExtensionPhoneNumberList{
+				Records: []ringcentral.ExtensionPhoneNumber{{PhoneNumber: "+14155550100", Status: "Normal"}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/sms":
+			sawSMS = true
+			var body ringcentral.CreateSMSRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode sms request: %v", err)
+			}
+			if len(body.To) != 1 || body.To[0].PhoneNumber != "+12123753080" {
+				t.Fatalf("expected resolved contact phone number, got %+v", body)
+			}
+			json.NewEncoder(w).Encode(ringcentral.SMSMessage{ID: "sms-2", MessageStatus: "Sent"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/sms send to=Grace He text=hello there")
+	if !sawSMS {
+		t.Fatal("expected SMS request")
+	}
+	if !strings.Contains(result, "Grace He") || !strings.Contains(result, "+12123753080") {
+		t.Errorf("expected resolved contact details in result, got: %s", result)
+	}
+}
+
+func TestHandleActionCommand_SMSSendMissingArgs(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/sms send +14155550199")
+	if !strings.Contains(result, "Usage") {
+		t.Errorf("expected usage, got: %s", result)
+	}
+}
+
 // --- Helper function tests ---
 
 func TestSplitKeyValueParts(t *testing.T) {

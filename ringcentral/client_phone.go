@@ -10,6 +10,26 @@ import (
 	"strconv"
 )
 
+// SendSMS sends a plain-text SMS from the authenticated extension.
+func (c *Client) SendSMS(ctx context.Context, req *CreateSMSRequest) (*SMSMessage, error) {
+	if req == nil {
+		req = &CreateSMSRequest{}
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal sms: %w", err)
+	}
+	resp, err := c.doRequest(ctx, http.MethodPost, smsEndpoint(), "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	var message SMSMessage
+	if err := json.Unmarshal(resp, &message); err != nil {
+		return nil, fmt.Errorf("parse sms: %w", err)
+	}
+	return &message, nil
+}
+
 // CreateRingOut starts a two-legged RingOut call.
 func (c *Client) CreateRingOut(ctx context.Context, req *CreateRingOutRequest) (*RingOut, error) {
 	if req == nil {

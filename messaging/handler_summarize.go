@@ -59,6 +59,13 @@ func (h *Handler) classifyAndRoute(ctx context.Context, client *ringcentral.Clie
 		}
 		h.sendToDefaultAgent(ctx, client, readClient, post, text)
 		return true
+	case IntentSMS:
+		if !h.isCapabilityEnabled("sms") {
+			logSendError(SendTextReply(ctx, client, post.GroupID, capabilityDisabledMessage("sms")))
+			return true
+		}
+		h.sendToDefaultAgent(ctx, client, readClient, post, text)
+		return true
 	case IntentPhone:
 		if !h.isCapabilityEnabled("phone") {
 			logSendError(SendTextReply(ctx, client, post.GroupID, capabilityDisabledMessage("phone")))

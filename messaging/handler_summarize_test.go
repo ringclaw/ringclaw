@@ -217,6 +217,31 @@ func TestClassifyAndRoute_IntentPhone(t *testing.T) {
 	}
 }
 
+func TestClassifyAndRoute_IntentSMS(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	ag := &intentTestAgent{intentReply: "sms", chatReply: "ACTION:SMS to=+12125550123\nRunning late by 10 minutes.\nEND_ACTION"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+	h.SetCapabilities([]string{"message", "summary", "sms"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	handled := h.classifyAndRoute(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"},
+		"send sms to +12125550123 saying I am running late by 10 minutes", false)
+	if !handled {
+		t.Fatal("expected sms intent to be handled")
+	}
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a reply for sms intent")
+	}
+}
+
 func TestClassifyAndRoute_VideoMeetingListSkipsIntentClassifier(t *testing.T) {
 	srv, sentTexts := newTestRC(t)
 	defer srv.Close()
@@ -320,6 +345,34 @@ func TestClassifyAndRoute_IntentPhoneAllowedByDefaultCapabilities(t *testing.T) 
 	}
 	if !strings.Contains(got[len(got)-1], "phone routed") {
 		t.Fatalf("expected phone route to default agent, got %v", got)
+	}
+}
+
+func TestClassifyAndRoute_IntentSMSAllowedByDefaultCapabilities(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	ag := &intentTestAgent{intentReply: "sms", chatReply: "sms routed"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+	h.SetCapabilities([]string{"message", "summary", "phone"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	handled := h.classifyAndRoute(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"},
+		"send sms to +12125550123", false)
+	if !handled {
+		t.Fatal("expected sms intent to be handled")
+	}
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 || strings.Contains(got[len(got)-1], "SMS capability is not enabled") {
+		t.Fatalf("sms should be enabled by default, got %v", got)
+	}
+	if !strings.Contains(got[len(got)-1], "sms routed") {
+		t.Fatalf("expected sms route to default agent, got %v", got)
 	}
 }
 

@@ -4,7 +4,7 @@ title: AI-Driven Actions
 
 # AI-Driven Actions
 
-AI agents can automatically create notes, tasks, events, adaptive cards, RingCentral Video bridges, FIJI client phone calls, and call-log summaries during conversation. When a user's request implies creating these resources, the agent appends ACTION blocks to its response and RingClaw executes or emits the matching governed action.
+AI agents can automatically create notes, tasks, events, adaptive cards, RingCentral Video bridges, FIJI client phone calls, SMS messages, and call-log summaries during conversation. When a user's request implies creating these resources, the agent appends ACTION blocks to its response and RingClaw executes or emits the matching governed action.
 
 ## How It Works
 
@@ -64,7 +64,11 @@ sequenceDiagram
             R->>FIJI: Emit make_call client action
         else PHONE_CALLLOG
             R->>RC: ListExtensionCallLog
+            R->>RC: Optionally send missed-call follow-up SMS
             R->>RC: SendPost with missed-call summary and next actions
+        else SMS
+            R->>R: Resolve contact / phone number
+            R->>RC: SendSMS
         else MESSAGE
             R->>R: Resolve chatid / person name
             R->>RC: SendPost
@@ -96,6 +100,10 @@ ACTION:PHONE_CALL to=+14155550199
 END_ACTION
 
 ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
+END_ACTION
+
+ACTION:SMS to=Grace He
+Sorry I missed your call. What is this regarding?
 END_ACTION
 ```
 
@@ -177,11 +185,11 @@ Manage cards via chat commands:
 /card delete <id>    # delete a card
 ```
 
-## Video & Phone Commands
+## Video, Phone & SMS Commands
 
-Video bridge commands use RingCentral Video REST APIs and post or print the join URL. Phone commands use RingOut plus extension Call Log APIs, including a missed-call convenience view. These commands use the same resolved RingCentral client path as message commands; the selected app token must carry the required scopes. RingOut is owner-only inside the message bridge.
+Video bridge commands use RingCentral Video REST APIs and post or print the join URL. Phone commands use RingOut plus extension Call Log APIs, including a missed-call convenience view. SMS commands send plain-text SMS through the RingCentral messaging API and can resolve a person name to a real phone number before sending. These commands use the same resolved RingCentral client path as message commands; the selected app token must carry the required scopes. RingOut is owner-only inside the message bridge.
 
-Video and Phone are product-default Personal AVA Pro capabilities. They are available in the RingClaw action layer even when `ringcentral.capabilities` only lists `message` / `summary`; the actual API call still depends on Private JWT App scopes and user permissions.
+Video, Phone, and SMS are product-default Personal AVA Pro capabilities. They are available in the RingClaw action layer even when `ringcentral.capabilities` only lists `message` / `summary`; the actual API call still depends on Private JWT App scopes and user permissions.
 
 ```
 /video list
@@ -195,25 +203,30 @@ Video and Phone are product-default Personal AVA Pro capabilities. They are avai
 /phone calllog direction=Outbound view=Detailed limit=10
 /phone calllog result=Missed date_from=2026-05-17T00:00:00+08:00 date_to=2026-06-01T23:59:59+08:00 limit=25
 /phone missed limit=25
+
+/sms send +14155550199 Hello from RingClaw
+/sms send to=Grace He text=Sorry I missed your call. What is this regarding?
 ```
 
 `/phone missed` is shorthand for inbound call logs with `result=Missed`. For CLI usage, the equivalent is `ringclaw phone calllog --result Missed --limit 25`; JSON output applies the same client-side result filter. Result filtering is intentionally client-side so RingClaw can fetch a dated user-scoped window first, then summarize older missed calls accurately.
 
-## Natural-Language Video & Phone Actions
+`/sms send` supports either a direct phone number or `to=<person name>` plus `text=<message>`. When the target is a person name, RingClaw searches the directory/address book and resolves the destination phone number before sending the SMS.
 
-Natural-language Video and Phone requests now follow the same path as message/task/event actions:
+## Natural-Language Video, Phone & SMS Actions
+
+Natural-language Video, Phone, and SMS requests now follow the same path as message/task/event actions:
 
 ```text
 user message
   -> matchesIntentTrigger
-  -> classifyIntent = video | phone
+  -> classifyIntent = video | phone | sms
   -> default agent emits ACTION block
   -> ExecuteAgentActions
   -> RingCentral API
   -> SendPost back to the chat
 ```
 
-RingClaw no longer keeps a separate `matchesVideoMeetingListIntent` fast-path. Meeting-list queries are represented as `ACTION:VIDEO_LIST`, and call-log queries are represented as `ACTION:PHONE_CALLLOG`.
+RingClaw no longer keeps a separate `matchesVideoMeetingListIntent` fast-path. Meeting-list queries are represented as `ACTION:VIDEO_LIST`, call-log queries are represented as `ACTION:PHONE_CALLLOG`, and explicit text-message requests are represented as `ACTION:SMS`.
 
 ### Video examples
 
@@ -289,6 +302,26 @@ ACTION:PHONE_CALLLOG scope=recent days=15 missing=true summary=true next_actions
 END_ACTION
 ```
 
+When `next_actions=true` and RingClaw finds missed calls, the current missed-call follow-up flow can automatically send an SMS apology/check-in before posting the summary. The summary then shows that the SMS was sent and reminds the user that they can also directly click/call the person.
+
+Example missed-call follow-up scenario:
+
+```text
+Any action items mentioned in my calls today?
+Check today's missed calls and follow up if needed.
+帮我看下今天 missed call 里有没有要跟进的，有的话先发个短信。
+```
+
+Typical behavior:
+
+```text
+1. Query today's call log.
+2. Detect missed inbound calls that need follow-up.
+3. Send SMS: "Sorry I missed your call. What is this regarding?"
+4. Post the call summary with "SMS sent to <name/number>. Status: <status>".
+5. Remind the user that they can also directly click/call <name> (<phone number>).
+```
+
 Supported `ACTION:PHONE_CALLLOG` params:
 
 | Param | Values | Meaning |
@@ -298,11 +331,37 @@ Supported `ACTION:PHONE_CALLLOG` params:
 | `date_from`, `date_to` | RFC3339 timestamps | Explicit call-log date window when the agent already knows exact bounds |
 | `missing` | `true`, `false` | Highlights missed/missing calls |
 | `summary` | `true`, `false` | Adds totals for calls, missed calls, inbound, outbound, and answered/accepted calls |
-| `next_actions` | `true`, `false` | Adds follow-up suggestions, especially for missed calls |
+| `next_actions` | `true`, `false` | Adds follow-up suggestions; for missed calls this can include auto-sending a short SMS follow-up and showing the result in the posted summary |
 | `limit` | positive integer | Sets `recordCount`; defaults to `10` |
 | `direction` | `Inbound`, `Outbound` | Optional Call Log API direction filter |
 | `result` | `Missed`, `Accepted`, etc. | Optional client-side result filter |
 | `view` | `Simple`, `Detailed` | Optional Call Log API view |
+
+### SMS examples
+
+The agent can send plain-text SMS messages:
+
+```text
+Send Grace He a text saying I am running late.
+给 Grace He 发个短信，说我一会儿回电。
+发短信给 +12123753080：Sorry I missed your call. What is this regarding?
+```
+
+Expected action:
+
+```text
+ACTION:SMS to=Grace He
+Sorry I missed your call. What is this regarding?
+END_ACTION
+```
+
+Supported `ACTION:SMS` params:
+
+| Param | Values | Meaning |
+| --- | --- | --- |
+| `to` | phone number or person name | Destination SMS target; person names are resolved through directory/address-book lookup |
+| `from` | owned phone number | Optional sender override; when omitted RingClaw chooses a default SMS-capable sender number |
+| body | plain text | The exact SMS message body |
 
 ### Required scopes
 
@@ -312,5 +371,6 @@ The Private JWT App must include:
 Video       -> ACTION:VIDEO, ACTION:VIDEO_LIST
 Phone       -> ACTION:PHONE_CALL (FIJI client makeCall bridge)
 ReadCallLog -> ACTION:PHONE_CALLLOG, /phone calllog, /phone missed
+SMS         -> ACTION:SMS, /sms send, missed-call SMS follow-up
 RingOut     -> /phone ringout diagnostic command only
 ```

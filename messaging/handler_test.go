@@ -1177,16 +1177,24 @@ func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
 	now := time.Now()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/cloud-calendars/ucc") {
-			writeCloudCalendarPermissionError(w)
+		if r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/cloud-calendars/ucc" {
+			_ = json.NewEncoder(w).Encode(ringcentral.CloudCalendarList{
+				Records: []ringcentral.CloudCalendar{{
+					ID:         "cal-1",
+					ProviderID: "office365",
+					CalendarID: "cal-1",
+					Name:       "Work",
+					Connected:  true,
+				}},
+			})
 			return
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/events" {
+		if r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/cloud-calendars/ucc/office365/~/cal-1/events" {
 			listedVideo = true
-			_ = json.NewEncoder(w).Encode(ringcentral.EventList{
-				Records: []ringcentral.Event{{
+			_ = json.NewEncoder(w).Encode(ringcentral.CloudCalendarEventList{
+				Records: []ringcentral.CloudCalendarEvent{{
 					ID:        "meeting-1",
-					Title:     "客户升级复盘",
+					Subject:   "客户升级复盘",
 					StartTime: now.UTC().Format(time.RFC3339),
 					EndTime:   now.Add(30 * time.Minute).UTC().Format(time.RFC3339),
 					Location:  "RingCentral Video",
@@ -2297,6 +2305,103 @@ func TestHandleMessage_PhoneCallLogAllowedWithCallLogCapability(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_SMSCommandAllowedByDefaultCapabilities(t *testing.T) {
+	var mu sync.Mutex
+	var sentTexts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts"):
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			mu.Lock()
+			sentTexts = append(sentTexts, req["text"])
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/phone-number":
+			_ = json.NewEncoder(w).Encode(ringcentral.ExtensionPhoneNumberList{
+				Records: []ringcentral.ExtensionPhoneNumber{{PhoneNumber: "+14155550100", Status: "Normal"}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/sms":
+			_ = json.NewEncoder(w).Encode(ringcentral.SMSMessage{ID: "sms-1", MessageStatus: "Sent"})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]string{})
+		}
+	}))
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetCapabilities([]string{"message", "summary", "video", "phone"})
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "sms-default-1",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/sms send +14155550199 hello there",
+	})
+
+	got := getSentTexts(&sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected an sms reply")
+	}
+	if strings.Contains(got[0], "SMS capability is not enabled") {
+		t.Fatalf("sms should be enabled by default, got %q", got[0])
+	}
+	if !strings.Contains(got[0], "SMS sent") {
+		t.Fatalf("expected sms command to reach action handler, got %q", got[0])
+	}
+}
+
+func TestHandleMessage_SMSCommandAllowedWithSMSCapability(t *testing.T) {
+	var mu sync.Mutex
+	var sentTexts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/posts"):
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			mu.Lock()
+			sentTexts = append(sentTexts, req["text"])
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/phone-number":
+			_ = json.NewEncoder(w).Encode(ringcentral.ExtensionPhoneNumberList{
+				Records: []ringcentral.ExtensionPhoneNumber{{PhoneNumber: "+14155550100", Status: "Normal"}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/sms":
+			_ = json.NewEncoder(w).Encode(ringcentral.SMSMessage{ID: "sms-1", MessageStatus: "Sent"})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]string{})
+		}
+	}))
+	defer srv.Close()
+
+	h := NewHandler(nil, nil, "test")
+	h.SetCapabilities([]string{"message", "summary", "sms"})
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	h.HandleMessage(context.Background(), bot, bot, ringcentral.Post{
+		ID:        "sms-enabled-1",
+		GroupID:   "dm-1",
+		CreatorID: "alice",
+		Text:      "/sms send +14155550199 hello there",
+	})
+
+	got := getSentTexts(&sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected an sms reply")
+	}
+	if !strings.Contains(got[0], "SMS sent") {
+		t.Fatalf("expected sms command to reach action handler, got %q", got[0])
+	}
+}
+
 func TestHandleMessage_VideoCommandAllowedWithVideoCapability(t *testing.T) {
 	srv, sentTexts := newTestRC(t)
 	defer srv.Close()
@@ -2323,7 +2428,7 @@ func TestHandleMessage_VideoCommandAllowedWithVideoCapability(t *testing.T) {
 	}
 }
 
-func TestHandlerCapabilities_DefaultVideoPhoneEnabled(t *testing.T) {
+func TestHandlerCapabilities_DefaultVideoPhoneSMSEnabled(t *testing.T) {
 	h := newTestHandler()
 	h.SetCapabilities([]string{"message", "summary"})
 
@@ -2335,6 +2440,9 @@ func TestHandlerCapabilities_DefaultVideoPhoneEnabled(t *testing.T) {
 	}
 	if !h.isCapabilityEnabled("call_log") {
 		t.Fatal("call_log should be enabled by default through phone")
+	}
+	if !h.isCapabilityEnabled("sms") {
+		t.Fatal("sms should be enabled by default")
 	}
 }
 

@@ -103,7 +103,7 @@ func init() {
 	onboardCmd.Flags().StringVar(&onboardOpts.ServerURL, "server-url", "", "RingCentral server URL")
 	onboardCmd.Flags().StringSliceVar(&onboardOpts.ChatIDs, "chat-id", nil, "Chat ID to monitor; may be repeated or comma-separated")
 	onboardCmd.Flags().StringSliceVar(&onboardOpts.SourceUserIDs, "source-user-id", nil, "Trusted sender ID/email/phone; may be repeated or comma-separated")
-	onboardCmd.Flags().StringSliceVar(&onboardOpts.Capabilities, "capability", nil, "Optional AVA capability to enable: video, phone, call_log; may be repeated or comma-separated")
+	onboardCmd.Flags().StringSliceVar(&onboardOpts.Capabilities, "capability", nil, "Optional AVA capability to enable: video, phone, call_log, sms; may be repeated or comma-separated")
 	onboardCmd.Flags().BoolVar(&onboardOpts.GroupMentionOnly, "group-mention-only", true, "Require @mention in group chats")
 	onboardCmd.Flags().BoolVar(&onboardOpts.FromEnv, "from-env", false, "Read RC_* and RINGCLAW_* onboarding values from environment")
 	onboardCmd.Flags().BoolVar(&onboardOpts.SkipValidate, "skip-validate", false, "Write config without calling RingCentral APIs")
@@ -530,8 +530,10 @@ func normalizeCapabilities(values []string) ([]string, error) {
 				capability = "phone"
 			case "call_log", "calllog", "call-log":
 				capability = "call_log"
+			case "sms":
+				capability = "sms"
 			default:
-				return nil, fmt.Errorf("unsupported capability %q; supported values: video, phone, call_log", item)
+				return nil, fmt.Errorf("unsupported capability %q; supported values: video, phone, call_log, sms", item)
 			}
 			if !containsString(out, capability) {
 				out = append(out, capability)
@@ -551,6 +553,8 @@ func requiredScopesForCapabilities(capabilities []string) []string {
 			scopes = appendUnique(scopes, "RingOut", "ReadCallLog")
 		case "call_log":
 			scopes = appendUnique(scopes, "ReadCallLog")
+		case "sms":
+			scopes = appendUnique(scopes, "SMS")
 		}
 	}
 	return scopes

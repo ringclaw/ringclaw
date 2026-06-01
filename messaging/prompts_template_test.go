@@ -43,6 +43,24 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 	if !strings.Contains(got, "ACTION:CARD") {
 		t.Error("ActionPromptTemplate should describe ACTION:CARD")
 	}
+	if !strings.Contains(got, "ACTION:VIDEO_LIST [scope=today|upcoming|recent]") {
+		t.Error("ActionPromptTemplate should advertise VIDEO_LIST upcoming scope")
+	}
+	if !strings.Contains(got, "ACTION:SMS to=<target phone> [from=<owned phone>]") {
+		t.Error("ActionPromptTemplate should advertise ACTION:SMS")
+	}
+	if !strings.Contains(got, "ACTION:VIDEO title=<meeting title> [type=Instant|Scheduled|PMI] [start=<ISO8601> end=<ISO8601>]") {
+		t.Error("ActionPromptTemplate should advertise scheduled VIDEO start/end params")
+	}
+	if !strings.Contains(got, "scope=upcoming for future/upcoming meeting requests") {
+		t.Error("ActionPromptTemplate should direct future meeting requests to scope=upcoming")
+	}
+	if !strings.Contains(got, "type=Scheduled plus start=<ISO8601> and end=<ISO8601>") {
+		t.Error("ActionPromptTemplate should direct scheduled video meetings to include start/end")
+	}
+	if !strings.Contains(got, "SMS/text-message requests") {
+		t.Error("ActionPromptTemplate should direct explicit SMS requests to ACTION:SMS")
+	}
 }
 
 func TestDateExtractPrompt_ReturnsNonEmpty(t *testing.T) {

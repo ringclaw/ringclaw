@@ -196,6 +196,41 @@ type PhoneNumberRef struct {
 	ExtensionID string `json:"extensionId,omitempty"`
 }
 
+// CreateSMSRequest sends a plain-text outbound SMS from the authenticated
+// extension.
+type CreateSMSRequest struct {
+	From PhoneNumberRef   `json:"from"`
+	To   []PhoneNumberRef `json:"to"`
+	Text string           `json:"text"`
+}
+
+// SMSParty describes the sender or recipient of an SMS message.
+type SMSParty struct {
+	PhoneNumber string `json:"phoneNumber,omitempty"`
+	ExtensionID string `json:"extensionId,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Location    string `json:"location,omitempty"`
+}
+
+// SMSMessage is the send-SMS response from RingCentral's message store.
+type SMSMessage struct {
+	URI                     string     `json:"uri,omitempty"`
+	ID                      any        `json:"id,omitempty"`
+	To                      []SMSParty `json:"to,omitempty"`
+	From                    SMSParty   `json:"from,omitempty"`
+	Type                    string     `json:"type,omitempty"`
+	CreationTime            string     `json:"creationTime,omitempty"`
+	ReadStatus              string     `json:"readStatus,omitempty"`
+	Priority                string     `json:"priority,omitempty"`
+	Direction               string     `json:"direction,omitempty"`
+	Availability            string     `json:"availability,omitempty"`
+	Subject                 string     `json:"subject,omitempty"`
+	MessageStatus           string     `json:"messageStatus,omitempty"`
+	SMSSendingAttemptsCount int        `json:"smsSendingAttemptsCount,omitempty"`
+	ConversationID          any        `json:"conversationId,omitempty"`
+	LastModifiedTime        string     `json:"lastModifiedTime,omitempty"`
+}
+
 // ExtensionPhoneNumberList is the extension phone-number list response.
 type ExtensionPhoneNumberList struct {
 	Records []ExtensionPhoneNumber `json:"records"`

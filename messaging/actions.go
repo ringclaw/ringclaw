@@ -22,7 +22,7 @@ var crossChatNoticeTimeout = 5 * time.Second
 
 // AgentAction represents a parsed action from the agent's response.
 type AgentAction struct {
-	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE", "VIDEO", "VIDEO_LIST", "PHONE_CALL", "PHONE_CALLLOG"
+	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE", "VIDEO", "VIDEO_LIST", "PHONE_CALL", "PHONE_CALLLOG", "SMS"
 	Params map[string]string
 	Body   string
 }
@@ -393,30 +393,44 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			if bridgeType == "" {
 				bridgeType = "Instant"
 			}
-			bridge, err := actionClient.CreateVideoBridge(ctx, &ringcentral.CreateVideoBridgeRequest{
-				Name: title,
-				Type: bridgeType,
+			bridge, event, err := createVideoMeeting(ctx, actionClient, videoCreateOptions{
+				Title:      title,
+				BridgeType: bridgeType,
+				StartTime:  a.Params["start"],
+				EndTime:    a.Params["end"],
 			})
 			if err != nil {
 				slog.Error("action: create video bridge failed", "error", err)
-				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
+				details := map[string]any{"error": err.Error()}
+				if bridge != nil && bridge.ID != "" {
+					details["bridge_id"] = bridge.ID
+				}
+				record("failed", targetChat, crossChat, details)
 				results = append(results, fmt.Sprintf("Failed to create video meeting: %v", err))
 				continue
 			}
-			text := formatVideoBridgeMessage(bridge)
+			text := formatVideoMeetingMessage(bridge, event)
 			if err := SendTextReply(ctx, actionClient, targetChat, text); err != nil {
 				slog.Error("action: send video bridge link failed", "error", err, "chatID", targetChat)
-				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "bridge_id": bridge.ID, "reason": "post_video_link_failed"})
+				details := map[string]any{"error": err.Error(), "bridge_id": bridge.ID, "reason": "post_video_link_failed"}
+				if event != nil && event.ID != "" {
+					details["event_id"] = event.ID
+				}
+				record("failed", targetChat, crossChat, details)
 				results = append(results, fmt.Sprintf("Created video meeting but failed to post link: %v", err))
 				continue
 			}
 			slog.Info("action: created video bridge", "bridgeID", bridge.ID, "chatID", targetChat, "title", title)
-			record("completed", targetChat, crossChat, map[string]any{"bridge_id": bridge.ID})
+			details := map[string]any{"bridge_id": bridge.ID}
+			if event != nil && event.ID != "" {
+				details["event_id"] = event.ID
+			}
+			record("completed", targetChat, crossChat, details)
 
 		case "VIDEO_LIST":
 			text, count, err := videoListFromParams(ctx, actionClient, a.Params, opts.RequesterID)
 			if err != nil {
-				slog.Error("action: list video bridges failed", "error", err)
+				slog.Error("action: list video meetings failed", "error", err)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to list video meetings: %s", friendlyVideoAPIError(err)))
 				continue
@@ -427,7 +441,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, fmt.Sprintf("Listed video meetings but failed to post result: %v", err))
 				continue
 			}
-			slog.Info("action: listed video bridges", "chatID", targetChat, "count", count)
+			slog.Info("action: listed video meetings", "chatID", targetChat, "count", count)
 			record("completed", targetChat, crossChat, map[string]any{"count": count})
 
 		case "PHONE_CALLLOG":
@@ -446,6 +460,27 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			}
 			slog.Info("action: listed call log", "chatID", targetChat, "count", count)
 			record("completed", targetChat, crossChat, map[string]any{"count": count})
+
+		case "SMS":
+			params := make(map[string]string, len(a.Params)+1)
+			for k, v := range a.Params {
+				params[k] = v
+			}
+			params["text"] = strings.TrimSpace(a.Body)
+			result := smsSend(ctx, actionClient, params)
+			if strings.HasPrefix(result, "Error: ") || strings.HasPrefix(result, "Usage: ") {
+				record("failed", targetChat, crossChat, map[string]any{"error": result})
+				results = append(results, strings.TrimPrefix(result, "Error: "))
+				continue
+			}
+			if err := SendTextReply(ctx, actionClient, targetChat, result); err != nil {
+				slog.Error("action: send sms confirmation failed", "error", err, "chatID", targetChat)
+				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "reason": "post_sms_confirmation_failed"})
+				results = append(results, fmt.Sprintf("Sent SMS but failed to post confirmation: %v", err))
+				continue
+			}
+			slog.Info("action: sent sms", "chatID", targetChat, "to", params["to"])
+			record("completed", targetChat, crossChat, map[string]any{"to": params["to"]})
 
 		default:
 			slog.Warn("action: unknown action type, sending body as message", "type", a.Type)
@@ -470,6 +505,8 @@ func actionCapability(actionType string) string {
 		return "phone"
 	case "PHONE_CALLLOG":
 		return "phone"
+	case "SMS":
+		return "sms"
 	default:
 		return ""
 	}
@@ -505,6 +542,92 @@ func formatVideoBridgeMessage(bridge *ringcentral.VideoBridge) string {
 		return fmt.Sprintf("Video meeting created: **%s**\n%s", title, bridge.Discovery.Web)
 	}
 	return fmt.Sprintf("Video meeting created: **%s** (`%s`)", title, bridge.ID)
+}
+
+func formatVideoMeetingMessage(bridge *ringcentral.VideoBridge, event *ringcentral.Event) string {
+	if event == nil {
+		return formatVideoBridgeMessage(bridge)
+	}
+	title := strings.TrimSpace(event.Title)
+	if title == "" && bridge != nil {
+		title = strings.TrimSpace(bridge.Name)
+	}
+	if title == "" {
+		title = "Video meeting"
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Scheduled video meeting created: **%s**", title))
+	if event.ID != "" {
+		sb.WriteString(fmt.Sprintf(" (`%s`)", event.ID))
+	}
+	if event.StartTime != "" || event.EndTime != "" {
+		sb.WriteString(fmt.Sprintf("\nTime: %s ~ %s", event.StartTime, event.EndTime))
+	}
+	if bridge != nil && strings.TrimSpace(bridge.Discovery.Web) != "" {
+		sb.WriteString(fmt.Sprintf("\nJoin: %s", strings.TrimSpace(bridge.Discovery.Web)))
+	}
+	return sb.String()
+}
+
+func createVideoMeeting(ctx context.Context, client *ringcentral.Client, opts videoCreateOptions) (*ringcentral.VideoBridge, *ringcentral.Event, error) {
+	title := strings.TrimSpace(opts.Title)
+	if title == "" {
+		title = "RingClaw Meeting"
+	}
+	bridgeType := strings.TrimSpace(opts.BridgeType)
+	if bridgeType == "" {
+		bridgeType = "Instant"
+	}
+	bridge, err := client.CreateVideoBridge(ctx, &ringcentral.CreateVideoBridgeRequest{
+		Name: title,
+		Type: bridgeType,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if !strings.EqualFold(bridgeType, "Scheduled") {
+		return bridge, nil, nil
+	}
+	startTime := strings.TrimSpace(opts.StartTime)
+	endTime := strings.TrimSpace(opts.EndTime)
+	if startTime == "" && endTime == "" {
+		return bridge, nil, nil
+	}
+	if startTime == "" || endTime == "" {
+		return bridge, nil, fmt.Errorf("scheduled video meeting requires both start and end times")
+	}
+	startTime, endTime, err = normalizeEventDateTimes(startTime, endTime)
+	if err != nil {
+		return bridge, nil, err
+	}
+	event, err := client.CreateEvent(ctx, &ringcentral.CreateEventRequest{
+		Title:       title,
+		StartTime:   startTime,
+		EndTime:     endTime,
+		Location:    "RingCentral Video",
+		Description: buildScheduledVideoEventDescription(bridge),
+	})
+	if err != nil {
+		return bridge, nil, fmt.Errorf("create scheduled event: %w", err)
+	}
+	return bridge, event, nil
+}
+
+func buildScheduledVideoEventDescription(bridge *ringcentral.VideoBridge) string {
+	if bridge == nil {
+		return "RingCentral Video meeting"
+	}
+	url := strings.TrimSpace(bridge.Discovery.Web)
+	if url == "" {
+		if bridge.ID == "" {
+			return "RingCentral Video meeting"
+		}
+		return fmt.Sprintf("RingCentral Video bridge ID: %s", bridge.ID)
+	}
+	if bridge.ID == "" {
+		return fmt.Sprintf("RingCentral Video join link: %s", url)
+	}
+	return fmt.Sprintf("RingCentral Video join link: %s\nBridge ID: %s", url, bridge.ID)
 }
 
 func videoListFromParams(ctx context.Context, client *ringcentral.Client, params map[string]string, requesterID string) (string, int, error) {
@@ -546,19 +669,11 @@ type upcomingMeetingEvent struct {
 }
 
 func listUpcomingMeetingEvents(ctx context.Context, client *ringcentral.Client, scope string, limit int) ([]upcomingMeetingEvent, error) {
-	if meetings, err := listCloudCalendarMeetings(ctx, client, scope, limit); err == nil {
-		if len(meetings) > 0 {
-			return meetings, nil
-		}
-	} else if !isCloudCalendarUnavailable(err) {
-		return nil, err
-	}
-
-	events, err := client.ListEvents(ctx)
+	events, err := listCloudCalendarMeetings(ctx, client, scope, limit)
 	if err != nil {
 		return nil, err
 	}
-	return filterUpcomingMeetingEvents(teamEventsToUpcomingMeetings(events.Records), scope, limit), nil
+	return events, nil
 }
 
 func listCloudCalendarMeetings(ctx context.Context, client *ringcentral.Client, scope string, limit int) ([]upcomingMeetingEvent, error) {
@@ -1157,10 +1272,12 @@ func phoneCallLogFromParams(ctx context.Context, client *ringcentral.Client, par
 	records := filterPhoneCallLogRecords(list.Records, opts, scope, days, time.Now())
 	summary := truthyParam(params["summary"])
 	nextActions := truthyParam(params["next_actions"])
+	var followUps []missedCallFollowUpStatus
 	if nextActions {
 		enrichMissedCallCallbackNumbers(ctx, client, records)
+		followUps = sendMissedCallFollowUpSMS(ctx, client, records)
 	}
-	return formatPhoneCallLogSummary(records, scope, missing, summary, nextActions), len(records), nil
+	return formatPhoneCallLogSummary(records, scope, missing, summary, nextActions, followUps), len(records), nil
 }
 
 func enrichMissedCallCallbackNumbers(ctx context.Context, client *ringcentral.Client, records []ringcentral.CallLogRecord) {
@@ -1259,7 +1376,7 @@ func truthyParam(value string) bool {
 	}
 }
 
-func formatPhoneCallLogSummary(records []ringcentral.CallLogRecord, scope string, missing bool, summary bool, nextActions bool) string {
+func formatPhoneCallLogSummary(records []ringcentral.CallLogRecord, scope string, missing bool, summary bool, nextActions bool, followUps []missedCallFollowUpStatus) string {
 	if len(records) == 0 {
 		if scope == "today" {
 			return "No call log records found for today."
@@ -1293,6 +1410,19 @@ func formatPhoneCallLogSummary(records []ringcentral.CallLogRecord, scope string
 		sb.WriteString("\n**Next actions**\n")
 		if stats.missed == 0 {
 			sb.WriteString("- No missed-call follow-up needed.\n")
+		} else if len(followUps) > 0 {
+			for _, item := range followUps {
+				if item.Success {
+					sb.WriteString(fmt.Sprintf("- SMS sent to %s. Status: %s", item.Label, item.Status))
+					if item.MessageID != "" {
+						sb.WriteString(fmt.Sprintf(" (id `%s`)", item.MessageID))
+					}
+					sb.WriteString(".\n")
+				} else {
+					sb.WriteString(fmt.Sprintf("- SMS follow-up failed for %s: %s.\n", item.Label, item.Error))
+				}
+				sb.WriteString(fmt.Sprintf("- You can also directly click/call %s.\n", item.Label))
+			}
 		} else {
 			for _, rec := range records {
 				if strings.EqualFold(strings.TrimSpace(rec.Result), "Missed") {
@@ -1305,6 +1435,96 @@ func formatPhoneCallLogSummary(records []ringcentral.CallLogRecord, scope string
 		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+type missedCallFollowUpStatus struct {
+	Label     string
+	Number    string
+	Success   bool
+	Status    string
+	MessageID string
+	Error     string
+}
+
+func sendMissedCallFollowUpSMS(ctx context.Context, client *ringcentral.Client, records []ringcentral.CallLogRecord) []missedCallFollowUpStatus {
+	targets := uniqueMissedCallFollowUpTargets(records)
+	if len(targets) == 0 {
+		return nil
+	}
+	from, err := defaultSMSSenderNumber(ctx, client)
+	if err != nil {
+		out := make([]missedCallFollowUpStatus, 0, len(targets))
+		for _, target := range targets {
+			out = append(out, missedCallFollowUpStatus{
+				Label: target.Label,
+				Error: err.Error(),
+			})
+		}
+		return out
+	}
+	const body = "Sorry I missed your call. What is this regarding?"
+	out := make([]missedCallFollowUpStatus, 0, len(targets))
+	for _, target := range targets {
+		status := missedCallFollowUpStatus{
+			Label:  target.Label,
+			Number: target.Number,
+		}
+		if strings.TrimSpace(target.Number) == "" {
+			status.Error = "no reachable phone number found"
+			out = append(out, status)
+			continue
+		}
+		msg, err := client.SendSMS(ctx, &ringcentral.CreateSMSRequest{
+			From: ringcentral.PhoneNumberRef{PhoneNumber: from},
+			To:   []ringcentral.PhoneNumberRef{{PhoneNumber: target.Number}},
+			Text: body,
+		})
+		if err != nil {
+			slog.Error("missed-call sms follow-up failed", "component", "actions", "to", target.Number, "label", target.Label, "error", err)
+			status.Error = friendlyPhoneAPIError(err)
+			out = append(out, status)
+			continue
+		}
+		status.Success = true
+		status.Status = strings.TrimSpace(msg.MessageStatus)
+		if status.Status == "" {
+			status.Status = "Queued"
+		}
+		status.MessageID = ringcentral.FormatResourceID(msg.ID)
+		slog.Info("missed-call sms follow-up sent", "component", "actions", "to", target.Number, "label", target.Label, "messageID", status.MessageID, "status", status.Status)
+		out = append(out, status)
+	}
+	return out
+}
+
+type missedCallFollowUpTarget struct {
+	Label  string
+	Number string
+}
+
+func uniqueMissedCallFollowUpTargets(records []ringcentral.CallLogRecord) []missedCallFollowUpTarget {
+	seen := make(map[string]bool)
+	out := make([]missedCallFollowUpTarget, 0, len(records))
+	for _, rec := range records {
+		if !strings.EqualFold(strings.TrimSpace(rec.Result), "Missed") {
+			continue
+		}
+		label := callLogPartyLabel(rec.From)
+		number := strings.TrimSpace(rec.From.PhoneNumber)
+		key := strings.ToLower(strings.TrimSpace(number))
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(label))
+		}
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, missedCallFollowUpTarget{
+			Label:  label,
+			Number: number,
+		})
+	}
+	return out
 }
 
 type callLogStats struct {
@@ -1377,6 +1597,10 @@ func friendlyPhoneAPIError(err error) string {
 		strings.Contains(msg, "[ReadCallLog] permission") ||
 		strings.Contains(msg, "permissionName: ReadCallLog"):
 		return "ReadCallLog permission is missing. Ask an admin to add `ReadCallLog` to the Private JWT App, regenerate or rotate the JWT token, then rerun RC JWT preflight/onboarding."
+	case strings.Contains(msg, "permissionName\":\"SMS") ||
+		strings.Contains(msg, "[SMS] permission") ||
+		strings.Contains(msg, "permissionName: SMS"):
+		return "SMS permission is missing. Ask an admin to add `SMS` to the Private JWT App, regenerate or rotate the JWT token, then rerun RC JWT preflight/onboarding."
 	default:
 		return msg
 	}
@@ -1689,20 +1913,28 @@ func awaitCrossChatOOB(actionClient *ringcentral.Client, challenge *oob.Challeng
 		if bridgeType == "" {
 			bridgeType = "Instant"
 		}
-		bridge, err := actionClient.CreateVideoBridge(ctx, &ringcentral.CreateVideoBridgeRequest{Name: title, Type: bridgeType})
+		bridge, event, err := createVideoMeeting(ctx, actionClient, videoCreateOptions{
+			Title:      title,
+			BridgeType: bridgeType,
+			StartTime:  a.Params["start"],
+			EndTime:    a.Params["end"],
+		})
 		if err != nil {
 			logSendError(SendTextReply(ctx, actionClient, originChat,
 				fmt.Sprintf("Cross-chat %s failed: create video meeting: %v", a.Type, err)))
 			return
 		}
-		if err := SendTextReply(ctx, actionClient, targetChat, formatVideoBridgeMessage(bridge)); err != nil {
+		if err := SendTextReply(ctx, actionClient, targetChat, formatVideoMeetingMessage(bridge, event)); err != nil {
 			logSendError(SendTextReply(ctx, actionClient, originChat,
 				fmt.Sprintf("Cross-chat %s failed: post video link: %v", a.Type, err)))
 			return
 		}
 		slog.Info("action: cross-chat OOB approved - created video bridge", "bridgeID", bridge.ID, "chatID", targetChat, "title", title)
-		logSendError(SendTextReply(ctx, actionClient, originChat,
-			fmt.Sprintf("Cross-chat %s approved — video meeting \"%s\" created in target chat.", a.Type, title)))
+		summary := fmt.Sprintf("Cross-chat %s approved — video meeting \"%s\" created in target chat.", a.Type, title)
+		if event != nil && event.ID != "" {
+			summary = fmt.Sprintf("Cross-chat %s approved — scheduled video meeting \"%s\" created in target chat as event `%s`.", a.Type, title, event.ID)
+		}
+		logSendError(SendTextReply(ctx, actionClient, originChat, summary))
 	default:
 		logSendError(SendTextReply(ctx, actionClient, originChat,
 			fmt.Sprintf("Cross-chat %s cancelled: unsupported type for OOB approval.", a.Type)))

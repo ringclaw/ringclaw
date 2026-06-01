@@ -78,6 +78,10 @@ func ringOutsEndpoint() string {
 	return "/restapi/v1.0/account/~/extension/~/ring-out"
 }
 
+func smsEndpoint() string {
+	return "/restapi/v1.0/account/~/extension/~/sms"
+}
+
 func ringOutEndpoint(ringOutID string) string {
 	return fmt.Sprintf("%s/%s", ringOutsEndpoint(), url.PathEscape(ringOutID))
 }

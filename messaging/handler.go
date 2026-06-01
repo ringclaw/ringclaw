@@ -19,7 +19,7 @@ import (
 
 const maxSeenMsgs = 10000
 
-var defaultEnabledCapabilities = []string{"message", "summary", "video", "phone", "call_log"}
+var defaultEnabledCapabilities = []string{"message", "summary", "video", "phone", "call_log", "sms"}
 
 // AgentFactory creates an agent by config name. Returns nil if the name is unknown.
 type AgentFactory func(ctx context.Context, name string) agent.Agent
@@ -221,8 +221,9 @@ func (h *Handler) SetConversationNamespace(namespace string) {
 }
 
 // SetCapabilities installs the AVA/RingClaw runtime capabilities selected at
-// onboarding. Video and phone are product-default capabilities; scopes and
-// RingCentral permissions still decide whether the backing API call succeeds.
+// onboarding. Video, phone, and SMS are product-default capabilities; scopes
+// and RingCentral permissions still decide whether the backing API call
+// succeeds.
 func (h *Handler) SetCapabilities(capabilities []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -18,7 +18,7 @@ func recentCutoff() string {
 // IsActionCommand checks if text starts with a RingCentral resource command.
 func IsActionCommand(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
-	for _, cmd := range []string{"/task", "/note", "/event", "/card", "/video", "/phone"} {
+	for _, cmd := range []string{"/task", "/note", "/event", "/card", "/video", "/phone", "/sms"} {
 		if lower == cmd || strings.HasPrefix(lower, cmd+" ") {
 			return true
 		}
@@ -39,6 +39,8 @@ func actionCommandCapability(text string) string {
 			return "call_log"
 		}
 		return "phone"
+	case "/sms":
+		return "sms"
 	default:
 		return ""
 	}
@@ -52,6 +54,8 @@ func capabilityDisabledMessage(capability string) string {
 		return "Phone capability is not enabled for this AVA bot. Enable Phone during onboarding and verify the Private JWT App has RingOut and ReadCallLog scopes."
 	case "call_log":
 		return "Call log capability is not enabled for this AVA bot. Enable Phone during onboarding or verify the Private JWT App has the ReadCallLog scope."
+	case "sms":
+		return "SMS capability is not enabled for this AVA bot. Enable SMS during onboarding and verify the Private JWT App has the SMS scope."
 	default:
 		return fmt.Sprintf("%s capability is not enabled for this AVA bot.", capability)
 	}
@@ -85,8 +89,10 @@ func HandleActionCommandWithRequester(ctx context.Context, client *ringcentral.C
 		return handleVideo(ctx, client, action, args, text, requesterID)
 	case "/phone":
 		return handlePhone(ctx, client, action, args, requesterID)
+	case "/sms":
+		return handleSMS(ctx, client, action, args)
 	default:
-		return "Unknown command. Use /task, /note, /event, /card, /video, or /phone."
+		return "Unknown command. Use /task, /note, /event, /card, /video, /phone, or /sms."
 	}
 }
 
@@ -631,11 +637,11 @@ func handleVideo(ctx context.Context, client *ringcentral.Client, action string,
 	case "list":
 		return videoList(ctx, client, requesterID)
 	case "create":
-		title, bridgeType := parseVideoCreateArgs(args)
-		if title == "" {
-			return "Usage: /video create <title> [type=Instant|Scheduled|PMI]"
+		opts := parseVideoCreateArgs(args)
+		if opts.Title == "" {
+			return "Usage: /video create <title> [type=Instant|Scheduled|PMI] [start=<ISO8601> end=<ISO8601>]"
 		}
-		return videoCreate(ctx, client, title, bridgeType)
+		return videoCreate(ctx, client, opts)
 	case "get":
 		if len(args) == 0 {
 			return "Usage: /video get <bridgeId>"
@@ -651,20 +657,37 @@ func handleVideo(ctx context.Context, client *ringcentral.Client, action string,
 	}
 }
 
-func parseVideoCreateArgs(args []string) (string, string) {
-	bridgeType := "Instant"
+type videoCreateOptions struct {
+	Title      string
+	BridgeType string
+	StartTime  string
+	EndTime    string
+}
+
+func parseVideoCreateArgs(args []string) videoCreateOptions {
+	opts := videoCreateOptions{BridgeType: "Instant"}
 	var titleParts []string
 	for _, arg := range args {
 		key, value, ok := strings.Cut(arg, "=")
-		if ok && strings.EqualFold(strings.TrimSpace(key), "type") {
-			if v := strings.TrimSpace(value); v != "" {
-				bridgeType = v
+		if ok {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "type":
+				if v := strings.TrimSpace(value); v != "" {
+					opts.BridgeType = v
+				}
+				continue
+			case "start":
+				opts.StartTime = strings.TrimSpace(value)
+				continue
+			case "end":
+				opts.EndTime = strings.TrimSpace(value)
+				continue
 			}
-			continue
 		}
 		titleParts = append(titleParts, arg)
 	}
-	return strings.TrimSpace(strings.Join(titleParts, " ")), bridgeType
+	opts.Title = strings.TrimSpace(strings.Join(titleParts, " "))
+	return opts
 }
 
 func videoList(ctx context.Context, client *ringcentral.Client, requesterID string) string {
@@ -702,13 +725,13 @@ func videoList(ctx context.Context, client *ringcentral.Client, requesterID stri
 	return strings.TrimSpace(sb.String())
 }
 
-func videoCreate(ctx context.Context, client *ringcentral.Client, title, bridgeType string) string {
-	bridge, err := client.CreateVideoBridge(ctx, &ringcentral.CreateVideoBridgeRequest{Name: title, Type: bridgeType})
+func videoCreate(ctx context.Context, client *ringcentral.Client, opts videoCreateOptions) string {
+	bridge, event, err := createVideoMeeting(ctx, client, opts)
 	if err != nil {
 		slog.Error("create video bridge failed", "error", err)
 		return fmt.Sprintf("Error: %s", friendlyVideoAPIError(err))
 	}
-	return fmt.Sprintf("Video meeting created: `%s` — %s\n%s", bridge.ID, bridge.Name, bridge.Discovery.Web)
+	return formatVideoMeetingMessage(bridge, event)
 }
 
 func videoGet(ctx context.Context, client *ringcentral.Client, bridgeID string) string {
@@ -742,6 +765,11 @@ func friendlyVideoAPIError(err error) string {
 		strings.Contains(msg, "[Video] permission") ||
 		strings.Contains(msg, "permissionName: Video") {
 		return "Video permission is missing. Ask an admin to add `Video` to the Private JWT App, regenerate or rotate the JWT token, then rerun RC JWT preflight/onboarding."
+	}
+	if strings.Contains(msg, "permissionName\":\"ManageCloudCalendars") ||
+		strings.Contains(msg, "[ManageCloudCalendars] permission") ||
+		strings.Contains(msg, "permissionName: ManageCloudCalendars") {
+		return "ManageCloudCalendars permission is missing. Ask an admin to add `ManageCloudCalendars` to the Private JWT App, regenerate or rotate the JWT token, then rerun RC JWT preflight/onboarding."
 	}
 	return msg
 }
@@ -796,6 +824,90 @@ func handlePhone(ctx context.Context, client *ringcentral.Client, action string,
 	default:
 		return formatActionHelp("/phone")
 	}
+}
+
+// --- SMS handlers ---
+
+func handleSMS(ctx context.Context, client *ringcentral.Client, action string, args []string) string {
+	switch action {
+	case "send":
+		if len(args) < 2 {
+			return "Usage: /sms send <toPhone> <message> [from=<phone>] or /sms send to=<name|phone> text=<message> [from=<phone>]"
+		}
+		params := map[string]string{}
+		keyed := parseKeyValues(strings.Join(args, " "))
+		if len(keyed) > 0 {
+			for _, pair := range keyed {
+				params[pair.key] = pair.value
+			}
+			if strings.TrimSpace(params["text"]) == "" {
+				if text := strings.TrimSpace(params["body"]); text != "" {
+					params["text"] = text
+				}
+			}
+		}
+		if strings.TrimSpace(params["to"]) == "" {
+			params["to"] = args[0]
+			var bodyParts []string
+			for _, arg := range args[1:] {
+				if value, ok := strings.CutPrefix(arg, "from="); ok {
+					params["from"] = strings.TrimSpace(value)
+					continue
+				}
+				bodyParts = append(bodyParts, arg)
+			}
+			params["text"] = strings.TrimSpace(strings.Join(bodyParts, " "))
+		}
+		return smsSend(ctx, client, params)
+	default:
+		return formatActionHelp("/sms")
+	}
+}
+
+func smsSend(ctx context.Context, client *ringcentral.Client, params map[string]string) string {
+	to := strings.TrimSpace(params["to"])
+	text := strings.TrimSpace(params["text"])
+	if to == "" || text == "" {
+		return "Usage: /sms send <toPhone> <message> [from=<phone>] or /sms send to=<name|phone> text=<message> [from=<phone>]"
+	}
+	targetLabel := to
+	if !looksLikePhoneNumber(to) {
+		number, label, err := resolveNameToPhoneNumber(ctx, client, to)
+		if err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		slog.Info("action: resolved sms target", "target", to, "match", label, "phone", number)
+		to = number
+		if strings.TrimSpace(label) != "" {
+			targetLabel = label
+		}
+	}
+	from := strings.TrimSpace(params["from"])
+	var err error
+	if from == "" {
+		from, err = defaultSMSSenderNumber(ctx, client)
+		if err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+	}
+	msg, err := client.SendSMS(ctx, &ringcentral.CreateSMSRequest{
+		From: ringcentral.PhoneNumberRef{PhoneNumber: from},
+		To:   []ringcentral.PhoneNumberRef{{PhoneNumber: to}},
+		Text: text,
+	})
+	if err != nil {
+		slog.Error("send sms failed", "error", err)
+		return fmt.Sprintf("Error: %s", friendlyPhoneAPIError(err))
+	}
+	status := strings.TrimSpace(msg.MessageStatus)
+	if status == "" {
+		status = "Queued"
+	}
+	messageID := ringcentral.FormatResourceID(msg.ID)
+	if targetLabel != "" && !strings.EqualFold(strings.TrimSpace(targetLabel), strings.TrimSpace(to)) {
+		return fmt.Sprintf("SMS sent: `%s` — %s (%s -> %s, %s)", messageID, status, from, targetLabel, to)
+	}
+	return fmt.Sprintf("SMS sent: `%s` — %s (%s -> %s)", messageID, status, from, to)
 }
 
 func phoneRingOut(ctx context.Context, client *ringcentral.Client, params map[string]string) string {
@@ -870,6 +982,24 @@ func filterCallLogRecords(records []ringcentral.CallLogRecord, opts ringcentral.
 		}
 	}
 	return filtered
+}
+
+func defaultSMSSenderNumber(ctx context.Context, client *ringcentral.Client) (string, error) {
+	list, err := client.ListExtensionPhoneNumbers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list current extension phone numbers: %w", err)
+	}
+	for _, record := range list.Records {
+		if phone := strings.TrimSpace(record.PhoneNumber); phone != "" && extensionPhoneNumberActive(record) {
+			return phone, nil
+		}
+	}
+	return "", fmt.Errorf("current extension has no active phone number for SMS; pass from=<owned phone number>")
+}
+
+func extensionPhoneNumberActive(record ringcentral.ExtensionPhoneNumber) bool {
+	status := strings.TrimSpace(record.Status)
+	return status == "" || strings.EqualFold(status, "Normal")
 }
 
 // --- Helpers ---
@@ -980,10 +1110,12 @@ func formatActionHelp(cmd string) string {
 	case "/card":
 		return "Usage:\n- /card get <id>\n- /card delete <id>"
 	case "/video":
-		return "Usage:\n- /video list\n- /video create <title> [type=Instant|Scheduled|PMI]\n- /video get <bridgeId>\n- /video delete <bridgeId>"
+		return "Usage:\n- /video list\n- /video create <title> [type=Instant|Scheduled|PMI] [start=<ISO8601> end=<ISO8601>]\n- /video get <bridgeId>\n- /video delete <bridgeId>"
 	case "/phone":
 		return "Usage:\n- /phone ringout <toPhone> [from=<phone>] [callerid=<phone>] [playprompt=true]\n- /phone status <ringOutId>\n- /phone cancel <ringOutId>\n- /phone calllog [direction=Inbound|Outbound] [result=Missed] [view=Simple|Detailed] [limit=10]\n- /phone missed [limit=25]"
+	case "/sms":
+		return "Usage:\n- /sms send <toPhone> <message> [from=<phone>]\n- /sms send to=<name|phone> text=<message> [from=<phone>]"
 	default:
-		return "Available commands: /task, /note, /event, /card, /video, /phone"
+		return "Available commands: /task, /note, /event, /card, /video, /phone, /sms"
 	}
 }

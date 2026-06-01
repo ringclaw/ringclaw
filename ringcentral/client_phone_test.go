@@ -7,6 +7,46 @@ import (
 	"testing"
 )
 
+func TestSendSMS_RequestAndResponse(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/restapi/v1.0/account/~/extension/~/sms" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var body CreateSMSRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.From.PhoneNumber != "+14155550100" || len(body.To) != 1 || body.To[0].PhoneNumber != "+14155550199" || body.Text != "Hello from RingClaw" {
+			t.Fatalf("unexpected request body: %+v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(SMSMessage{
+			ID:            402206716008,
+			Type:          "SMS",
+			MessageStatus: "Sent",
+			Subject:       "Hello from RingClaw",
+			From:          SMSParty{PhoneNumber: "+14155550100"},
+			To:            []SMSParty{{PhoneNumber: "+14155550199"}},
+		})
+	})
+	defer srv.Close()
+
+	msg, err := client.SendSMS(context.Background(), &CreateSMSRequest{
+		From: PhoneNumberRef{PhoneNumber: "+14155550100"},
+		To:   []PhoneNumberRef{{PhoneNumber: "+14155550199"}},
+		Text: "Hello from RingClaw",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.MessageStatus != "Sent" || msg.Type != "SMS" {
+		t.Fatalf("unexpected sms message: %+v", msg)
+	}
+}
+
 func TestCreateRingOut_RequestAndResponse(t *testing.T) {
 	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

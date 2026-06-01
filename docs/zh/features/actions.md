@@ -4,7 +4,7 @@ title: AI 驱动操作
 
 # AI 驱动的自动操作
 
-AI Agent 在对话中可以自动创建笔记、任务、日历事件、Adaptive Card、RingCentral Video bridge、FIJI 客户端电话，以及通话记录总结。当用户的请求暗示需要创建这些资源时，Agent 会在回复中附加 ACTION 块，RingClaw 会执行或发出对应的治理 action。
+AI Agent 在对话中可以自动创建笔记、任务、日历事件、Adaptive Card、RingCentral Video bridge、FIJI 客户端电话、短信，以及通话记录总结。当用户的请求暗示需要创建这些资源时，Agent 会在回复中附加 ACTION 块，RingClaw 会执行或发出对应的治理 action。
 
 ## 工作流程
 
@@ -64,7 +64,11 @@ sequenceDiagram
             R->>FIJI: 发出 make_call client action
         else PHONE_CALLLOG
             R->>RC: ListExtensionCallLog
+            R->>RC: 可选先发送 missed call follow-up SMS
             R->>RC: SendPost 发送 missed call 摘要和 next actions
+        else SMS
+            R->>R: 解析联系人 / 电话号码
+            R->>RC: SendSMS
         else MESSAGE
             R->>R: 解析 chatid / 人名
             R->>RC: SendPost
@@ -96,6 +100,10 @@ ACTION:PHONE_CALL to=+14155550199
 END_ACTION
 
 ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
+END_ACTION
+
+ACTION:SMS to=Grace He
+Sorry I missed your call. What is this regarding?
 END_ACTION
 ```
 
@@ -177,11 +185,11 @@ END_ACTION
 /card delete <id>    # 删除卡片
 ```
 
-## Video 与 Phone 命令
+## Video、Phone 与 SMS 命令
 
-Video bridge 命令基于 RingCentral Video REST API，会返回或发送入会链接。Phone 命令支持 RingOut 和个人 Call Log，并提供未接来电快捷视图；这些命令和 message 命令一样使用解析后的 RingCentral client，最终选中的 app token 必须具备对应 scope。消息桥接中的 RingOut 仍然仅 owner 可执行。
+Video bridge 命令基于 RingCentral Video REST API，会返回或发送入会链接。Phone 命令支持 RingOut 和个人 Call Log，并提供未接来电快捷视图。SMS 命令通过 RingCentral 短信 API 发送纯文本消息，并且可以在发送前先把人名解析成真实手机号；这些命令和 message 命令一样使用解析后的 RingCentral client，最终选中的 app token 必须具备对应 scope。消息桥接中的 RingOut 仍然仅 owner 可执行。
 
-Video 和 Phone 是 Personal AVA Pro 的默认产品能力。即使 `ringcentral.capabilities` 只配置了 `message` / `summary`，RingClaw action 层也默认允许 Video / Phone；真实 API 调用是否成功仍取决于 Private JWT App 的 scopes 和用户权限。
+Video、Phone 和 SMS 是 Personal AVA Pro 的默认产品能力。即使 `ringcentral.capabilities` 只配置了 `message` / `summary`，RingClaw action 层也默认允许 Video / Phone / SMS；真实 API 调用是否成功仍取决于 Private JWT App 的 scopes 和用户权限。
 
 ```
 /video list
@@ -195,25 +203,30 @@ Video 和 Phone 是 Personal AVA Pro 的默认产品能力。即使 `ringcentral
 /phone calllog direction=Outbound view=Detailed limit=10
 /phone calllog result=Missed date_from=2026-05-17T00:00:00+08:00 date_to=2026-06-01T23:59:59+08:00 limit=25
 /phone missed limit=25
+
+/sms send +14155550199 Hello from RingClaw
+/sms send to=Grace He text=Sorry I missed your call. What is this regarding?
 ```
 
 `/phone missed` 是 inbound call log + `result=Missed` 的快捷方式。CLI 中等价命令为 `ringclaw phone calllog --result Missed --limit 25`；JSON 输出也会应用相同的客户端 result 过滤。Result 过滤刻意放在客户端执行，这样 RingClaw 可以先按用户级日期窗口拉取数据，再准确整理较早的 missed call。
 
-## Video 与 Phone 自然语言能力
+`/sms send` 既支持直接填写手机号，也支持 `to=<人名>` + `text=<内容>`。当目标是人名时，RingClaw 会先到目录 / 通讯录里解析对应手机号，再发送短信。
 
-Video / Phone 的自然语言请求和 message / task / event 使用同一条链路：
+## Video、Phone 与 SMS 自然语言能力
+
+Video / Phone / SMS 的自然语言请求和 message / task / event 使用同一条链路：
 
 ```text
 用户消息
   -> matchesIntentTrigger
-  -> classifyIntent = video | phone
+  -> classifyIntent = video | phone | sms
   -> default agent 输出 ACTION 块
   -> ExecuteAgentActions
   -> RingCentral API
   -> SendPost 发回当前聊天
 ```
 
-RingClaw 不再保留独立的 `matchesVideoMeetingListIntent` fast-path。会议列表查询统一表达为 `ACTION:VIDEO_LIST`，通话记录查询统一表达为 `ACTION:PHONE_CALLLOG`。
+RingClaw 不再保留独立的 `matchesVideoMeetingListIntent` fast-path。会议列表查询统一表达为 `ACTION:VIDEO_LIST`，通话记录查询统一表达为 `ACTION:PHONE_CALLLOG`，明确的短信请求统一表达为 `ACTION:SMS`。
 
 ### Video 示例
 
@@ -289,6 +302,26 @@ ACTION:PHONE_CALLLOG scope=recent days=15 missing=true summary=true next_actions
 END_ACTION
 ```
 
+当 `next_actions=true` 且 RingClaw 发现有 missed call 需要跟进时，当前流程可以先自动发送一条短信道歉 / 询问，再把结果写进 summary。summary 中会显示短信已发送，同时提醒用户也可以直接点击拨打对方电话。
+
+missed call follow-up 场景示例：
+
+```text
+Any action items mentioned in my calls today?
+Check today's missed calls and follow up if needed.
+帮我看下今天 missed call 里有没有要跟进的，有的话先发个短信。
+```
+
+典型行为：
+
+```text
+1. 查询今天的 call log。
+2. 识别需要 follow-up 的 missed inbound calls。
+3. 发送短信："Sorry I missed your call. What is this regarding?"
+4. 在 summary 中显示 "SMS sent to <name/number>. Status: <status>"。
+5. 提醒用户也可以直接点击拨打 <name> (<phone number>)。
+```
+
 `ACTION:PHONE_CALLLOG` 参数：
 
 | 参数 | 可选值 | 含义 |
@@ -298,11 +331,37 @@ END_ACTION
 | `date_from`, `date_to` | RFC3339 时间 | Agent 已经知道精确时间范围时使用 |
 | `missing` | `true`, `false` | 突出 missed / missing calls |
 | `summary` | `true`, `false` | 输出总通话数、未接数、入站、出站、已接 / accepted 数量 |
-| `next_actions` | `true`, `false` | 输出后续行动建议，特别是 missed call follow-up |
+| `next_actions` | `true`, `false` | 输出后续行动建议；对于 missed call，也可以自动发一条简短 follow-up SMS，并把发送结果显示在 summary 里 |
 | `limit` | 正整数 | 设置 `recordCount`；默认 `10` |
 | `direction` | `Inbound`, `Outbound` | 可选 Call Log API 方向过滤 |
 | `result` | `Missed`, `Accepted` 等 | 可选客户端结果过滤 |
 | `view` | `Simple`, `Detailed` | 可选 Call Log API view |
+
+### SMS 示例
+
+Agent 可以发送纯文本短信：
+
+```text
+Send Grace He a text saying I am running late.
+给 Grace He 发个短信，说我一会儿回电。
+发短信给 +12123753080：Sorry I missed your call. What is this regarding?
+```
+
+预期 ACTION：
+
+```text
+ACTION:SMS to=Grace He
+Sorry I missed your call. What is this regarding?
+END_ACTION
+```
+
+`ACTION:SMS` 参数：
+
+| 参数 | 可选值 | 含义 |
+| --- | --- | --- |
+| `to` | 手机号或人名 | 短信接收方；如果是人名，会先通过目录 / 通讯录解析手机号 |
+| `from` | 自己名下号码 | 可选发送方号码；未指定时 RingClaw 会自动选择默认可发短信号码 |
+| body | 纯文本 | 短信正文内容 |
 
 ### 所需 scopes
 
@@ -312,5 +371,6 @@ Private JWT App 需要包含：
 Video       -> ACTION:VIDEO, ACTION:VIDEO_LIST
 Phone       -> ACTION:PHONE_CALL（FIJI client makeCall bridge）
 ReadCallLog -> ACTION:PHONE_CALLLOG, /phone calllog, /phone missed
+SMS         -> ACTION:SMS, /sms send, missed-call follow-up SMS
 RingOut     -> 仅 /phone ringout 诊断命令
 ```
