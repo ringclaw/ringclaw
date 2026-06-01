@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 FROM node:24-bookworm-slim
 
-ARG NPM_REGISTRY
+ARG NPM_REGISTRY=https://nexus-xmn02.int.rclabenv.com/nexus/content/groups/npm-all/
 ENV DISABLE_AUTOUPDATER=1
 ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
 
@@ -30,7 +30,7 @@ RUN apt-get update \
 COPY --from=builder /usr/local/bin/ringclaw /usr/local/bin/ringclaw
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 
 VOLUME /root/.ringclaw
-ENTRYPOINT ["docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
