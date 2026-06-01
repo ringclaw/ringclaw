@@ -20,9 +20,10 @@ func newTestClientWithServer(handler http.HandlerFunc) (*Client, *httptest.Serve
 		serverURL:   srv.URL,
 	}
 	client := &Client{
-		serverURL:  srv.URL,
-		auth:       auth,
-		httpClient: &http.Client{},
+		serverURL:      srv.URL,
+		videoServerURL: srv.URL,
+		auth:           auth,
+		httpClient:     &http.Client{},
 	}
 	return client, srv
 }

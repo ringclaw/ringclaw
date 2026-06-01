@@ -41,6 +41,20 @@ func newNamedTestClients(serverURL string) (*ringcentral.Client, *ringcentral.Cl
 	return botClient, privateClient
 }
 
+func writeCloudCalendarPermissionError(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"errorCode": "InsufficientPermissions",
+		"message":   "In order to call this API endpoint, application needs to have [ManageCloudCalendars] permission",
+		"errors": []map[string]string{{
+			"errorCode":      "CMN-401",
+			"message":        "In order to call this API endpoint, application needs to have [ManageCloudCalendars] permission",
+			"permissionName": "ManageCloudCalendars",
+		}},
+		"permissionName": "ManageCloudCalendars",
+	})
+}
+
 func TestHandleActionCommand_TaskList(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -49,6 +63,7 @@ func TestHandleActionCommand_TaskList(t *testing.T) {
 		})
 	})
 	defer srv.Close()
+	client.SetOwnerID("fiji-user-1")
 
 	result := HandleActionCommand(context.Background(), client, "c1", "/task list")
 	if !strings.Contains(result, "t1") || !strings.Contains(result, "Buy milk") {
@@ -163,25 +178,23 @@ func TestHandleActionCommand_VideoCreate(t *testing.T) {
 
 func TestHandleActionCommand_VideoList(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/rcvideo/v2/account/~/extension/~/bridges" {
+		if r.Method != http.MethodGet || r.URL.Path != "/rcvideo/v1/history/meetings" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
-			Records: []ringcentral.VideoBridge{{
-				ID:   "bridge-1",
-				Name: "明天12点会议",
-				Type: "Scheduled",
-				Discovery: ringcentral.VideoBridgeDiscovery{
-					Web: "https://v.ringcentral.com/join/123",
-				},
+		json.NewEncoder(w).Encode(ringcentral.VideoMeetingHistoryList{
+			Meetings: []ringcentral.VideoMeetingHistory{{
+				ID:          "meeting-1",
+				DisplayName: "明天12点会议",
+				Status:      "Done",
+				StartTime:   "2026-06-01T12:00:00Z",
 			}},
 		})
 	})
 	defer srv.Close()
 
 	result := HandleActionCommand(context.Background(), client, "c1", "/video list")
-	if !strings.Contains(result, "bridge-1") || !strings.Contains(result, "明天12点会议") || !strings.Contains(result, "https://v.ringcentral.com/join/123") {
+	if !strings.Contains(result, "meeting-1") || !strings.Contains(result, "明天12点会议") || !strings.Contains(result, "Done") {
 		t.Errorf("unexpected result: %s", result)
 	}
 }
@@ -248,17 +261,26 @@ func TestHandleActionCommand_PhoneRingOut(t *testing.T) {
 	}
 }
 
-func TestHandleActionCommand_PhoneRingOutUsesCurrentTokenIdentityWithoutFromLookup(t *testing.T) {
+func TestHandleActionCommand_PhoneRingOutUsesForwardingNumberByDefault(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/forwarding-number":
+			json.NewEncoder(w).Encode(ringcentral.ForwardingNumberList{
+				Records: []ringcentral.ForwardingNumber{{
+					PhoneNumber: "+14155550100",
+					Label:       "My mobile",
+					Features:    []string{"RingOut"},
+				}},
+			})
 		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode ringout request: %v", err)
 			}
-			if _, ok := body["from"]; ok {
-				t.Fatalf("from should be omitted so RingOut uses current token identity/default callback, got %+v", body["from"])
+			from, _ := body["from"].(map[string]any)
+			if from["phoneNumber"] != "+14155550100" {
+				t.Fatalf("from should use current extension forwarding number, got %+v", body["from"])
 			}
 			to, _ := body["to"].(map[string]any)
 			if to["phoneNumber"] != "+14155550199" {
@@ -277,6 +299,28 @@ func TestHandleActionCommand_PhoneRingOutUsesCurrentTokenIdentityWithoutFromLook
 	result := HandleActionCommand(context.Background(), client, "c1", "/phone ringout +14155550199")
 	if !strings.Contains(result, "ringout-1") || !strings.Contains(result, "InProgress") {
 		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestHandleActionCommand_PhoneRingOutDoesNotUseDirectNumberAsDefaultFrom(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/forwarding-number":
+			json.NewEncoder(w).Encode(ringcentral.ForwardingNumberList{})
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/phone-number":
+			t.Fatalf("direct extension phone numbers must not be used as RingOut callback defaults")
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
+			t.Fatalf("RingOut should not start without a configured forwarding/callback number")
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	result := HandleActionCommand(context.Background(), client, "c1", "/phone ringout +14155550199")
+	if !strings.Contains(result, "forwarding") || !strings.Contains(result, "callback") {
+		t.Fatalf("expected forwarding/callback setup guidance, got %q", result)
 	}
 }
 
@@ -759,21 +803,26 @@ END_ACTION`
 	}
 }
 
-func TestParseAgentActions_VideoAndRingOutParams(t *testing.T) {
+func TestParseAgentActions_VideoAndPhoneCallParams(t *testing.T) {
 	reply := `ACTION:VIDEO title=Design Review type=Scheduled chatid=team
 END_ACTION
-ACTION:RINGOUT to=+14155550199 callerid=+14155550100
+ACTION:PHONE_CALL to=+14155550199
+END_ACTION
+ACTION:PHONE_CALL to=Grace He
 END_ACTION`
 
 	_, actions := ParseAgentActions(reply)
-	if len(actions) != 2 {
-		t.Fatalf("expected 2 actions, got %d", len(actions))
+	if len(actions) != 3 {
+		t.Fatalf("expected 3 actions, got %d", len(actions))
 	}
 	if actions[0].Type != "VIDEO" || actions[0].Params["title"] != "Design Review" || actions[0].Params["type"] != "Scheduled" {
 		t.Fatalf("unexpected video action: %+v", actions[0])
 	}
-	if actions[1].Type != "RINGOUT" || actions[1].Params["from"] != "" || actions[1].Params["to"] != "+14155550199" {
-		t.Fatalf("unexpected ringout action: %+v", actions[1])
+	if actions[1].Type != "PHONE_CALL" || actions[1].Params["from"] != "" || actions[1].Params["to"] != "+14155550199" {
+		t.Fatalf("unexpected phone call action: %+v", actions[1])
+	}
+	if actions[2].Type != "PHONE_CALL" || actions[2].Params["to"] != "Grace He" {
+		t.Fatalf("unexpected named phone call action: %+v", actions[2])
 	}
 }
 
@@ -794,7 +843,7 @@ END_ACTION`
 }
 
 func TestParseAgentActions_PhoneCallLogParams(t *testing.T) {
-	reply := `ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
+	reply := `ACTION:PHONE_CALLLOG scope=recent days=15 missing=true summary=true next_actions=true limit=10
 END_ACTION`
 
 	_, actions := ParseAgentActions(reply)
@@ -802,7 +851,8 @@ END_ACTION`
 		t.Fatalf("expected 1 action, got %d", len(actions))
 	}
 	if actions[0].Type != "PHONE_CALLLOG" ||
-		actions[0].Params["scope"] != "today" ||
+		actions[0].Params["scope"] != "recent" ||
+		actions[0].Params["days"] != "15" ||
 		actions[0].Params["missing"] != "true" ||
 		actions[0].Params["summary"] != "true" ||
 		actions[0].Params["next_actions"] != "true" ||
@@ -884,7 +934,7 @@ func TestExecuteAgentActions_PhoneCallLogTodayPostsSummaryAndNextActions(t *test
 		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/call-log":
 			listed = true
 			q := r.URL.Query()
-			if q.Get("recordCount") != "10" || q.Get("dateFrom") == "" || q.Get("dateTo") == "" {
+			if q.Get("recordCount") != "100" || q.Get("dateFrom") == "" || q.Get("dateTo") == "" {
 				t.Fatalf("expected today call-log query, got %s", r.URL.RawQuery)
 			}
 			json.NewEncoder(w).Encode(ringcentral.CallLogList{
@@ -945,22 +995,26 @@ func TestExecuteAgentActions_PhoneCallLogTodayPostsSummaryAndNextActions(t *test
 	}
 }
 
-func TestExecuteAgentActions_VideoListTodayPostsImportantMeetings(t *testing.T) {
+func TestExecuteAgentActions_PhoneCallLogFiltersMissedCalls(t *testing.T) {
 	var posted string
 	var listed bool
-	now := time.Now().UTC().Format(time.RFC3339)
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges":
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/fiji-user-1/call-log":
 			listed = true
-			json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
-				Records: []ringcentral.VideoBridge{{
-					ID:         "bridge-1",
-					Name:       "客户升级复盘",
-					Type:       "Scheduled",
-					CreateTime: now,
-					Discovery:  ringcentral.VideoBridgeDiscovery{Web: "https://v.ringcentral.com/join/important"},
+			q := r.URL.Query()
+			if q.Get("direction") != "Inbound" || q.Get("result") != "" || q.Get("dateFrom") == "" || q.Get("dateTo") == "" {
+				t.Fatalf("expected missed-call extension query, got %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.CallLogList{
+				Records: []ringcentral.CallLogRecord{{
+					ID:        "missed-1",
+					StartTime: time.Now().UTC().Format(time.RFC3339),
+					Direction: "Inbound",
+					Result:    "Missed",
+					From:      ringcentral.CallLogParty{PhoneNumber: "+12125550100", Name: "Customer A"},
+					To:        ringcentral.CallLogParty{PhoneNumber: "+14155550100"},
 				}},
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
@@ -977,19 +1031,395 @@ func TestExecuteAgentActions_VideoListTodayPostsImportantMeetings(t *testing.T) 
 	defer srv.Close()
 
 	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type: "PHONE_CALLLOG",
+		Params: map[string]string{
+			"scope":        "today",
+			"missing":      "true",
+			"summary":      "true",
+			"next_actions": "true",
+			"limit":        "10",
+		},
+	}}, ActionContext{OriginIsOwner: true, RequesterID: "fiji-user-1"})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if !listed {
+		t.Fatal("expected extension call-log query")
+	}
+	if !strings.Contains(posted, "Call summary today") ||
+		!strings.Contains(posted, "Missed calls: 1") ||
+		!strings.Contains(posted, "Customer A") ||
+		!strings.Contains(posted, "Follow up missed call") {
+		t.Fatalf("unexpected posted call summary: %q", posted)
+	}
+}
+
+func TestExecuteAgentActions_PhoneCallLogRecentDaysFindsOlderMissedCalls(t *testing.T) {
+	var posted string
+	var listed bool
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/fiji-user-1/call-log":
+			listed = true
+			q := r.URL.Query()
+			if q.Get("direction") != "Inbound" || q.Get("result") != "" || q.Get("dateFrom") == "" || q.Get("dateTo") == "" {
+				t.Fatalf("expected dated inbound extension query with client-side result filtering, got %s", r.URL.RawQuery)
+			}
+			if q.Get("recordCount") != "100" {
+				t.Fatalf("expected widened missed-call search window, got %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.CallLogList{
+				Records: []ringcentral.CallLogRecord{
+					{
+						ID:        "answered-older",
+						StartTime: time.Now().AddDate(0, 0, -4).UTC().Format(time.RFC3339),
+						Direction: "Inbound",
+						Result:    "Accepted",
+						From:      ringcentral.CallLogParty{PhoneNumber: "+12125550101", Name: "Answered Caller"},
+						To:        ringcentral.CallLogParty{PhoneNumber: "+14155550100"},
+					},
+					{
+						ID:        "missed-older",
+						StartTime: time.Now().AddDate(0, 0, -13).UTC().Format(time.RFC3339),
+						Direction: "Inbound",
+						Result:    "Missed",
+						From:      ringcentral.CallLogParty{PhoneNumber: "+12125550102", Name: "Tina Zhang"},
+						To:        ringcentral.CallLogParty{PhoneNumber: "+14155550100"},
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			var body ringcentral.CreatePostRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post request: %v", err)
+			}
+			posted = body.Text
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type: "PHONE_CALLLOG",
+		Params: map[string]string{
+			"scope":        "recent",
+			"days":         "15",
+			"missing":      "true",
+			"summary":      "true",
+			"next_actions": "true",
+			"limit":        "10",
+		},
+	}}, ActionContext{OriginIsOwner: true, RequesterID: "fiji-user-1"})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if !listed {
+		t.Fatal("expected extension call-log query")
+	}
+	if !strings.Contains(posted, "missed-older") ||
+		!strings.Contains(posted, "Tina Zhang") ||
+		strings.Contains(posted, "answered-older") {
+		t.Fatalf("expected only older missed call in posted summary, got %q", posted)
+	}
+}
+
+func TestExecuteAgentActions_PhoneCallLogRecentDefaultsToDatedWindow(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/fiji-user-1/call-log":
+			q := r.URL.Query()
+			if q.Get("dateFrom") == "" || q.Get("dateTo") == "" || q.Get("result") != "" {
+				t.Fatalf("expected recent call-log query to use a dated window and client-side result filtering, got %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.CallLogList{
+				Records: []ringcentral.CallLogRecord{{
+					ID:        "missed-default-window",
+					StartTime: time.Now().AddDate(0, 0, -12).UTC().Format(time.RFC3339),
+					Direction: "Inbound",
+					Result:    "Missed",
+					From:      ringcentral.CallLogParty{Name: "Grace He"},
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/directory/entries/search":
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode directory search: %v", err)
+			}
+			if body["searchString"] != "Grace He" {
+				t.Fatalf("unexpected directory search body: %+v", body)
+			}
+			json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{
+				Records: []ringcentral.DirectoryEntry{{
+					ID:        "person-grace",
+					FirstName: "Grace",
+					LastName:  "He",
+					PhoneNumbers: []ringcentral.ContactPhoneNumber{{
+						PhoneNumber: "+12123753080",
+						Type:        "DirectNumber",
+					}},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	text, count, err := phoneCallLogFromParams(context.Background(), client, map[string]string{
+		"scope":        "recent",
+		"missing":      "true",
+		"next_actions": "true",
+		"limit":        "10",
+	}, "fiji-user-1")
+	if err != nil {
+		t.Fatalf("phoneCallLogFromParams() error = %v", err)
+	}
+	if count != 1 || !strings.Contains(text, "missed-default-window") || !strings.Contains(text, "Grace He (+12123753080)") {
+		t.Fatalf("expected recent missed call from default dated window, got count=%d text=%q", count, text)
+	}
+}
+
+func TestExecuteAgentActions_VideoListTodayPostsImportantMeetings(t *testing.T) {
+	var posted string
+	var listed bool
+	now := time.Now()
+	today := now.UTC().Format(time.RFC3339)
+	tomorrow := now.AddDate(0, 0, 1).UTC().Format(time.RFC3339)
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/cloud-calendars/ucc"):
+			writeCloudCalendarPermissionError(w)
+		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/events":
+			listed = true
+			if r.URL.Query().Get("recordCount") != "250" {
+				t.Fatalf("unexpected events query: %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.EventList{
+				Records: []ringcentral.Event{{
+					ID:        "event-today",
+					Title:     "客户升级复盘",
+					StartTime: today,
+					EndTime:   now.Add(30 * time.Minute).UTC().Format(time.RFC3339),
+					Location:  "RingCentral Video",
+				}, {
+					ID:        "event-tomorrow",
+					Title:     "Tomorrow Meeting",
+					StartTime: tomorrow,
+					EndTime:   now.AddDate(0, 0, 1).Add(30 * time.Minute).UTC().Format(time.RFC3339),
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			var body ringcentral.CreatePostRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post request: %v", err)
+			}
+			posted = body.Text
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+	client.SetOwnerID("fiji-user-1")
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
 		Type:   "VIDEO_LIST",
 		Params: map[string]string{"scope": "today", "important": "true", "limit": "5"},
-	}}, ActionContext{OriginIsOwner: true})
+	}}, ActionContext{OriginIsOwner: true, RequesterID: "fiji-user-1"})
 	if len(results) != 0 {
 		t.Fatalf("unexpected results: %+v", results)
 	}
 	if !listed {
 		t.Fatal("expected Video list API call")
 	}
-	if !strings.Contains(posted, "Important video meetings today") ||
+	if !strings.Contains(posted, "Upcoming meetings today") ||
+		!strings.Contains(posted, "Title:") ||
 		!strings.Contains(posted, "客户升级复盘") ||
-		!strings.Contains(posted, "https://v.ringcentral.com/join/important") {
+		!strings.Contains(posted, "RingCentral Video") ||
+		strings.Contains(posted, "Tomorrow Meeting") {
 		t.Fatalf("unexpected posted video list: %q", posted)
+	}
+}
+
+func TestExecuteAgentActions_VideoListTodayDedupeFallbackEvents(t *testing.T) {
+	var posted string
+	now := time.Now()
+	today := now.UTC().Format(time.RFC3339)
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/cloud-calendars/ucc"):
+			writeCloudCalendarPermissionError(w)
+		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/events":
+			json.NewEncoder(w).Encode(ringcentral.EventList{
+				Records: []ringcentral.Event{{
+					ID:          "event-1",
+					Title:       "planning meeting",
+					StartTime:   today,
+					EndTime:     now.Add(1 * time.Hour).UTC().Format(time.RFC3339),
+					Description: "Discuss release risks and owners.",
+				}, {
+					ID:        "event-2",
+					Title:     "Planning Meeting",
+					StartTime: today,
+					EndTime:   now.Add(1 * time.Hour).UTC().Format(time.RFC3339),
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			var body ringcentral.CreatePostRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post request: %v", err)
+			}
+			posted = body.Text
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+	client.SetOwnerID("fiji-user-1")
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "VIDEO_LIST",
+		Params: map[string]string{"scope": "today", "important": "true", "limit": "5"},
+	}}, ActionContext{OriginIsOwner: true, RequesterID: "fiji-user-1"})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if strings.Count(posted, "Title:") != 1 ||
+		!strings.Contains(posted, "Description: Discuss release risks and owners.") ||
+		!strings.Contains(posted, "Important info: Discuss release risks and owners.") {
+		t.Fatalf("expected one deduped described meeting, got %q", posted)
+	}
+}
+
+func TestExecuteAgentActions_VideoListTodayUsesCloudCalendarEvents(t *testing.T) {
+	var posted string
+	now := time.Now()
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/cloud-calendars/ucc":
+			if r.URL.Query().Get("sync") != "true" {
+				t.Fatalf("unexpected cloud calendar query: %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.CloudCalendarList{
+				Records: []ringcentral.CloudCalendar{{
+					ID:         "cal-1",
+					ProviderID: "office365",
+					CalendarID: "cal-1",
+					Name:       "Work",
+					Connected:  true,
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/cloud-calendars/ucc/office365/~/cal-1/events":
+			q := r.URL.Query()
+			if q.Get("includeNonRcEvents") != "true" || q.Get("startTimeFrom") == "" || q.Get("startTimeTo") == "" {
+				t.Fatalf("unexpected cloud event query: %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.CloudCalendarEventList{
+				Records: []ringcentral.CloudCalendarEvent{{
+					ID:          "cloud-event-1",
+					Subject:     "Customer escalation review",
+					StartTime:   now.UTC().Format(time.RFC3339),
+					EndTime:     now.Add(45 * time.Minute).UTC().Format(time.RFC3339),
+					Location:    "RingCentral Video",
+					Description: "Review escalation status, blockers, and owner actions.",
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			var body ringcentral.CreatePostRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post request: %v", err)
+			}
+			posted = body.Text
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+	client.SetOwnerID("fiji-user-1")
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "VIDEO_LIST",
+		Params: map[string]string{"scope": "today", "important": "true", "limit": "5"},
+	}}, ActionContext{OriginIsOwner: true, RequesterID: "fiji-user-1"})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if !strings.Contains(posted, "Customer escalation review") ||
+		!strings.Contains(posted, "Description: Review escalation status") ||
+		strings.Contains(posted, "team_messaging_event") {
+		t.Fatalf("expected cloud calendar meeting details, got %q", posted)
+	}
+}
+
+func TestExecuteAgentActions_VideoListRecentUsesMeetingHistory(t *testing.T) {
+	var posted string
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v1/history/meetings":
+			json.NewEncoder(w).Encode(ringcentral.VideoMeetingHistoryList{
+				Meetings: []ringcentral.VideoMeetingHistory{{
+					ID:          "meeting-history",
+					DisplayName: "上周复盘",
+					Status:      "Done",
+					StartTime:   time.Now().AddDate(0, 0, -3).UTC().Format(time.RFC3339),
+					HostInfo:    ringcentral.VideoMeetingParticipant{DisplayName: "Summer Gan"},
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			var body ringcentral.CreatePostRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post request: %v", err)
+			}
+			posted = body.Text
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "p1"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+	client.SetOwnerID("fiji-user-1")
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "VIDEO_LIST",
+		Params: map[string]string{"scope": "recent", "limit": "5"},
+	}}, ActionContext{OriginIsOwner: true, RequesterID: "fiji-user-1"})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if !strings.Contains(posted, "Video meeting records") ||
+		!strings.Contains(posted, "meeting-history") ||
+		!strings.Contains(posted, "上周复盘") {
+		t.Fatalf("unexpected posted video history: %q", posted)
+	}
+}
+
+func TestExecuteAgentActions_VideoListRejectsMismatchedRequesterJWT(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("video history should fail before HTTP when requester and JWT owner differ")
+	})
+	defer srv.Close()
+	client.SetOwnerID("jwt-owner")
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "VIDEO_LIST",
+		Params: map[string]string{"scope": "today"},
+	}}, ActionContext{OriginIsOwner: true, RequesterID: "fiji-user-1"})
+
+	if len(results) != 1 ||
+		!strings.Contains(results[0], "FIJI requester extension is fiji-user-1") ||
+		!strings.Contains(results[0], "Private JWT owner is jwt-owner") ||
+		!strings.Contains(results[0], "will not fall back to company-level history") {
+		t.Fatalf("expected requester/JWT mismatch message, got %+v", results)
 	}
 }
 
@@ -1031,25 +1461,25 @@ func TestExecuteAgentActions_VideoAllowedByDefaultCapabilities(t *testing.T) {
 	}
 }
 
-func TestExecuteAgentActions_RingOutRequiresOwner(t *testing.T) {
+func TestExecuteAgentActions_PhoneCallRequiresOwner(t *testing.T) {
 	var recorded []ActionEvent
 	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
 		recorded = append(recorded, event)
 	})
 	defer restore()
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("non-owner RINGOUT should not call API: %s %s", r.Method, r.URL.Path)
+		t.Fatalf("non-owner phone call should not call API: %s %s", r.Method, r.URL.Path)
 	})
 	defer srv.Close()
 
 	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
-		Type:   "RINGOUT",
-		Params: map[string]string{"from": "+14155550100", "to": "+14155550199"},
+		Type:   "PHONE_CALL",
+		Params: map[string]string{"to": "+14155550199"},
 	}}, ActionContext{OriginIsOwner: false})
 	if len(results) != 1 || !strings.Contains(results[0], "owner") {
 		t.Fatalf("expected owner refusal, got %+v", results)
 	}
-	if len(recorded) != 1 || recorded[0].Type != "RINGOUT" || recorded[0].Status != "blocked" {
+	if len(recorded) != 1 || recorded[0].Type != "PHONE_CALL" || recorded[0].Status != "blocked" {
 		t.Fatalf("recorded events = %#v", recorded)
 	}
 	if recorded[0].Details["reason"] != "owner_required" {
@@ -1057,36 +1487,32 @@ func TestExecuteAgentActions_RingOutRequiresOwner(t *testing.T) {
 	}
 }
 
-func TestExecuteAgentActions_RingOutAllowedByDefaultCapabilities(t *testing.T) {
+func TestExecuteAgentActions_PhoneCallRecordsFijiClientAction(t *testing.T) {
 	var recorded []ActionEvent
 	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
 		recorded = append(recorded, event)
 	})
 	defer restore()
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/restapi/v1.0/account/~/extension/~/ring-out" {
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ringcentral.RingOut{
-			ID:     "ringout-1",
-			Status: ringcentral.RingOutStatus{CallStatus: "InProgress"},
-		})
+		t.Fatalf("PHONE_CALL should not use RingOut REST API: %s %s", r.Method, r.URL.Path)
 	})
 	defer srv.Close()
 
 	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
-		Type:   "RINGOUT",
+		Type:   "PHONE_CALL",
 		Params: map[string]string{"to": "+14155550199"},
 	}}, ActionContext{
 		OriginIsOwner: true,
 		Capabilities:  []string{"message", "summary", "video"},
 	})
-	if len(results) != 0 {
-		t.Fatalf("unexpected results: %+v", results)
+	if len(results) != 1 || !strings.Contains(results[0], "FIJI") {
+		t.Fatalf("expected FIJI make-call guidance, got %+v", results)
 	}
-	if len(recorded) != 1 || recorded[0].Type != "RINGOUT" || recorded[0].Status != "completed" {
+	if len(recorded) != 1 || recorded[0].Type != "PHONE_CALL" || recorded[0].Status != "client_action_required" {
 		t.Fatalf("recorded events = %#v", recorded)
+	}
+	if recorded[0].Details["client_action"] != "make_call" || recorded[0].Details["to_number"] != "+14155550199" {
+		t.Fatalf("recorded details = %#v", recorded[0].Details)
 	}
 }
 
@@ -1114,75 +1540,120 @@ func TestExecuteAgentActions_RingOutWithChatIDStillRequiresOwnerBeforeOOB(t *tes
 	}
 }
 
-func TestExecuteAgentActions_RingOutOwnerCreatesCall(t *testing.T) {
-	var called bool
+func TestExecuteAgentActions_PhoneCallOwnerResolvesPersonNameForFijiClient(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out":
-			// Continue below.
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/directory/entries/search":
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode directory search: %v", err)
+			}
+			if body["searchString"] != "Grace He" {
+				t.Fatalf("unexpected directory search body: %+v", body)
+			}
+			json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{
+				Records: []ringcentral.DirectoryEntry{{
+					ID:        "person-grace",
+					FirstName: "Grace",
+					LastName:  "He",
+					PhoneNumbers: []ringcentral.ContactPhoneNumber{{
+						PhoneNumber: "+12123753080",
+						Type:        "DirectNumber",
+					}},
+				}},
+			})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		called = true
-		var body ringcentral.CreateRingOutRequest
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode ringout request: %v", err)
-		}
-		if body.From != nil {
-			t.Fatalf("from should be omitted so RingOut uses current token identity/default callback: %+v", body.From)
-		}
-		if body.To.PhoneNumber != "+14155550199" {
-			t.Fatalf("unexpected ringout request: %+v", body)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ringcentral.RingOut{
-			ID:     "ringout-1",
-			Status: ringcentral.RingOutStatus{CallStatus: "InProgress"},
-		})
 	})
 	defer srv.Close()
+	var recorded []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		recorded = append(recorded, event)
+	})
+	defer restore()
 
 	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
-		Type:   "RINGOUT",
-		Params: map[string]string{"to": "+14155550199"},
+		Type:   "PHONE_CALL",
+		Params: map[string]string{"to": "Grace He"},
 	}}, ActionContext{OriginIsOwner: true})
-	if len(results) != 0 {
+	if len(results) != 1 {
 		t.Fatalf("unexpected results: %+v", results)
 	}
-	if !called {
-		t.Fatal("expected RingOut API call")
+	if len(recorded) != 1 || recorded[0].Details["to_number"] != "+12123753080" || recorded[0].Details["target_label"] != "Grace He" {
+		t.Fatalf("recorded events = %#v", recorded)
 	}
 }
 
-func TestExecuteAgentActions_RingOutRejectsExtensionOnlyFromBeforeAPI(t *testing.T) {
+func TestExecuteAgentActions_PhoneCallOwnerResolvesAddressBookContactForFijiClient(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("extension-only from should not call RingOut API: %s %s", r.Method, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/directory/entries/search":
+			json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{
+				Records: []ringcentral.DirectoryEntry{{
+					ID:        "person-grace",
+					FirstName: "Grace",
+					LastName:  "He",
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/address-book/contact":
+			if r.URL.Query().Get("searchString") != "Grace He" {
+				t.Fatalf("unexpected contact query: %s", r.URL.RawQuery)
+			}
+			json.NewEncoder(w).Encode(ringcentral.ContactList{
+				Records: []ringcentral.Contact{{
+					ID:            "contact-grace",
+					FirstName:     "Grace",
+					LastName:      "He",
+					MobilePhone:   "+12123753080",
+					BusinessPhone: "+12120000000",
+				}},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
 	})
 	defer srv.Close()
+	var recorded []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		recorded = append(recorded, event)
+	})
+	defer restore()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "PHONE_CALL",
+		Params: map[string]string{"to": "Grace He"},
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 1 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if len(recorded) != 1 || recorded[0].Details["to_number"] != "+12123753080" {
+		t.Fatalf("recorded events = %#v", recorded)
+	}
+}
+
+func TestExecuteAgentActions_LegacyRingOutAliasesToFijiClientCallAndIgnoresFrom(t *testing.T) {
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("legacy RINGOUT should not call RingOut REST API: %s %s", r.Method, r.URL.Path)
+	})
+	defer srv.Close()
+	var recorded []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		recorded = append(recorded, event)
+	})
+	defer restore()
 
 	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
 		Type:   "RINGOUT",
 		Params: map[string]string{"from": "8102", "to": "+12123753080"},
 	}}, ActionContext{OriginIsOwner: true})
-	if len(results) != 1 || !strings.Contains(results[0], "RingOut callback number") || !strings.Contains(results[0], "8102") {
-		t.Fatalf("expected extension-only from guidance, got %+v", results)
+	if len(results) != 1 || !strings.Contains(results[0], "FIJI") {
+		t.Fatalf("expected FIJI client-call guidance, got %+v", results)
 	}
-}
-
-func TestExecuteAgentActions_RingOutPermissionErrorIsActionable(t *testing.T) {
-	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"errorCode":"InsufficientPermissions","message":"In order to call this API endpoint, application needs to have [RingOut] permission","permissionName":"RingOut"}`))
-	})
-	defer srv.Close()
-
-	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
-		Type:   "RINGOUT",
-		Params: map[string]string{"from": "+14155550100", "to": "+12123753080"},
-	}}, ActionContext{OriginIsOwner: true})
-	if len(results) != 1 || !strings.Contains(results[0], "Private JWT App") || !strings.Contains(results[0], "RingOut") {
-		t.Fatalf("expected actionable RingOut permission message, got %+v", results)
+	if len(recorded) != 1 || recorded[0].Type != "RINGOUT" || recorded[0].Status != "client_action_required" || recorded[0].Details["to_number"] != "+12123753080" {
+		t.Fatalf("recorded events = %#v", recorded)
 	}
 }
 

@@ -56,6 +56,7 @@ type DirectoryAccessor interface {
 	GetChat(ctx context.Context, chatID string) (*Chat, error)
 	ListChats(ctx context.Context, chatType string) (*ChatList, error)
 	SearchDirectory(ctx context.Context, query string) (*DirectorySearchResult, error)
+	SearchContacts(ctx context.Context, query string) (*ContactList, error)
 	CreateConversation(ctx context.Context, memberIDs []string) (*Chat, error)
 	FindDirectChat(ctx context.Context, personID string) (string, error)
 	GetPersonInfo(ctx context.Context, personID string) (*PersonInfo, error)

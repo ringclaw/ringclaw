@@ -129,7 +129,10 @@ type RCConfig struct {
 	// RingCentral app scopes and user permissions.
 	Capabilities []string `json:"capabilities,omitempty"`
 	ServerURL    string   `json:"server_url,omitempty"`
-	BotToken     string   `json:"bot_token,omitempty"`
+	// VideoServerURL is the RingCentral Video API server. When empty,
+	// RingClaw derives it from ServerURL for known production hosts.
+	VideoServerURL string `json:"video_server_url,omitempty"`
+	BotToken       string `json:"bot_token,omitempty"`
 
 	// GroupMentionOnly, when true (default), makes the bot only
 	// respond to messages where it is @mentioned in group chats. Bot

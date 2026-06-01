@@ -68,6 +68,38 @@ func TestSearchDirectory_HTTPError(t *testing.T) {
 	}
 }
 
+func TestSearchContacts_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/restapi/v1.0/account/~/extension/~/address-book/contact" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("searchString") != "Grace He" || r.URL.Query().Get("perPage") != "20" {
+			t.Errorf("unexpected query: %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ContactList{
+			Records: []Contact{{
+				ID:            "contact-1",
+				FirstName:     "Grace",
+				LastName:      "He",
+				BusinessPhone: "+12123753080",
+			}},
+		})
+	})
+	defer srv.Close()
+
+	result, err := client.SearchContacts(context.Background(), "Grace He")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].BusinessPhone != "+12123753080" {
+		t.Fatalf("unexpected contact result: %+v", result)
+	}
+}
+
 func TestGetExtensionInfo_Success(t *testing.T) {
 	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/restapi/v1.0/account/~/extension/~" {

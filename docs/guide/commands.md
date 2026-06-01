@@ -113,7 +113,7 @@ Show today's call summary and next actions.
 Call +12123753080.
 ```
 
-These route through intent classification and agent ACTION blocks (`ACTION:VIDEO`, `ACTION:VIDEO_LIST`, `ACTION:RINGOUT`, `ACTION:PHONE_CALLLOG`) rather than command-only shortcuts.
+These route through intent classification and agent ACTION blocks (`ACTION:VIDEO`, `ACTION:VIDEO_LIST`, `ACTION:PHONE_CALL`, `ACTION:PHONE_CALLLOG`) rather than command-only shortcuts. Legacy `ACTION:RINGOUT` is accepted as a compatibility alias for the FIJI client make-call bridge.
 
 ## Adaptive Cards
 

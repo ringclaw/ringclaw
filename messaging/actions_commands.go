@@ -59,6 +59,10 @@ func capabilityDisabledMessage(capability string) string {
 
 // HandleActionCommand routes RingCentral resource commands.
 func HandleActionCommand(ctx context.Context, client *ringcentral.Client, chatID, text string) string {
+	return HandleActionCommandWithRequester(ctx, client, chatID, text, "")
+}
+
+func HandleActionCommandWithRequester(ctx context.Context, client *ringcentral.Client, chatID, text, requesterID string) string {
 	parts := strings.Fields(text)
 	if len(parts) < 2 {
 		return formatActionHelp(parts[0])
@@ -78,9 +82,9 @@ func HandleActionCommand(ctx context.Context, client *ringcentral.Client, chatID
 	case "/card":
 		return handleCard(ctx, client, chatID, action, args)
 	case "/video":
-		return handleVideo(ctx, client, action, args, text)
+		return handleVideo(ctx, client, action, args, text, requesterID)
 	case "/phone":
-		return handlePhone(ctx, client, action, args)
+		return handlePhone(ctx, client, action, args, requesterID)
 	default:
 		return "Unknown command. Use /task, /note, /event, /card, /video, or /phone."
 	}
@@ -622,10 +626,10 @@ func cardDelete(ctx context.Context, client *ringcentral.Client, cardID string) 
 
 // --- Video handlers ---
 
-func handleVideo(ctx context.Context, client *ringcentral.Client, action string, args []string, _ string) string {
+func handleVideo(ctx context.Context, client *ringcentral.Client, action string, args []string, _ string, requesterID string) string {
 	switch action {
 	case "list":
-		return videoList(ctx, client)
+		return videoList(ctx, client, requesterID)
 	case "create":
 		title, bridgeType := parseVideoCreateArgs(args)
 		if title == "" {
@@ -663,24 +667,35 @@ func parseVideoCreateArgs(args []string) (string, string) {
 	return strings.TrimSpace(strings.Join(titleParts, " ")), bridgeType
 }
 
-func videoList(ctx context.Context, client *ringcentral.Client) string {
-	list, err := client.ListVideoBridges(ctx)
+func videoList(ctx context.Context, client *ringcentral.Client, requesterID string) string {
+	if err := ensureAuthenticatedRequester(client, requesterID, "Video meeting history"); err != nil {
+		return fmt.Sprintf("Error: %s", err)
+	}
+	list, err := client.ListVideoMeetingHistory(ctx, ringcentral.VideoMeetingHistoryOptions{
+		Type:    "All",
+		PerPage: 20,
+	})
 	if err != nil {
-		slog.Error("list video bridges failed", "error", err)
+		slog.Error("list video meeting history failed", "error", err)
 		return fmt.Sprintf("Error: %s", friendlyVideoAPIError(err))
 	}
-	if len(list.Records) == 0 {
-		return "No video meetings found."
+	if len(list.Meetings) == 0 {
+		return "No video meeting records found."
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**Video meetings** (%d)\n", len(list.Records)))
-	for _, bridge := range list.Records {
-		sb.WriteString(fmt.Sprintf("- `%s` **%s**", bridge.ID, bridge.Name))
-		if bridge.Type != "" {
-			sb.WriteString(fmt.Sprintf(" [%s]", bridge.Type))
+	sb.WriteString(fmt.Sprintf("**Video meeting records** (%d)\n", len(list.Meetings)))
+	for _, meeting := range list.Meetings {
+		name := strings.TrimSpace(meeting.DisplayName)
+		if name == "" {
+			name = "Video meeting"
 		}
-		if bridge.Discovery.Web != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", bridge.Discovery.Web))
+		status := strings.TrimSpace(meeting.Status)
+		if status == "" {
+			status = "Unknown"
+		}
+		sb.WriteString(fmt.Sprintf("- `%s` **%s** [%s]", meeting.ID, name, status))
+		if meeting.StartTime != "" {
+			sb.WriteString(fmt.Sprintf(" start=%s", meeting.StartTime))
 		}
 		sb.WriteByte('\n')
 	}
@@ -733,7 +748,7 @@ func friendlyVideoAPIError(err error) string {
 
 // --- Phone handlers ---
 
-func handlePhone(ctx context.Context, client *ringcentral.Client, action string, args []string) string {
+func handlePhone(ctx context.Context, client *ringcentral.Client, action string, args []string, requesterID string) string {
 	switch action {
 	case "ringout":
 		if len(args) == 0 {
@@ -764,12 +779,14 @@ func handlePhone(ctx context.Context, client *ringcentral.Client, action string,
 		return phoneRingOutCancel(ctx, client, args[0])
 	case "calllog":
 		opts := CallLogOptionsFromPairs(parseKeyValues(strings.Join(args, " ")))
+		opts.ExtensionID = strings.TrimSpace(requesterID)
 		if opts.RecordCount == 0 {
 			opts.RecordCount = 10
 		}
 		return phoneCallLog(ctx, client, opts)
 	case "missed":
 		opts := CallLogOptionsFromPairs(parseKeyValues(strings.Join(args, " ")))
+		opts.ExtensionID = strings.TrimSpace(requesterID)
 		if opts.RecordCount == 0 {
 			opts.RecordCount = 25
 		}
@@ -782,7 +799,7 @@ func handlePhone(ctx context.Context, client *ringcentral.Client, action string,
 }
 
 func phoneRingOut(ctx context.Context, client *ringcentral.Client, params map[string]string) string {
-	req, err := ringOutRequestFromParams(params)
+	req, err := ringOutRequestFromParams(ctx, client, params)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}

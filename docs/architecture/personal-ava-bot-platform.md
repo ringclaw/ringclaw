@@ -78,7 +78,7 @@ The current implementation supports the Personal AVA Pro MVP substrate:
 | AI context isolation | conversation IDs can be prefixed by Bot namespace | Each Bot should use a dedicated namespace and, for hosted AI, dedicated token or tenant key |
 | Private JWT App | `client_id`, `client_secret`, `jwt_token` are now required for onboarding and runtime start | Base scope must include `ReadAccounts`; Video/Phone add extra scopes |
 | Video | Video bridge list/create/get/delete via RingCentral Video REST API; natural-language `ACTION:VIDEO` and `ACTION:VIDEO_LIST` for meeting creation, recent meetings, and today's important meetings | Requires Private JWT App with `ReadAccounts` and `Video` scopes |
-| Phone | RingOut status/cancel/create plus extension Call Log and missed-call query; natural-language `ACTION:RINGOUT` and `ACTION:PHONE_CALLLOG` for RingOut, today's call log, missed-call summary, call summary, and next actions | Requires Private JWT App with `ReadAccounts`, `RingOut`, `ReadCallLog`; RingOut remains owner-only in the message bridge |
+| Phone | FIJI client makeCall bridge plus extension Call Log and missed-call query; natural-language `ACTION:PHONE_CALL` and `ACTION:PHONE_CALLLOG` for current-user phone calls, today's call log, missed-call summary, call summary, and next actions | Client makeCall runs in FIJI as the current signed-in user; Call Log requires Private JWT App with `ReadAccounts`, `ReadCallLog`; `/phone ringout` remains a diagnostic command requiring `RingOut` |
 | Action governance | owner gate, cross-chat audit notice, OOB approval path | External write systems still need Tool Gateway policy integration |
 
 ## Permission Model
@@ -92,7 +92,8 @@ flowchart LR
 
   PrivateApp["Private JWT App<br/>owner-scoped, preferred"] --> Read["Read owner-visible data"]
   PrivateApp --> Video["Video bridge APIs"]
-  PrivateApp --> Phone["RingOut / Call Log APIs"]
+  PrivateApp --> Phone["Call Log APIs<br/>/phone ringout diagnostics"]
+  Client["FIJI Client<br/>current signed-in user"] --> MakeCall["Phone makeCall / directCall"]
   PrivateApp --> CrossChat["Cross-chat actions"]
 
   Policy["Owner Gate / Policy / Audit"] --> PrivateApp
@@ -118,7 +119,7 @@ Video/Phone add extra scopes on the same Private JWT App:
 Video, RingOut, ReadCallLog
 ```
 
-This avoids expanding every Bot token into a broad action token while keeping message, phone, and video code paths aligned: runtime commands and agent actions use the resolved RingCentral client, central endpoint helpers, and the selected app token must carry the required scopes. RingClaw onboarding and `ringclaw start` now fail fast when `client_id`, `client_secret`, or `jwt_token` is missing. RingOut is still owner-only before any API call is made; when `from` is omitted, RingClaw does not synthesize a caller and lets RingOut use the current Private JWT App user's default callback settings.
+This avoids expanding every Bot token into a broad action token while keeping message, phone, and video code paths aligned: runtime commands and agent actions use the resolved RingCentral client, central endpoint helpers, and the selected app token must carry the required scopes. RingClaw onboarding and `ringclaw start` now fail fast when `client_id`, `client_secret`, or `jwt_token` is missing. Natural-language phone calls no longer create RingOut sessions from the runtime Pod; RingClaw resolves the target, records a `client_action=make_call` event, and FIJI executes the existing Phone makeCall path as the current signed-in user. RingOut remains available only as an explicit `/phone ringout` diagnostic command.
 
 ## Natural-Language Action Flow
 
@@ -141,7 +142,7 @@ The runtime no longer keeps a separate video-list natural-language fast path. In
 | Create an RCV meeting | `video` | `ACTION:VIDEO` | `CreateVideoBridge` |
 | Query recent meetings | `video` | `ACTION:VIDEO_LIST scope=recent` | `ListVideoBridges` |
 | Ask for today's important meetings | `video` | `ACTION:VIDEO_LIST scope=today important=true` | `ListVideoBridges` |
-| Start a phone call | `phone` | `ACTION:RINGOUT` | `CreateRingOut` |
+| Start a phone call | `phone` | `ACTION:PHONE_CALL` | FIJI client `makeCall` bridge |
 | Ask for today's call log | `phone` | `ACTION:PHONE_CALLLOG scope=today summary=true` | `ListExtensionCallLog` |
 | Ask whether there are missing/missed calls and next actions | `phone` | `ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true` | `ListExtensionCallLog` |
 
@@ -573,7 +574,7 @@ prepare -> summarize -> draft -> ask approval -> execute
 - Long-term platformization can move the Agent token out of the bootstrap Secret and rely on claim/rotation for all runtime secrets.
 - Bot App scopes should remain messaging-only by default; Video, RingOut, and ReadCallLog should normally belong to the owner-scoped Private JWT App.
 - Phone and Video commands should use the same resolved RingCentral client path as Message commands; missing scopes should surface as RingCentral permission errors.
-- `ACTION:RINGOUT` must be rejected before chat override, OOB challenge, or API execution unless the origin sender is the owner.
+- `ACTION:PHONE_CALL` must be rejected before client-action emission unless the origin sender is the owner. Legacy `ACTION:RINGOUT` follows the same rule as a compatibility alias.
 - `fullAccessAck` defaults to false.
 - `allowGroupMentionAuthorize` defaults to false.
 - `sourceUserIds` defaults to owner-only for Personal Bots.

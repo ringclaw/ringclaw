@@ -134,3 +134,36 @@ func TestACPAgent_SupportsMedia_MalformedJSON(t *testing.T) {
 		t.Errorf("expected image supported when init parse fails")
 	}
 }
+
+func TestSelectAuthMethodID_PrefersCursorLogin(t *testing.T) {
+	raw := json.RawMessage(`{
+		"authMethods": [
+			{"id": "other"},
+			{"id": "cursor_login"}
+		]
+	}`)
+	if got := selectAuthMethodID(raw); got != "cursor_login" {
+		t.Fatalf("selectAuthMethodID() = %q, want cursor_login", got)
+	}
+}
+
+func TestSelectAuthMethodID_FallbackFirstNonEmpty(t *testing.T) {
+	raw := json.RawMessage(`{
+		"authMethods": [
+			{"id": ""},
+			{"id": "custom_auth"}
+		]
+	}`)
+	if got := selectAuthMethodID(raw); got != "custom_auth" {
+		t.Fatalf("selectAuthMethodID() = %q, want custom_auth", got)
+	}
+}
+
+func TestSelectAuthMethodID_EmptyWhenAbsent(t *testing.T) {
+	if got := selectAuthMethodID(json.RawMessage(`{"authMethods":[]}`)); got != "" {
+		t.Fatalf("selectAuthMethodID() = %q, want empty", got)
+	}
+	if got := selectAuthMethodID(json.RawMessage(`not json`)); got != "" {
+		t.Fatalf("selectAuthMethodID(malformed) = %q, want empty", got)
+	}
+}

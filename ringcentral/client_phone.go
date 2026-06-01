@@ -30,6 +30,35 @@ func (c *Client) CreateRingOut(ctx context.Context, req *CreateRingOutRequest) (
 	return &ringOut, nil
 }
 
+// ListExtensionPhoneNumbers returns phone numbers assigned to the
+// authenticated extension. The action layer uses this to choose a default
+// RingOut callback number when the user does not provide from= explicitly.
+func (c *Client) ListExtensionPhoneNumbers(ctx context.Context) (*ExtensionPhoneNumberList, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/restapi/v1.0/account/~/extension/~/phone-number", "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var list ExtensionPhoneNumberList
+	if err := json.Unmarshal(resp, &list); err != nil {
+		return nil, fmt.Errorf("parse extension phone numbers: %w", err)
+	}
+	return &list, nil
+}
+
+// ListForwardingNumbers returns callback-capable numbers configured for the
+// authenticated extension. RingOut requires this kind of number in `from`.
+func (c *Client) ListForwardingNumbers(ctx context.Context) (*ForwardingNumberList, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/restapi/v1.0/account/~/extension/~/forwarding-number", "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var list ForwardingNumberList
+	if err := json.Unmarshal(resp, &list); err != nil {
+		return nil, fmt.Errorf("parse forwarding numbers: %w", err)
+	}
+	return &list, nil
+}
+
 // GetRingOut retrieves the status of an in-progress RingOut call.
 func (c *Client) GetRingOut(ctx context.Context, ringOutID string) (*RingOut, error) {
 	path := ringOutEndpoint(ringOutID)
@@ -53,6 +82,10 @@ func (c *Client) DeleteRingOut(ctx context.Context, ringOutID string) error {
 
 // ListExtensionCallLog returns call logs for the authenticated extension.
 func (c *Client) ListExtensionCallLog(ctx context.Context, opts CallLogOptions) (*CallLogList, error) {
+	return c.listCallLog(ctx, extensionCallLogEndpoint(opts.ExtensionID), opts)
+}
+
+func (c *Client) listCallLog(ctx context.Context, endpoint string, opts CallLogOptions) (*CallLogList, error) {
 	params := url.Values{}
 	if opts.RecordCount > 0 {
 		params.Set("recordCount", strconv.Itoa(opts.RecordCount))
@@ -69,9 +102,6 @@ func (c *Client) ListExtensionCallLog(ctx context.Context, opts CallLogOptions) 
 	if opts.Direction != "" {
 		params.Set("direction", opts.Direction)
 	}
-	if opts.Result != "" {
-		params.Set("result", opts.Result)
-	}
 	if opts.Type != "" {
 		params.Set("type", opts.Type)
 	}
@@ -81,7 +111,7 @@ func (c *Client) ListExtensionCallLog(ctx context.Context, opts CallLogOptions) 
 	if opts.DateTo != "" {
 		params.Set("dateTo", opts.DateTo)
 	}
-	path := extensionCallLogEndpoint()
+	path := endpoint
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}

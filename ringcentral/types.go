@@ -99,10 +99,10 @@ type WSTokenResponse struct {
 
 // WSConnectionDetails is the initial message from WebSocket server.
 type WSConnectionDetails struct {
-	Type      string   `json:"type"`
-	MessageID string   `json:"messageId"`
-	Status    int      `json:"status"`
-	WSC       WSCInfo  `json:"wsc"`
+	Type      string    `json:"type"`
+	MessageID string    `json:"messageId"`
+	Status    int       `json:"status"`
+	WSC       WSCInfo   `json:"wsc"`
 	Headers   WSHeaders `json:"headers"`
 }
 
@@ -119,16 +119,16 @@ type WSHeaders struct {
 
 // WSClientRequest is the subscription request sent over WebSocket.
 type WSClientRequest struct {
-	Type      string             `json:"type"`
-	MessageID string             `json:"messageId"`
-	Method    string             `json:"method"`
-	Path      string             `json:"path"`
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
 }
 
 // WSSubscriptionBody is the body of a subscription request.
 type WSSubscriptionBody struct {
-	EventFilters []string           `json:"eventFilters"`
-	DeliveryMode WSDeliveryMode     `json:"deliveryMode"`
+	EventFilters []string       `json:"eventFilters"`
+	DeliveryMode WSDeliveryMode `json:"deliveryMode"`
 }
 
 // WSDeliveryMode specifies the transport type.
@@ -175,15 +175,51 @@ func (c Chat) MemberIDs() []string {
 
 // DirectoryEntry represents a user in the company directory.
 type DirectoryEntry struct {
-	ID        string `json:"id"`
-	FirstName string `json:"firstName"`
-	LastName  string `json:"lastName"`
-	Email     string `json:"email"`
+	ID              string               `json:"id"`
+	FirstName       string               `json:"firstName"`
+	LastName        string               `json:"lastName"`
+	Email           string               `json:"email"`
+	ExtensionNumber string               `json:"extensionNumber,omitempty"`
+	PhoneNumbers    []ContactPhoneNumber `json:"phoneNumbers,omitempty"`
 }
 
 // DirectorySearchResult is the response from searching directory entries.
 type DirectorySearchResult struct {
 	Records []DirectoryEntry `json:"records"`
+}
+
+// ContactPhoneNumber is a phone number attached to a directory entry or
+// personal contact.
+type ContactPhoneNumber struct {
+	PhoneNumber string `json:"phoneNumber,omitempty"`
+	Type        string `json:"type,omitempty"`
+	UsageType   string `json:"usageType,omitempty"`
+}
+
+// ContactList is the personal address-book contact list response.
+type ContactList struct {
+	Records []Contact `json:"records"`
+}
+
+// Contact represents a personal address-book entry. RingCentral address-book
+// responses can expose either structured phoneNumbers or legacy flat fields.
+type Contact struct {
+	ID             string               `json:"id"`
+	FirstName      string               `json:"firstName,omitempty"`
+	LastName       string               `json:"lastName,omitempty"`
+	Company        string               `json:"company,omitempty"`
+	Email          string               `json:"email,omitempty"`
+	PhoneNumbers   []ContactPhoneNumber `json:"phoneNumbers,omitempty"`
+	BusinessPhone  string               `json:"businessPhone,omitempty"`
+	BusinessPhone2 string               `json:"businessPhone2,omitempty"`
+	MobilePhone    string               `json:"mobilePhone,omitempty"`
+	HomePhone      string               `json:"homePhone,omitempty"`
+	HomePhone2     string               `json:"homePhone2,omitempty"`
+	OtherPhone     string               `json:"otherPhone,omitempty"`
+	AssistantPhone string               `json:"assistantPhone,omitempty"`
+	CallbackPhone  string               `json:"callbackPhone,omitempty"`
+	CarPhone       string               `json:"carPhone,omitempty"`
+	CompanyPhone   string               `json:"companyPhone,omitempty"`
 }
 
 // CreateChatRequest is the body for creating/finding a conversation.
@@ -201,22 +237,22 @@ type TaskAssignee struct {
 
 // TaskRecurrence holds recurrence settings for a task.
 type TaskRecurrence struct {
-	Schedule        string `json:"schedule"`                  // None, Daily, Weekdays, Weekly, Monthly, Yearly
-	EndingCondition string `json:"endingCondition"`           // None, Count, Date
+	Schedule        string `json:"schedule"`        // None, Daily, Weekdays, Weekly, Monthly, Yearly
+	EndingCondition string `json:"endingCondition"` // None, Count, Date
 	EndingAfter     int    `json:"endingAfter,omitempty"`
 	EndingOn        string `json:"endingOn,omitempty"`
 }
 
 // CreateTaskRequest is the body for creating a task.
 type CreateTaskRequest struct {
-	Subject              string         `json:"subject"`
-	Assignees            []TaskAssignee `json:"assignees,omitempty"`
-	CompletenessCondition string        `json:"completenessCondition,omitempty"` // Simple, AllAssignees, Percentage
-	StartDate            string         `json:"startDate,omitempty"`
-	DueDate              string         `json:"dueDate,omitempty"`
-	Color                string         `json:"color,omitempty"`
-	Section              string         `json:"section,omitempty"`
-	Description          string         `json:"description,omitempty"`
+	Subject               string         `json:"subject"`
+	Assignees             []TaskAssignee `json:"assignees,omitempty"`
+	CompletenessCondition string         `json:"completenessCondition,omitempty"` // Simple, AllAssignees, Percentage
+	StartDate             string         `json:"startDate,omitempty"`
+	DueDate               string         `json:"dueDate,omitempty"`
+	Color                 string         `json:"color,omitempty"`
+	Section               string         `json:"section,omitempty"`
+	Description           string         `json:"description,omitempty"`
 }
 
 // UpdateTaskRequest is the body for updating a task.
@@ -230,21 +266,21 @@ type UpdateTaskRequest struct {
 
 // Task represents a Team Messaging task.
 type Task struct {
-	ID                   string         `json:"id"`
-	CreationTime         string         `json:"creationTime"`
-	LastModifiedTime     string         `json:"lastModifiedTime"`
-	Type                 string         `json:"type"`
-	Creator              TaskAssignee   `json:"creator"`
-	ChatIDs              []string       `json:"chatIds"`
-	Status               string         `json:"status"` // Pending, InProgress, Completed
-	Subject              string         `json:"subject"`
-	Assignees            []TaskAssignee `json:"assignees"`
-	CompletenessCondition string        `json:"completenessCondition"`
-	StartDate            string         `json:"startDate"`
-	DueDate              string         `json:"dueDate"`
-	Color                string         `json:"color"`
-	Section              string         `json:"section"`
-	Description          string         `json:"description"`
+	ID                    string         `json:"id"`
+	CreationTime          string         `json:"creationTime"`
+	LastModifiedTime      string         `json:"lastModifiedTime"`
+	Type                  string         `json:"type"`
+	Creator               TaskAssignee   `json:"creator"`
+	ChatIDs               []string       `json:"chatIds"`
+	Status                string         `json:"status"` // Pending, InProgress, Completed
+	Subject               string         `json:"subject"`
+	Assignees             []TaskAssignee `json:"assignees"`
+	CompletenessCondition string         `json:"completenessCondition"`
+	StartDate             string         `json:"startDate"`
+	DueDate               string         `json:"dueDate"`
+	Color                 string         `json:"color"`
+	Section               string         `json:"section"`
+	Description           string         `json:"description"`
 }
 
 // TaskList is the response from listing tasks.
@@ -271,14 +307,14 @@ type UpdateNoteRequest struct {
 
 // Note represents a Team Messaging note.
 type Note struct {
-	ID               string `json:"id"`
-	Title            string `json:"title"`
+	ID               string   `json:"id"`
+	Title            string   `json:"title"`
 	ChatIDs          []string `json:"chatIds"`
-	Preview          string `json:"preview"`
-	Status           string `json:"status"` // Active, Draft
-	CreationTime     string `json:"creationTime"`
-	LastModifiedTime string `json:"lastModifiedTime"`
-	Type             string `json:"type"`
+	Preview          string   `json:"preview"`
+	Status           string   `json:"status"` // Active, Draft
+	CreationTime     string   `json:"creationTime"`
+	LastModifiedTime string   `json:"lastModifiedTime"`
+	Type             string   `json:"type"`
 	Creator          struct {
 		ID string `json:"id"`
 	} `json:"creator"`
@@ -296,8 +332,8 @@ type NoteList struct {
 
 // EventRecurrence holds recurrence settings for an event.
 type EventRecurrence struct {
-	Schedule        string `json:"schedule"`                  // None, Day, Weekday, Week, Month, Year
-	EndingCondition string `json:"endingCondition"`           // None, Count, Date
+	Schedule        string `json:"schedule"`        // None, Day, Weekday, Week, Month, Year
+	EndingCondition string `json:"endingCondition"` // None, Count, Date
 	EndingAfter     int    `json:"endingAfter,omitempty"`
 	EndingOn        string `json:"endingOn,omitempty"`
 }
@@ -368,8 +404,9 @@ type PresenceInfo struct {
 
 // Credentials stores RC session data.
 type Credentials struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	JWTToken     string `json:"jwt_token"`
-	ServerURL    string `json:"server_url"`
+	ClientID       string `json:"client_id"`
+	ClientSecret   string `json:"client_secret"`
+	JWTToken       string `json:"jwt_token"`
+	ServerURL      string `json:"server_url"`
+	VideoServerURL string `json:"video_server_url,omitempty"`
 }

@@ -63,6 +63,65 @@ func matchesIntentTrigger(text string) bool {
 	return false
 }
 
+// deterministicIntent classifies high-confidence product intents without using
+// the agent classifier. It is intentionally narrow: broad phrases such as
+// "schedule a meeting" or "review this video file" still go through the normal
+// classifier/chat path.
+func deterministicIntent(text string) (Intent, bool) {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return IntentChat, false
+	}
+	if matchesDeterministicPhoneIntent(lower) {
+		return IntentPhone, true
+	}
+	if matchesDeterministicVideoIntent(lower) {
+		return IntentVideo, true
+	}
+	return IntentChat, false
+}
+
+func matchesDeterministicVideoIntent(lower string) bool {
+	for _, kw := range []string{
+		"创建视频会议", "新建视频会议", "发起视频会议", "开视频会议", "视频会议",
+		"rcv会议", "rcv 会议", "开会链接",
+		"video meeting", "video call", "rcv meeting", "create a meeting link",
+		"meeting list", "meetings today", "important meetings", "upcoming meetings",
+	} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+
+	if strings.Contains(lower, "会议") {
+		for _, kw := range []string{
+			"今天", "明天", "最近", "本周", "这周", "下周", "未来", "将来",
+			"重要", "列表", "有哪些", "有啥", "查询", "查看", "获取",
+		} {
+			if strings.Contains(lower, kw) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func matchesDeterministicPhoneIntent(lower string) bool {
+	for _, kw := range []string{
+		"打电话", "拨打", "外呼", "未接电话", "未接来电", "通话记录", "来电记录",
+		"今天calls", "calls的记录", "calls 记录", "call summary",
+		"ringout", "phone call", "call log", "call logs",
+		"missed call", "missed calls", "missing call", "missing calls", "missing的call",
+		"dial ", "call +", "call 1",
+	} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // classifyIntent uses the default agent to determine the user's intent.
 // Returns IntentChat if the agent is unavailable or returns an unrecognized response.
 func classifyIntent(ctx context.Context, ag agent.Agent, text string) Intent {

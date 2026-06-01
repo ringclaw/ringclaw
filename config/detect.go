@@ -44,7 +44,7 @@ var agentCandidates = []agentCandidate{
 	{Name: "codex", Binary: "codex-acp", Type: "acp", Model: ""},
 	{Name: "codex", NpxPkg: "@zed-industries/codex-acp", Type: "acp", Model: ""},
 	{Name: "codex", Binary: "codex", Type: "cli", Model: ""},
-	// ACP-only agents
+	// Cursor Agent ACP is exposed by the modern Cursor CLI as `agent acp`.
 	{Name: "cursor", Binary: "agent", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "kimi", Binary: "kimi", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "gemini", Binary: "gemini", Args: []string{"--acp"}, Type: "acp", Model: ""},
@@ -74,6 +74,9 @@ var defaultOrder = []string{
 // Returns true if the config was modified.
 func DetectAndConfigure(cfg *Config) bool {
 	modified := false
+	if migrateCursorAgentConfig(cfg) {
+		modified = true
+	}
 
 	for _, candidate := range agentCandidates {
 		existing, exists := cfg.Agents[candidate.Name]
@@ -175,6 +178,32 @@ func DetectAndConfigure(cfg *Config) bool {
 	}
 
 	return modified
+}
+
+func migrateCursorAgentConfig(cfg *Config) bool {
+	if cfg == nil || cfg.Agents == nil {
+		return false
+	}
+	existing, ok := cfg.Agents["cursor"]
+	if !ok {
+		return false
+	}
+	base := filepath.Base(existing.Command)
+	if base != "cursor-agent" && !(existing.Type == "cli" && base == "agent") {
+		return false
+	}
+	if path, err := lookPath("agent"); err == nil && path != "" {
+		existing.Command = path
+	} else if base != "agent" {
+		return false
+	}
+	existing.Type = "acp"
+	existing.Args = []string{"acp"}
+	existing.AllowWrite = false
+	existing.FullAccess = false
+	cfg.Agents["cursor"] = existing
+	slog.Info("migrated cursor agent to modern ACP command", "component", "config", "command", existing.Command, "args", existing.Args)
+	return true
 }
 
 // loadOpenclawGateway resolves openclaw gateway connection info.

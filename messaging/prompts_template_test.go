@@ -33,6 +33,10 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 	if !strings.Contains(got, "ACTION:MESSAGE") {
 		t.Error("ActionPromptTemplate should describe ACTION:MESSAGE")
 	}
+	if !strings.Contains(got, "ready-to-send human message") ||
+		!strings.Contains(got, "Do not include assistant framing") {
+		t.Error("ActionPromptTemplate should require human-ready MESSAGE bodies")
+	}
 	// Templates returned to eval scripts are RAW — no time substitution
 	// must have been applied since the eval should see the same shape
 	// the agent would see at request time.

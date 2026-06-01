@@ -18,6 +18,9 @@ func TestVideoEndpoints(t *testing.T) {
 	if got := videoBridgeEndpoint("bridge-1"); got != "/rcvideo/v2/bridges/bridge-1" {
 		t.Fatalf("videoBridgeEndpoint = %q", got)
 	}
+	if got := videoHistoryMeetingsEndpoint(VideoMeetingHistoryOptions{Type: "All", PerPage: 20, PageToken: "p2"}); got != "/rcvideo/v1/history/meetings?pageToken=p2&perPage=20&type=All" {
+		t.Fatalf("videoHistoryMeetingsEndpoint = %q", got)
+	}
 }
 
 func TestPhoneEndpoints(t *testing.T) {
@@ -27,7 +30,10 @@ func TestPhoneEndpoints(t *testing.T) {
 	if got := ringOutEndpoint("ringout-1"); got != "/restapi/v1.0/account/~/extension/~/ring-out/ringout-1" {
 		t.Fatalf("ringOutEndpoint = %q", got)
 	}
-	if got := extensionCallLogEndpoint(); got != "/restapi/v1.0/account/~/extension/~/call-log" {
+	if got := extensionCallLogEndpoint(""); got != "/restapi/v1.0/account/~/extension/~/call-log" {
 		t.Fatalf("extensionCallLogEndpoint = %q", got)
+	}
+	if got := extensionCallLogEndpoint("user-1"); got != "/restapi/v1.0/account/~/extension/user-1/call-log" {
+		t.Fatalf("extensionCallLogEndpoint with extension = %q", got)
 	}
 }

@@ -186,7 +186,7 @@ The Secret stores the full RingClaw config, including Bot Token, JWT App credent
 A Private App (REST API with JWT) is required by RingClaw registration. It provides the owner-scoped client used for account checks, summaries, cross-chat actions, and optional Video/Phone actions:
 - **Summarize** conversations from other chats
 - **Cross-chat actions** (read messages, create tasks in other chats)
-- **Video/Phone actions** (create RingCentral Video bridges, start owner-approved RingOut, read extension Call Log)
+- **Video/Phone actions** (create RingCentral Video bridges, emit FIJI client make-call actions, read extension Call Log)
 
 1. In the Developer Console, click **Register App** → select **REST API App (most common)**
 

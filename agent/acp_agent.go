@@ -150,6 +150,14 @@ type initParams struct {
 	ClientCapabilities clientCapabilities `json:"clientCapabilities"`
 }
 
+type authMethod struct {
+	ID string `json:"id"`
+}
+
+type authenticateParams struct {
+	MethodID string `json:"methodId"`
+}
+
 type clientCapabilities struct {
 	FS       *fsCapabilities `json:"fs,omitempty"`
 	Terminal bool            `json:"terminal,omitempty"`
@@ -440,8 +448,49 @@ func (a *ACPAgent) startOnce(ctx context.Context) error {
 
 	slog.Debug("initialized", "component", "acp", "pid", pid, "result", string(result))
 	a.parseInitializeResult(result)
+	if err := a.authenticateIfRequired(initCtx, result); err != nil {
+		a.mu.Lock()
+		a.started = false
+		a.mu.Unlock()
+		a.stdin.Close()
+		a.cmd.Process.Kill()
+		a.cmd.Wait()
+		return fmt.Errorf("agent authentication failed (pid=%d): %w", pid, err)
+	}
 	registerActiveACPAgent(a)
 	return nil
+}
+
+func (a *ACPAgent) authenticateIfRequired(ctx context.Context, raw json.RawMessage) error {
+	methodID := selectAuthMethodID(raw)
+	if methodID == "" {
+		return nil
+	}
+	slog.Info("authenticating ACP agent", "component", "acp", "command", a.command, "method", methodID)
+	if _, err := a.call(ctx, "authenticate", authenticateParams{MethodID: methodID}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func selectAuthMethodID(raw json.RawMessage) string {
+	var parsed struct {
+		AuthMethods []authMethod `json:"authMethods"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return ""
+	}
+	for _, method := range parsed.AuthMethods {
+		if strings.TrimSpace(method.ID) == "cursor_login" {
+			return "cursor_login"
+		}
+	}
+	for _, method := range parsed.AuthMethods {
+		if id := strings.TrimSpace(method.ID); id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 // parseInitializeResult extracts and stores the agent's advertised

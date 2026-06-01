@@ -28,10 +28,11 @@ func newCLIClient() (*ringcentral.Client, error) {
 
 func newPrivateClientFromConfig(cfg *config.Config) (*ringcentral.Client, error) {
 	creds := &ringcentral.Credentials{
-		ClientID:     cfg.RC.ClientID,
-		ClientSecret: cfg.RC.ClientSecret,
-		JWTToken:     cfg.RC.JWTToken,
-		ServerURL:    cfg.RC.ServerURL,
+		ClientID:       cfg.RC.ClientID,
+		ClientSecret:   cfg.RC.ClientSecret,
+		JWTToken:       cfg.RC.JWTToken,
+		ServerURL:      cfg.RC.ServerURL,
+		VideoServerURL: cfg.RC.VideoServerURL,
 	}
 	client := ringcentral.NewClient(creds)
 	if err := client.Authenticate(); err != nil {

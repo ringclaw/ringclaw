@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -26,6 +27,25 @@ func (c *Client) SearchDirectory(ctx context.Context, searchString string) (*Dir
 	var result DirectorySearchResult
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("parse directory search: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) SearchContacts(ctx context.Context, searchString string) (*ContactList, error) {
+	params := url.Values{}
+	params.Set("perPage", "20")
+	if strings.TrimSpace(searchString) != "" {
+		params.Set("searchString", searchString)
+	}
+	path := "/restapi/v1.0/account/~/extension/~/address-book/contact?" + params.Encode()
+	respBody, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result ContactList
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("parse contact search: %w", err)
 	}
 	return &result, nil
 }

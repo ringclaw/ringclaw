@@ -185,7 +185,7 @@ Secret 保存完整 RingClaw 配置，包括 Bot Token、JWT App 凭据、已选
 Private App（REST API + JWT）是 RingClaw 注册的必需配置。它提供 owner-scoped client，用于账号校验、总结、跨聊天操作，以及可选的 Video/Phone 操作：
 - **Summarize** 其他聊天的对话
 - **跨聊天操作**（读取其他聊天消息、在其他聊天创建任务等）
-- **Video/Phone 操作**（创建 RingCentral Video bridge、owner 授权 RingOut、读取个人 Call Log）
+- **Video/Phone 操作**（创建 RingCentral Video bridge、发出 FIJI client make-call action、读取个人 Call Log）
 
 1. 在开发者控制台，点击 **Register App** → 选择 **REST API App (most common)**
 

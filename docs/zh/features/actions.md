@@ -4,7 +4,7 @@ title: AI 驱动操作
 
 # AI 驱动的自动操作
 
-AI Agent 在对话中可以自动创建笔记、任务、日历事件、Adaptive Card、RingCentral Video bridge，以及 owner 授权的 RingOut 电话。当用户的请求暗示需要创建这些资源时，Agent 会在回复中附加 ACTION 块，RingClaw 通过 RC API 自动执行。
+AI Agent 在对话中可以自动创建笔记、任务、日历事件、Adaptive Card、RingCentral Video bridge、FIJI 客户端电话，以及通话记录总结。当用户的请求暗示需要创建这些资源时，Agent 会在回复中附加 ACTION 块，RingClaw 会执行或发出对应的治理 action。
 
 ## 工作流程
 
@@ -16,6 +16,7 @@ sequenceDiagram
     participant R as RingClaw
     participant O as Owner DM
     participant RC as RingCentral
+    participant FIJI as FIJI Client
 
     AI-->>R: 回复 (含 ACTION 块)
     R->>R: ParseAgentActions()
@@ -57,9 +58,10 @@ sequenceDiagram
         else VIDEO_LIST
             R->>RC: ListVideoBridges
             R->>RC: SendPost 发送会议列表 / 重要会议摘要
-        else RINGOUT
+        else PHONE_CALL
             R->>R: 要求发送者为 owner
-            R->>RC: CreateRingOut
+            R->>R: 解析电话号码 / 联系人
+            R->>FIJI: 发出 make_call client action
         else PHONE_CALLLOG
             R->>RC: ListExtensionCallLog
             R->>RC: SendPost 发送 missed call 摘要和 next actions
@@ -90,7 +92,7 @@ END_ACTION
 ACTION:VIDEO_LIST scope=today important=true limit=5
 END_ACTION
 
-ACTION:RINGOUT to=+14155550199 callerid=+14155550100
+ACTION:PHONE_CALL to=+14155550199
 END_ACTION
 
 ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
@@ -98,8 +100,7 @@ END_ACTION
 ```
 
 ACTION 可通过 `chatid=<id>` 参数定向到其他聊天。
-`ACTION:RINGOUT` 仅 owner 可执行，非 owner 触发会被拒绝。
-当省略 `from` 时，RingClaw 不会合成 caller。RingOut 会使用当前 Private JWT App 用户 token 的身份和该用户默认 callback 设置，这和 message 发送通过 token 决定身份的方式一致。
+`ACTION:PHONE_CALL` 仅 owner 可执行，非 owner 触发会被拒绝。它不会从 runtime Pod 直接调用 RingOut。RingClaw 只负责解析目标号码或联系人，记录 `client_action=make_call` action event，然后由 FIJI 以当前登录用户调用已有 Phone `directCall` / `makeCall` 路径。旧 prompt 产生的 `ACTION:RINGOUT` 会作为兼容 alias，走同一条 FIJI client action 链路。
 
 - **非 owner 发送者**：OOB 已配置时（Private App + owner 私聊已解析），系统向 owner 私聊发送富信息 challenge 提示（action 类型、requester 身份、origin / target 聊天名、可选 `Title:` / `Subject:` / `Assignee:`、≤200 字符的 body 预览、效果说明、主机审批命令）。owner 需在主机上执行 `ringclaw approval <id>` 批准。批准后 action 异步在目标聊天执行。OOB 未配置时回退为静默丢弃（强制回到 origin chat）。owner 私聊收到的提示示例：
 
@@ -192,11 +193,11 @@ Video 和 Phone 是 Personal AVA Pro 的默认产品能力。即使 `ringcentral
 /phone status <ringOutId>
 /phone cancel <ringOutId>
 /phone calllog direction=Outbound view=Detailed limit=10
-/phone calllog result=Missed limit=25
+/phone calllog result=Missed date_from=2026-05-17T00:00:00+08:00 date_to=2026-06-01T23:59:59+08:00 limit=25
 /phone missed limit=25
 ```
 
-`/phone missed` 是 inbound call log + `result=Missed` 的快捷方式。CLI 中等价命令为 `ringclaw phone calllog --result Missed --limit 25`；JSON 输出也会应用相同的 result 过滤。
+`/phone missed` 是 inbound call log + `result=Missed` 的快捷方式。CLI 中等价命令为 `ringclaw phone calllog --result Missed --limit 25`；JSON 输出也会应用相同的客户端 result 过滤。Result 过滤刻意放在客户端执行，这样 RingClaw 可以先按用户级日期窗口拉取数据，再准确整理较早的 missed call。
 
 ## Video 与 Phone 自然语言能力
 
@@ -258,7 +259,7 @@ END_ACTION
 
 ### Phone 示例
 
-Agent 可以发起 RingOut：
+Agent 可以发起 FIJI 客户端电话：
 
 ```text
 Call +12123753080.
@@ -269,7 +270,7 @@ Call +12123753080.
 预期 ACTION：
 
 ```text
-ACTION:RINGOUT to=+12123753080
+ACTION:PHONE_CALL to=+12123753080
 END_ACTION
 ```
 
@@ -284,7 +285,7 @@ Check today's calls and tell me if I have missing calls. Summarize next actions.
 预期 ACTION：
 
 ```text
-ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
+ACTION:PHONE_CALLLOG scope=recent days=15 missing=true summary=true next_actions=true limit=10
 END_ACTION
 ```
 
@@ -293,12 +294,14 @@ END_ACTION
 | 参数 | 可选值 | 含义 |
 | --- | --- | --- |
 | `scope` | `today`, `recent` | `today` 会向 Call Log API 发送 `dateFrom` / `dateTo`，并按 `startTime` 再过滤一次 |
+| `days` | 正整数 | 用于 “last 15 days” / “最近15天” 这类最近 N 天窗口；RingClaw 会发送 `dateFrom` / `dateTo` 并过滤返回记录 |
+| `date_from`, `date_to` | RFC3339 时间 | Agent 已经知道精确时间范围时使用 |
 | `missing` | `true`, `false` | 突出 missed / missing calls |
 | `summary` | `true`, `false` | 输出总通话数、未接数、入站、出站、已接 / accepted 数量 |
 | `next_actions` | `true`, `false` | 输出后续行动建议，特别是 missed call follow-up |
 | `limit` | 正整数 | 设置 `recordCount`；默认 `10` |
 | `direction` | `Inbound`, `Outbound` | 可选 Call Log API 方向过滤 |
-| `result` | `Missed`, `Accepted` 等 | 可选 Call Log API 结果过滤 |
+| `result` | `Missed`, `Accepted` 等 | 可选客户端结果过滤 |
 | `view` | `Simple`, `Detailed` | 可选 Call Log API view |
 
 ### 所需 scopes
@@ -307,6 +310,7 @@ Private JWT App 需要包含：
 
 ```text
 Video       -> ACTION:VIDEO, ACTION:VIDEO_LIST
-RingOut     -> ACTION:RINGOUT
+Phone       -> ACTION:PHONE_CALL（FIJI client makeCall bridge）
 ReadCallLog -> ACTION:PHONE_CALLLOG, /phone calllog, /phone missed
+RingOut     -> 仅 /phone ringout 诊断命令
 ```

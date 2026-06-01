@@ -1174,20 +1174,22 @@ func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
 	var mu sync.Mutex
 	var sentTexts []string
 	var listedVideo bool
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges" {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/cloud-calendars/ucc") {
+			writeCloudCalendarPermissionError(w)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/events" {
 			listedVideo = true
-			_ = json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
-				Records: []ringcentral.VideoBridge{{
-					ID:         "bridge-1",
-					Name:       "客户升级复盘",
-					Type:       "Scheduled",
-					CreateTime: now,
-					Discovery: ringcentral.VideoBridgeDiscovery{
-						Web: "https://v.ringcentral.com/join/123",
-					},
+			_ = json.NewEncoder(w).Encode(ringcentral.EventList{
+				Records: []ringcentral.Event{{
+					ID:        "meeting-1",
+					Title:     "客户升级复盘",
+					StartTime: now.UTC().Format(time.RFC3339),
+					EndTime:   now.Add(30 * time.Minute).UTC().Format(time.RFC3339),
+					Location:  "RingCentral Video",
 				}},
 			})
 			return
@@ -1212,7 +1214,7 @@ func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
 	})
 	h.SetCapabilities([]string{"message", "summary", "video"})
 	client := ringcentral.NewBotClient(srv.URL, "token")
-	client.SetOwnerID("bot-1")
+	client.SetOwnerID("user-1")
 	client.SetDMChatID("dm-1")
 
 	h.HandleMessage(context.Background(), client, client, ringcentral.Post{
@@ -1229,9 +1231,10 @@ func TestHandleMessage_UpcomingMeetingQueryUsesVideoListAPI(t *testing.T) {
 		t.Fatal("expected a video list reply")
 	}
 	got := sentTexts[len(sentTexts)-1]
-	if !strings.Contains(got, "Important video meetings today") ||
+	if !strings.Contains(got, "Upcoming meetings today") ||
+		!strings.Contains(got, "Title:") ||
 		!strings.Contains(got, "客户升级复盘") ||
-		!strings.Contains(got, "https://v.ringcentral.com/join/123") {
+		!strings.Contains(got, "RingCentral Video") {
 		t.Fatalf("expected important video meeting in reply, got %q", got)
 	}
 }
@@ -1242,7 +1245,7 @@ func TestHandleMessage_TodayCallLogSummaryUsesPhoneCallLogAction(t *testing.T) {
 	var listedCallLog bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/call-log" {
+		if r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/user-1/call-log" {
 			listedCallLog = true
 			if r.URL.Query().Get("dateFrom") == "" || r.URL.Query().Get("dateTo") == "" {
 				t.Fatalf("expected today call-log query, got %s", r.URL.RawQuery)
@@ -1279,7 +1282,7 @@ func TestHandleMessage_TodayCallLogSummaryUsesPhoneCallLogAction(t *testing.T) {
 	})
 	h.SetCapabilities([]string{"message", "summary", "phone"})
 	client := ringcentral.NewBotClient(srv.URL, "token")
-	client.SetOwnerID("bot-1")
+	client.SetOwnerID("user-1")
 	client.SetDMChatID("dm-1")
 
 	h.HandleMessage(context.Background(), client, client, ringcentral.Post{

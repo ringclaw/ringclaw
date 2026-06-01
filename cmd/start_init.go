@@ -50,10 +50,11 @@ func initClients(ctx context.Context, cfg *config.Config) (*clients, error) {
 
 	slog.Info("initializing private app client...")
 	creds := &ringcentral.Credentials{
-		ClientID:     cfg.RC.ClientID,
-		ClientSecret: cfg.RC.ClientSecret,
-		JWTToken:     cfg.RC.JWTToken,
-		ServerURL:    cfg.RC.ServerURL,
+		ClientID:       cfg.RC.ClientID,
+		ClientSecret:   cfg.RC.ClientSecret,
+		JWTToken:       cfg.RC.JWTToken,
+		ServerURL:      cfg.RC.ServerURL,
+		VideoServerURL: cfg.RC.VideoServerURL,
 	}
 	privateClient := ringcentral.NewClient(creds)
 	if err := privateClient.Authenticate(); err != nil {

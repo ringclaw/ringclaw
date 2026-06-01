@@ -4,7 +4,7 @@ title: AI-Driven Actions
 
 # AI-Driven Actions
 
-AI agents can automatically create notes, tasks, events, adaptive cards, RingCentral Video bridges, and owner-approved RingOut calls during conversation. When a user's request implies creating these resources, the agent appends ACTION blocks to its response and RingClaw executes them via the RC API.
+AI agents can automatically create notes, tasks, events, adaptive cards, RingCentral Video bridges, FIJI client phone calls, and call-log summaries during conversation. When a user's request implies creating these resources, the agent appends ACTION blocks to its response and RingClaw executes or emits the matching governed action.
 
 ## How It Works
 
@@ -16,6 +16,7 @@ sequenceDiagram
     participant R as RingClaw
     participant O as Owner DM
     participant RC as RingCentral
+    participant FIJI as FIJI Client
 
     AI-->>R: Reply (with ACTION blocks)
     R->>R: ParseAgentActions()
@@ -57,9 +58,10 @@ sequenceDiagram
         else VIDEO_LIST
             R->>RC: ListVideoBridges
             R->>RC: SendPost with meeting list / important meeting summary
-        else RINGOUT
+        else PHONE_CALL
             R->>R: Require owner sender
-            R->>RC: CreateRingOut
+            R->>R: Resolve phone number / contact
+            R->>FIJI: Emit make_call client action
         else PHONE_CALLLOG
             R->>RC: ListExtensionCallLog
             R->>RC: SendPost with missed-call summary and next actions
@@ -90,7 +92,7 @@ END_ACTION
 ACTION:VIDEO_LIST scope=today important=true limit=5
 END_ACTION
 
-ACTION:RINGOUT to=+14155550199 callerid=+14155550100
+ACTION:PHONE_CALL to=+14155550199
 END_ACTION
 
 ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
@@ -98,8 +100,7 @@ END_ACTION
 ```
 
 Actions may target a different chat via the `chatid=<id>` parameter.
-`ACTION:RINGOUT` is owner-only and is refused for non-owner senders.
-When `from` is omitted, RingClaw does not synthesize a caller. RingOut runs under the current Private JWT App user's token and uses that user's default callback settings, matching how message sending derives identity from the token.
+`ACTION:PHONE_CALL` is owner-only and is refused for non-owner senders. It does **not** call RingOut from the runtime Pod. RingClaw resolves the target number or contact, records a `client_action=make_call` action event, and FIJI calls its existing Phone `directCall` / `makeCall` path as the current signed-in FIJI user. Legacy `ACTION:RINGOUT` emitted by older prompts is accepted as a compatibility alias for the same FIJI client action.
 
 - **Non-owner senders**: when OOB is configured (Private App + owner DM resolved), a context-rich challenge prompt is posted to the owner DM (action type, requester label with email, origin / target chat names, optional `Title:` / `Subject:` / `Assignee:` lines, a body preview capped at 200 characters, effect description, and host approve / deny commands). The owner must run `ringclaw approval <id>` on the host machine to approve. On approval the action executes asynchronously in the target chat. Falls back to silent drop (forced to origin chat) when OOB is not configured. Example owner DM prompt:
 
@@ -192,11 +193,11 @@ Video and Phone are product-default Personal AVA Pro capabilities. They are avai
 /phone status <ringOutId>
 /phone cancel <ringOutId>
 /phone calllog direction=Outbound view=Detailed limit=10
-/phone calllog result=Missed limit=25
+/phone calllog result=Missed date_from=2026-05-17T00:00:00+08:00 date_to=2026-06-01T23:59:59+08:00 limit=25
 /phone missed limit=25
 ```
 
-`/phone missed` is shorthand for inbound call logs with `result=Missed`. For CLI usage, the equivalent is `ringclaw phone calllog --result Missed --limit 25`; JSON output applies the same result filter.
+`/phone missed` is shorthand for inbound call logs with `result=Missed`. For CLI usage, the equivalent is `ringclaw phone calllog --result Missed --limit 25`; JSON output applies the same client-side result filter. Result filtering is intentionally client-side so RingClaw can fetch a dated user-scoped window first, then summarize older missed calls accurately.
 
 ## Natural-Language Video & Phone Actions
 
@@ -258,7 +259,7 @@ Supported `ACTION:VIDEO_LIST` params:
 
 ### Phone examples
 
-The agent can start RingOut calls:
+The agent can start FIJI client phone calls:
 
 ```text
 Call +12123753080.
@@ -269,7 +270,7 @@ Call +12123753080.
 Expected action:
 
 ```text
-ACTION:RINGOUT to=+12123753080
+ACTION:PHONE_CALL to=+12123753080
 END_ACTION
 ```
 
@@ -284,7 +285,7 @@ Check today's calls and tell me if I have missing calls. Summarize next actions.
 Expected action:
 
 ```text
-ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10
+ACTION:PHONE_CALLLOG scope=recent days=15 missing=true summary=true next_actions=true limit=10
 END_ACTION
 ```
 
@@ -293,12 +294,14 @@ Supported `ACTION:PHONE_CALLLOG` params:
 | Param | Values | Meaning |
 | --- | --- | --- |
 | `scope` | `today`, `recent` | `today` sends `dateFrom` / `dateTo` to the Call Log API and filters the response by `startTime` |
+| `days` | positive integer | For recent-window queries such as "last 15 days" / "最近15天"; RingClaw sends `dateFrom` / `dateTo` and filters the returned records |
+| `date_from`, `date_to` | RFC3339 timestamps | Explicit call-log date window when the agent already knows exact bounds |
 | `missing` | `true`, `false` | Highlights missed/missing calls |
 | `summary` | `true`, `false` | Adds totals for calls, missed calls, inbound, outbound, and answered/accepted calls |
 | `next_actions` | `true`, `false` | Adds follow-up suggestions, especially for missed calls |
 | `limit` | positive integer | Sets `recordCount`; defaults to `10` |
 | `direction` | `Inbound`, `Outbound` | Optional Call Log API direction filter |
-| `result` | `Missed`, `Accepted`, etc. | Optional Call Log API result filter |
+| `result` | `Missed`, `Accepted`, etc. | Optional client-side result filter |
 | `view` | `Simple`, `Detailed` | Optional Call Log API view |
 
 ### Required scopes
@@ -307,6 +310,7 @@ The Private JWT App must include:
 
 ```text
 Video       -> ACTION:VIDEO, ACTION:VIDEO_LIST
-RingOut     -> ACTION:RINGOUT
+Phone       -> ACTION:PHONE_CALL (FIJI client makeCall bridge)
 ReadCallLog -> ACTION:PHONE_CALLLOG, /phone calllog, /phone missed
+RingOut     -> /phone ringout diagnostic command only
 ```

@@ -27,7 +27,7 @@ var videoCmd = &cobra.Command{
 
 var videoListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List RingCentral Video meeting bridges",
+	Short: "List RingCentral Video meeting history",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := newCLIClient()
@@ -37,16 +37,19 @@ var videoListCmd = &cobra.Command{
 		ctx, cancel := notifyContext(context.Background())
 		defer cancel()
 
-		list, err := client.ListVideoBridges(ctx)
+		list, err := client.ListVideoMeetingHistory(ctx, ringcentral.VideoMeetingHistoryOptions{
+			Type:    "All",
+			PerPage: 20,
+		})
 		if err != nil {
-			return fmt.Errorf("list video bridges failed: %w", err)
+			return fmt.Errorf("list video meeting history failed: %w", err)
 		}
 		if jsonOutput {
 			printJSON(list)
 		} else {
-			fmt.Printf("Video bridges (%d)\n", len(list.Records))
-			for _, bridge := range list.Records {
-				printVideoBridge(&bridge)
+			fmt.Printf("Video meeting history (%d)\n", len(list.Meetings))
+			for _, meeting := range list.Meetings {
+				printVideoMeetingHistory(&meeting)
 			}
 		}
 		return nil
@@ -139,5 +142,24 @@ func printVideoBridge(bridge *ringcentral.VideoBridge) {
 	}
 	if bridge.Discovery.Web != "" {
 		fmt.Printf("  Join: %s\n", bridge.Discovery.Web)
+	}
+}
+
+func printVideoMeetingHistory(meeting *ringcentral.VideoMeetingHistory) {
+	fmt.Printf("Video meeting: %s\n", meeting.ID)
+	if meeting.DisplayName != "" {
+		fmt.Printf("  name: %s\n", meeting.DisplayName)
+	}
+	if meeting.StartTime != "" {
+		fmt.Printf("  start: %s\n", meeting.StartTime)
+	}
+	if meeting.Status != "" {
+		fmt.Printf("  status: %s\n", meeting.Status)
+	}
+	if meeting.Duration > 0 {
+		fmt.Printf("  duration: %ds\n", meeting.Duration)
+	}
+	if meeting.HostInfo.DisplayName != "" {
+		fmt.Printf("  host: %s\n", meeting.HostInfo.DisplayName)
 	}
 }

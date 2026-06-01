@@ -739,7 +739,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 			logSendError(SendTextReply(ctx, client, chatID, capabilityDisabledMessage(capability)))
 			return
 		}
-		logSendError(SendTextReply(ctx, client, chatID, HandleActionCommand(ctx, readClient, chatID, text)))
+		logSendError(SendTextReply(ctx, client, chatID, HandleActionCommandWithRequester(ctx, readClient, chatID, text, post.CreatorID)))
 		return
 	}
 

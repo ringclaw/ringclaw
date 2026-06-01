@@ -20,10 +20,11 @@ var (
 	callLogDateFrom  string
 	callLogDateTo    string
 	callLogLimit     int
+	callLogExtension string
 )
 
 func init() {
-	phoneRingOutCmd.Flags().StringVar(&phoneFrom, "from", "", "Optional owner callback phone number. Omit to let RingOut use the current JWT user's default callback")
+	phoneRingOutCmd.Flags().StringVar(&phoneFrom, "from", "", "Optional owner forwarding/callback phone number. Omit to use a RingOut callback number configured for the current JWT user")
 	phoneRingOutCmd.Flags().StringVar(&phoneCallerID, "caller-id", "", "Caller ID phone number")
 	phoneRingOutCmd.Flags().BoolVar(&phonePlayPrompt, "play-prompt", false, "Play a prompt before connecting the RingOut call")
 
@@ -34,6 +35,7 @@ func init() {
 	phoneCallLogCmd.Flags().StringVar(&callLogDateFrom, "date-from", "", "Start time filter in ISO8601")
 	phoneCallLogCmd.Flags().StringVar(&callLogDateTo, "date-to", "", "End time filter in ISO8601")
 	phoneCallLogCmd.Flags().IntVar(&callLogLimit, "limit", 10, "Number of call log records")
+	phoneCallLogCmd.Flags().StringVar(&callLogExtension, "extension-id", "", "FIJI requester extension ID for user-scoped call logs")
 
 	phoneCmd.AddCommand(phoneRingOutCmd)
 	phoneCmd.AddCommand(phoneStatusCmd)
@@ -66,6 +68,12 @@ var phoneRingOutCmd = &cobra.Command{
 			from = args[0]
 			to = args[1]
 		}
+		if from == "" {
+			from, err = defaultCLIRingOutFromNumber(ctx, client)
+			if err != nil {
+				return err
+			}
+		}
 		req := &ringcentral.CreateRingOutRequest{
 			To:         ringcentral.PhoneNumberRef{PhoneNumber: to},
 			PlayPrompt: phonePlayPrompt,
@@ -87,6 +95,41 @@ var phoneRingOutCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func defaultCLIRingOutFromNumber(ctx context.Context, client *ringcentral.Client) (string, error) {
+	list, err := client.ListForwardingNumbers(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list current extension forwarding numbers: %w", err)
+	}
+	for _, record := range list.Records {
+		if phone := strings.TrimSpace(record.PhoneNumber); phone != "" && forwardingNumberAvailable(record) && forwardingNumberHasFeature(record, "RingOut") {
+			return phone, nil
+		}
+	}
+	for _, record := range list.Records {
+		if phone := strings.TrimSpace(record.PhoneNumber); phone != "" && forwardingNumberAvailable(record) {
+			return phone, nil
+		}
+	}
+	return "", fmt.Errorf("current extension has no RingOut forwarding/callback number; configure a RingOut callback number in RingCentral call handling or pass --from <callback phone>")
+}
+
+func forwardingNumberAvailable(record ringcentral.ForwardingNumber) bool {
+	if record.Hidden {
+		return false
+	}
+	status := strings.TrimSpace(record.Status)
+	return status == "" || strings.EqualFold(status, "Normal")
+}
+
+func forwardingNumberHasFeature(record ringcentral.ForwardingNumber, want string) bool {
+	for _, feature := range record.Features {
+		if strings.EqualFold(strings.TrimSpace(feature), want) {
+			return true
+		}
+	}
+	return false
 }
 
 var phoneStatusCmd = &cobra.Command{
@@ -150,15 +193,17 @@ var phoneCallLogCmd = &cobra.Command{
 		ctx, cancel := notifyContext(context.Background())
 		defer cancel()
 
-		list, err := client.ListExtensionCallLog(ctx, ringcentral.CallLogOptions{
+		opts := ringcentral.CallLogOptions{
 			RecordCount: callLogLimit,
+			ExtensionID: strings.TrimSpace(callLogExtension),
 			View:        callLogView,
 			Direction:   callLogDirection,
 			Type:        callLogType,
 			Result:      callLogResult,
 			DateFrom:    callLogDateFrom,
 			DateTo:      callLogDateTo,
-		})
+		}
+		list, err := client.ListExtensionCallLog(ctx, opts)
 		if err != nil {
 			return fmt.Errorf("list call log failed: %w", err)
 		}

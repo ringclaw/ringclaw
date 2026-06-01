@@ -134,6 +134,95 @@ func TestDetectAndConfigure_NoUpgradeIfAlreadyACP(t *testing.T) {
 	}
 }
 
+func TestDetectAndConfigure_DetectsCursorAgentAsACP(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeBin := filepath.Join(tmpDir, "agent")
+	os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755)
+	t.Setenv("PATH", tmpDir)
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := DefaultConfig()
+	modified := DetectAndConfigure(cfg)
+	if !modified {
+		t.Fatal("expected config to be modified")
+	}
+	cursor := cfg.Agents["cursor"]
+	if cursor.Type != "acp" {
+		t.Fatalf("cursor type = %q, want acp", cursor.Type)
+	}
+	if cursor.Command != fakeBin {
+		t.Fatalf("cursor command = %q, want %q", cursor.Command, fakeBin)
+	}
+	if len(cursor.Args) != 1 || cursor.Args[0] != "acp" {
+		t.Fatalf("cursor args = %v, want [acp]", cursor.Args)
+	}
+}
+
+func TestDetectAndConfigure_MigratesCursorAgentToModernACP(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeBin := filepath.Join(tmpDir, "agent")
+	os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755)
+	t.Setenv("PATH", tmpDir)
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := DefaultConfig()
+	cfg.DefaultAgent = "cursor"
+	cfg.Agents["cursor"] = AgentConfig{
+		Type:             "acp",
+		Command:          "/old/path/cursor-agent",
+		Args:             []string{"acp", "--old"},
+		AllowWrite:       true,
+		FullAccess:       true,
+		RestrictedModeID: "plan",
+	}
+	modified := DetectAndConfigure(cfg)
+	if !modified {
+		t.Fatal("expected config to be modified")
+	}
+	cursor := cfg.Agents["cursor"]
+	if cursor.Type != "acp" {
+		t.Fatalf("cursor type = %q, want acp", cursor.Type)
+	}
+	if cursor.Command != fakeBin {
+		t.Fatalf("cursor command = %q, want %q", cursor.Command, fakeBin)
+	}
+	if len(cursor.Args) != 1 || cursor.Args[0] != "acp" {
+		t.Fatalf("cursor args = %v, want [acp]", cursor.Args)
+	}
+	if cursor.AllowWrite || cursor.FullAccess {
+		t.Fatalf("cursor unsafe ACP fields were not cleared: %+v", cursor)
+	}
+	if cursor.RestrictedModeID != "plan" {
+		t.Fatalf("restricted mode = %q, want plan", cursor.RestrictedModeID)
+	}
+	if cfg.DefaultAgent != "cursor" {
+		t.Fatalf("default agent = %q, want cursor", cfg.DefaultAgent)
+	}
+}
+
+func TestDetectAndConfigure_MigratesCursorCLIToModernACP(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeBin := filepath.Join(tmpDir, "agent")
+	os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755)
+	t.Setenv("PATH", tmpDir)
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := DefaultConfig()
+	cfg.DefaultAgent = "cursor"
+	cfg.Agents["cursor"] = AgentConfig{
+		Type:    "cli",
+		Command: fakeBin,
+	}
+	modified := DetectAndConfigure(cfg)
+	if !modified {
+		t.Fatal("expected config to be modified")
+	}
+	cursor := cfg.Agents["cursor"]
+	if cursor.Type != "acp" || cursor.Command != fakeBin || len(cursor.Args) != 1 || cursor.Args[0] != "acp" {
+		t.Fatalf("cursor = %+v, want modern ACP config", cursor)
+	}
+}
+
 func TestDetectAndConfigure_OpenclawHTTPFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("PATH", tmpDir)

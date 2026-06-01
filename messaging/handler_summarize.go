@@ -40,7 +40,12 @@ func (h *Handler) classifyAndRoute(ctx context.Context, client *ringcentral.Clie
 		return false
 	}
 
-	intent := classifyIntent(ctx, ag, text)
+	intent, deterministic := deterministicIntent(text)
+	if deterministic {
+		slog.Info("intent classified locally", "component", "intent", "intent", string(intent))
+	} else {
+		intent = classifyIntent(ctx, ag, text)
+	}
 	switch intent {
 	case IntentSummarize:
 		return h.routeSummarize(ctx, client, readClient, post, isBotGroup)
@@ -220,6 +225,8 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 			OOB:           h.OOBManager(),
 			OwnerDMChat:   h.OwnerDMChatID(),
 			RequesterID:   post.CreatorID,
+			OwnerID:       readClient.OwnerID(),
+			Capabilities:  h.actionCapabilities(),
 		})
 		if len(results) > 0 {
 			logSendError(SendTextReply(ctx, replyClient, chatID, strings.Join(results, "\n")))

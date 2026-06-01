@@ -113,7 +113,7 @@ title: 聊天命令
 给 2123753080 打电话。
 ```
 
-这些请求会走 intent classification 和 agent ACTION 块（`ACTION:VIDEO`、`ACTION:VIDEO_LIST`、`ACTION:RINGOUT`、`ACTION:PHONE_CALLLOG`），不是单独的 command-only shortcut。
+这些请求会走 intent classification 和 agent ACTION 块（`ACTION:VIDEO`、`ACTION:VIDEO_LIST`、`ACTION:PHONE_CALL`、`ACTION:PHONE_CALLLOG`），不是单独的 command-only shortcut。旧的 `ACTION:RINGOUT` 会作为 FIJI client make-call bridge 的兼容 alias。
 
 ## Adaptive Card（自适应卡片）
 

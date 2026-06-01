@@ -71,6 +71,66 @@ func TestCreateRingOut_OmitsFromWhenCurrentTokenIdentityShouldBeUsed(t *testing.
 	}
 }
 
+func TestListExtensionPhoneNumbers(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/restapi/v1.0/account/~/extension/~/phone-number" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ExtensionPhoneNumberList{
+			Records: []ExtensionPhoneNumber{{
+				ID:          904688021,
+				PhoneNumber: "+14155550100",
+				UsageType:   "DirectNumber",
+				Type:        "VoiceFax",
+				Status:      "Normal",
+			}},
+		})
+	})
+	defer srv.Close()
+
+	list, err := client.ListExtensionPhoneNumbers(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list.Records) != 1 || list.Records[0].PhoneNumber != "+14155550100" {
+		t.Fatalf("unexpected phone number list: %+v", list)
+	}
+}
+
+func TestListForwardingNumbers(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/restapi/v1.0/account/~/extension/~/forwarding-number" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ForwardingNumberList{
+			Records: []ForwardingNumber{{
+				ID:          904688021,
+				PhoneNumber: "+14155550100",
+				Label:       "My mobile",
+				Type:        "Other",
+				Features:    []string{"RingOut"},
+			}},
+		})
+	})
+	defer srv.Close()
+
+	list, err := client.ListForwardingNumbers(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list.Records) != 1 || list.Records[0].PhoneNumber != "+14155550100" || list.Records[0].Label != "My mobile" {
+		t.Fatalf("unexpected forwarding number list: %+v", list)
+	}
+}
+
 func TestListExtensionCallLog_Query(t *testing.T) {
 	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -105,6 +165,24 @@ func TestListExtensionCallLog_Query(t *testing.T) {
 	}
 	if len(logs.Records) != 1 || logs.Records[0].Duration != 42 {
 		t.Fatalf("unexpected call logs: %+v", logs)
+	}
+}
+
+func TestListExtensionCallLog_UsesExplicitExtension(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/restapi/v1.0/account/~/extension/user-1/call-log" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(CallLogList{})
+	})
+	defer srv.Close()
+
+	if _, err := client.ListExtensionCallLog(context.Background(), CallLogOptions{ExtensionID: "user-1"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

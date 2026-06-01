@@ -175,10 +175,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 func validatePrivateApp(cfg *config.Config) error {
 	creds := &ringcentral.Credentials{
-		ClientID:     cfg.RC.ClientID,
-		ClientSecret: cfg.RC.ClientSecret,
-		JWTToken:     cfg.RC.JWTToken,
-		ServerURL:    cfg.RC.ServerURL,
+		ClientID:       cfg.RC.ClientID,
+		ClientSecret:   cfg.RC.ClientSecret,
+		JWTToken:       cfg.RC.JWTToken,
+		ServerURL:      cfg.RC.ServerURL,
+		VideoServerURL: cfg.RC.VideoServerURL,
 	}
 	client := ringcentral.NewClient(creds)
 	if err := client.Authenticate(); err != nil {

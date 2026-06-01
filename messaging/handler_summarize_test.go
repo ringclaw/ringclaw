@@ -36,6 +36,22 @@ func (a *intentTestAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "intent-test", Type: "test"}
 }
 
+type noClassifierAgent struct {
+	chatReply string
+}
+
+func (a *noClassifierAgent) Chat(_ context.Context, convID, _ string) (string, error) {
+	if convID == intentConversationID {
+		return "", fmt.Errorf("classifier should not be called")
+	}
+	return a.chatReply, nil
+}
+func (a *noClassifierAgent) ResetSession(_ context.Context, _ string) (string, error) { return "", nil }
+func (a *noClassifierAgent) SetCwd(_ string)                                          {}
+func (a *noClassifierAgent) Info() agent.AgentInfo {
+	return agent.AgentInfo{Name: "no-classifier-test", Type: "test"}
+}
+
 func TestClassifyAndRoute_SummarizeKeywordFastPath(t *testing.T) {
 	var sentTexts []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,6 +214,56 @@ func TestClassifyAndRoute_IntentPhone(t *testing.T) {
 	got := getSentTexts(sentTexts)
 	if len(got) == 0 {
 		t.Fatal("expected a reply for phone intent")
+	}
+}
+
+func TestClassifyAndRoute_VideoMeetingListSkipsIntentClassifier(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	ag := &noClassifierAgent{chatReply: "ACTION:VIDEO_LIST scope=today important=true limit=5\nEND_ACTION"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+	h.SetCapabilities([]string{"message", "summary", "video", "phone"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	handled := h.classifyAndRoute(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"},
+		"告诉我今天有啥重要会议", false)
+	if !handled {
+		t.Fatal("expected video meeting list intent to be handled without classifier")
+	}
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a video action reply")
+	}
+}
+
+func TestClassifyAndRoute_PhoneCallLogSkipsIntentClassifier(t *testing.T) {
+	srv, sentTexts := newTestRC(t)
+	defer srv.Close()
+
+	ag := &noClassifierAgent{chatReply: "ACTION:PHONE_CALLLOG scope=today missing=true summary=true next_actions=true limit=10\nEND_ACTION"}
+	h := newTestHandler()
+	h.SetDefaultAgent("test", ag)
+	h.SetCapabilities([]string{"message", "summary", "video", "phone"})
+
+	bot := ringcentral.NewBotClient(srv.URL, "token")
+	bot.SetOwnerID("bot-1")
+	bot.SetDMChatID("dm-1")
+
+	handled := h.classifyAndRoute(context.Background(), bot, bot,
+		ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"},
+		"查询我今天call log，帮我整理下call summary，以及我接下来的action。", false)
+	if !handled {
+		t.Fatal("expected phone call log intent to be handled without classifier")
+	}
+	got := getSentTexts(sentTexts)
+	if len(got) == 0 {
+		t.Fatal("expected a phone action reply")
 	}
 }
 

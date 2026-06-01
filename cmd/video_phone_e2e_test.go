@@ -69,17 +69,17 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 				},
 			})
 
-		case r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v2/account/~/extension/~/bridges":
+		case r.Method == http.MethodGet && r.URL.Path == "/rcvideo/v1/history/meetings":
 			record("video-list")
 			requireBearer(t, r)
-			json.NewEncoder(w).Encode(ringcentral.VideoBridgeList{
-				Records: []ringcentral.VideoBridge{{
-					ID:   "bridge-e2e",
-					Name: "E2E Bridge",
-					Type: "Scheduled",
-					Discovery: ringcentral.VideoBridgeDiscovery{
-						Web: "https://v.ringcentral.com/join/e2e",
-					},
+			json.NewEncoder(w).Encode(ringcentral.VideoMeetingHistoryList{
+				Meetings: []ringcentral.VideoMeetingHistory{{
+					ID:          "meeting-e2e",
+					DisplayName: "E2E Meeting",
+					Type:        "Meeting",
+					Status:      "Done",
+					StartTime:   "2026-06-01T10:00:00Z",
+					Duration:    1200,
 				}},
 			})
 
@@ -107,12 +107,23 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode ringout request: %v", err)
 			}
-			if body.From != nil || body.To.PhoneNumber != "+14155550199" || body.CallerID == nil || body.CallerID.PhoneNumber != "+14155550100" || !body.PlayPrompt {
+			if body.From == nil || body.From.PhoneNumber != "+14155550000" || body.To.PhoneNumber != "+14155550199" || body.CallerID == nil || body.CallerID.PhoneNumber != "+14155550100" || !body.PlayPrompt {
 				t.Fatalf("unexpected ringout body: %+v", body)
 			}
 			json.NewEncoder(w).Encode(ringcentral.RingOut{
 				ID:     "ringout-e2e",
 				Status: ringcentral.RingOutStatus{CallStatus: "InProgress", CallerStatus: "InProgress", CalleeStatus: "InProgress"},
+			})
+
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/forwarding-number":
+			record("forwarding-number")
+			requireBearer(t, r)
+			json.NewEncoder(w).Encode(ringcentral.ForwardingNumberList{
+				Records: []ringcentral.ForwardingNumber{{
+					PhoneNumber: "+14155550000",
+					Label:       "My mobile",
+					Features:    []string{"RingOut"},
+				}},
 			})
 
 		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/ring-out/ringout-e2e":
@@ -170,6 +181,7 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 	oldVideoType := videoBridgeType
 	oldCallerID := phoneCallerID
 	oldPlayPrompt := phonePlayPrompt
+	oldCallLogExtension := callLogExtension
 	oldCallLogView := callLogView
 	oldCallLogDirection := callLogDirection
 	oldCallLogResult := callLogResult
@@ -179,6 +191,7 @@ func TestVideoPhoneCLIEndToEndWithJWTClient(t *testing.T) {
 		videoBridgeType = oldVideoType
 		phoneCallerID = oldCallerID
 		phonePlayPrompt = oldPlayPrompt
+		callLogExtension = oldCallLogExtension
 		callLogView = oldCallLogView
 		callLogDirection = oldCallLogDirection
 		callLogResult = oldCallLogResult
@@ -272,6 +285,7 @@ func TestPhoneCallLogJSONAppliesResultFilter(t *testing.T) {
 	oldCallLogType := callLogType
 	oldCallLogResult := callLogResult
 	oldCallLogLimit := callLogLimit
+	oldCallLogExtension := callLogExtension
 	defer func() {
 		jsonOutput = oldJSON
 		callLogView = oldCallLogView
@@ -279,6 +293,7 @@ func TestPhoneCallLogJSONAppliesResultFilter(t *testing.T) {
 		callLogType = oldCallLogType
 		callLogResult = oldCallLogResult
 		callLogLimit = oldCallLogLimit
+		callLogExtension = oldCallLogExtension
 	}()
 
 	jsonOutput = true

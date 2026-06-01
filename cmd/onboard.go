@@ -238,10 +238,11 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 
 			if cfg.RC.HasPrivateApp() {
 				privateClient := ringcentral.NewClient(&ringcentral.Credentials{
-					ClientID:     cfg.RC.ClientID,
-					ClientSecret: cfg.RC.ClientSecret,
-					JWTToken:     cfg.RC.JWTToken,
-					ServerURL:    cfg.RC.ServerURL,
+					ClientID:       cfg.RC.ClientID,
+					ClientSecret:   cfg.RC.ClientSecret,
+					JWTToken:       cfg.RC.JWTToken,
+					ServerURL:      cfg.RC.ServerURL,
+					VideoServerURL: cfg.RC.VideoServerURL,
 				})
 				if err := privateClient.Authenticate(); err != nil {
 					return fmt.Errorf("validate private app credentials: %w", err)

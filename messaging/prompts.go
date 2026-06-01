@@ -48,20 +48,21 @@ END_ACTION
 ACTION:VIDEO_LIST [scope=today|recent] [important=true] [limit=5] [chatid=...]
 END_ACTION
 
-ACTION:RINGOUT to=<target phone> [from=<owner phone>] [callerid=<phone>] [playprompt=true]
+ACTION:PHONE_CALL to=<target phone or person name>
 END_ACTION
 
-ACTION:PHONE_CALLLOG [scope=today|recent] [missing=true] [summary=true] [next_actions=true] [limit=10]
+ACTION:PHONE_CALLLOG [scope=today|recent] [days=N] [date_from=<RFC3339>] [date_to=<RFC3339>] [missing=true] [summary=true] [next_actions=true] [limit=10]
 END_ACTION
 
 ## Rules
 - chatid: person name (e.g. John Smith), numeric chat ID, or ![:Team](ID). Omit to use current chat.
 - assignee: person name or ![:Person](ID).
 - The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
+- ACTION:MESSAGE body must be a ready-to-send human message written as the requester, not as an assistant. Do not include assistant framing such as "I helped you write", "Here is", "summary below", "我帮你", "以下是", or meta commentary. Keep the recipient-facing text concise, natural, and context-aware; preserve the requester's language and tone unless they ask for another style.
 - For RingCentral Video meeting creation → use ACTION:VIDEO. It creates a bridge and posts the join link.
 - For RingCentral Video meeting queries such as "recent meeting list", "today's important meetings", or "what meetings do I have today" → use ACTION:VIDEO_LIST. Use scope=today for today-specific requests, scope=recent for recent/list requests, and important=true when the user asks for important meetings.
-- For phone calls → use ACTION:RINGOUT only when the owner explicitly asks to call a phone number. Omit from unless the owner explicitly provides a callback phone number; RingOut uses the current JWT user's identity and default callback settings. Never use a person name, bot name, user ID, or short extension like 8102 as from.
-- For call-log queries such as "today's calls", "missing/missed calls", "call summary", or "next actions from calls" → use ACTION:PHONE_CALLLOG. Use scope=today for today-specific requests, missing=true when the user asks whether there are missed/missing calls, summary=true for call summary, and next_actions=true when the user asks for follow-up actions.
+- For phone calls → use ACTION:PHONE_CALL when the owner explicitly asks to call a phone number or a named person. Put the person name in to= when the user gives a name, for example ACTION:PHONE_CALL to=Grace He. Do not include from/callerid/playprompt. RingClaw resolves the target, then asks the FIJI client to make the call as the current signed-in FIJI user through the existing Phone UI.
+- For call-log queries such as "today's calls", "last N days calls", "missing/missed calls", "call summary", or "next actions from calls" → use ACTION:PHONE_CALLLOG. Use scope=today for today-specific requests, scope=recent for recent/list requests, days=N when the user says last/recent N days (English or Chinese such as 最近15天), missing=true when the user asks whether there are missed/missing calls, summary=true for call summary, and next_actions=true when the user asks for follow-up actions.
 - For structured data, reports, or progress → use ACTION:CARD. Always generate complete valid Adaptive Card JSON v1.3.
 - If no action needed, reply normally without ACTION blocks.
 - Preserve first-person pronouns exactly as given: "我" for Chinese, "me"/"myself" for English. Do NOT translate or substitute.
@@ -80,13 +81,13 @@ const defaultIntentPrompt = `Classify the user's PRIMARY intent. Reply with ONLY
 - "note" if the PRIMARY goal is to CREATE a note (not just send results as a note)
 - "event" if the PRIMARY goal is to CREATE a calendar event/meeting
 - "video" if the PRIMARY goal is to create, start, show, list, get, or manage a RingCentral Video meeting/bridge/video call/RCV meeting
-- "phone" if the PRIMARY goal is to start a RingOut/phone call, dial a phone number, get missed calls, or view call logs
+- "phone" if the PRIMARY goal is to start a phone call, dial a phone number, get missed calls, or view call logs
 - "chat" if this is a normal conversation, question, or any other request (including asking an AI to summarize code, documents, articles, PRs, or other external content)
 
 IMPORTANT: If the message contains BOTH "summarize" AND another action (create note/task/send), the primary intent is ALWAYS "summarize".
 CRITICAL: The "summarize" intent ONLY applies to summarizing CHAT HISTORY or MESSAGES. Requests to summarize code, documents, articles, PRs, or other external content are "chat".
 CRITICAL: Use "video" only for RingCentral Video meeting/call intent. A request about a video file, video content, or video editing is "chat".
-CRITICAL: Use "phone" only for RingCentral Phone/RingOut/call-log intent. General questions about phone number formatting or phone concepts are "chat".
+CRITICAL: Use "phone" only for RingCentral Phone make-call/call-log intent. General questions about phone number formatting or phone concepts are "chat".
 
 User message: %s
 

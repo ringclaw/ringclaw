@@ -17,19 +17,20 @@ import (
 )
 
 const (
-	defaultServerURL = "https://platform-xmrupxmn.int.rclabenv.com"
+	defaultServerURL = "https://platform.ringcentral.com"
 	requestTimeout   = 30 * time.Second
 )
 
 // Client is a RingCentral Team Messaging REST API client.
 type Client struct {
-	serverURL  string
-	auth       *Auth
-	httpClient *http.Client
-	ownerID    string
-	monitor    *Monitor
-	isBot      bool
-	dmChatID   string
+	serverURL      string
+	videoServerURL string
+	auth           *Auth
+	httpClient     *http.Client
+	ownerID        string
+	monitor        *Monitor
+	isBot          bool
+	dmChatID       string
 }
 
 // IsBot returns true if this client uses a bot token.
@@ -88,11 +89,16 @@ func NewClient(creds *Credentials) *Client {
 	if serverURL == "" {
 		serverURL = defaultServerURL
 	}
+	videoServerURL := creds.VideoServerURL
+	if videoServerURL == "" {
+		videoServerURL = defaultVideoServerURL(serverURL)
+	}
 	auth := NewAuth(creds.ClientID, creds.ClientSecret, creds.JWTToken, serverURL)
 	return &Client{
-		serverURL:  serverURL,
-		auth:       auth,
-		httpClient: newHTTPClient(),
+		serverURL:      serverURL,
+		videoServerURL: videoServerURL,
+		auth:           auth,
+		httpClient:     newHTTPClient(),
 	}
 }
 
@@ -107,10 +113,11 @@ func NewBotClient(serverURL, botToken string) *Client {
 	// Set the bot token with a far-future expiry so AccessToken() never triggers refresh
 	auth.SetTokenForTest(botToken, time.Now().Add(365*24*time.Hour))
 	return &Client{
-		serverURL:  serverURL,
-		auth:       auth,
-		isBot:      true,
-		httpClient: newHTTPClient(),
+		serverURL:      serverURL,
+		videoServerURL: defaultVideoServerURL(serverURL),
+		auth:           auth,
+		isBot:          true,
+		httpClient:     newHTTPClient(),
 	}
 }
 
@@ -127,6 +134,11 @@ func (c *Client) Auth() *Auth {
 // ServerURL returns the server base URL.
 func (c *Client) ServerURL() string {
 	return c.serverURL
+}
+
+// VideoServerURL returns the RingCentral Video API base URL.
+func (c *Client) VideoServerURL() string {
+	return c.videoServerURL
 }
 
 // SetOwnerID sets the bot's own user ID (to filter self-messages).
@@ -318,6 +330,14 @@ func (c *Client) DownloadAttachment(ctx context.Context, contentURI string) ([]b
 }
 
 func (c *Client) doRequest(ctx context.Context, method, path, contentType string, body io.Reader) ([]byte, error) {
+	return c.doRequestBase(ctx, c.serverURL, method, path, contentType, body)
+}
+
+func (c *Client) doVideoRequest(ctx context.Context, method, path, contentType string, body io.Reader) ([]byte, error) {
+	return c.doRequestBase(ctx, c.videoServerURL, method, path, contentType, body)
+}
+
+func (c *Client) doRequestBase(ctx context.Context, baseURL, method, path, contentType string, body io.Reader) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
@@ -338,7 +358,7 @@ func (c *Client) doRequest(ctx context.Context, method, path, contentType string
 			return nil, fmt.Errorf("get access token: %w", err)
 		}
 
-		reqURL := c.serverURL + path
+		reqURL := strings.TrimRight(baseURL, "/") + path
 		var reqBody io.Reader
 		if bodyBytes != nil {
 			reqBody = bytes.NewReader(bodyBytes)
@@ -387,6 +407,26 @@ func (c *Client) doRequest(ctx context.Context, method, path, contentType string
 		return respBody, nil
 	}
 	return nil, fmt.Errorf("HTTP 429: rate limited after %d retries", maxRetries)
+}
+
+func defaultVideoServerURL(serverURL string) string {
+	serverURL = strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if serverURL == "" {
+		return "https://api-meet.ringcentral.com"
+	}
+	u, err := url.Parse(serverURL)
+	if err != nil || u.Host == "" {
+		return serverURL
+	}
+	switch u.Host {
+	case "platform.ringcentral.com":
+		u.Host = "api-meet.ringcentral.com"
+	case "platform.devtest.ringcentral.com":
+		u.Host = "api-meet.devtest.ringcentral.com"
+	default:
+		return serverURL
+	}
+	return u.String()
 }
 
 // parseRetryAfter parses the Retry-After header value (in seconds) and

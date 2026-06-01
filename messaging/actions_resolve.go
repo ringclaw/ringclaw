@@ -81,6 +81,106 @@ func resolveNameToPersonID(ctx context.Context, client *ringcentral.Client, name
 	return best.ID, nil
 }
 
+func resolveNameToPhoneNumber(ctx context.Context, client *ringcentral.Client, name string) (string, string, error) {
+	result, err := client.SearchDirectory(ctx, name)
+	if err != nil {
+		return "", "", fmt.Errorf("directory search: %w", err)
+	}
+	if best := bestDirectoryMatch(result.Records, name); best != nil {
+		if number := bestContactPhoneNumber(best.PhoneNumbers, best.ExtensionNumber); number != "" {
+			fullName := strings.TrimSpace(best.FirstName + " " + best.LastName)
+			slog.Info("action: resolved phone contact from directory", "name", name, "match", fullName, "id", best.ID)
+			return number, fullName, nil
+		}
+	}
+
+	contacts, err := client.SearchContacts(ctx, name)
+	if err != nil {
+		return "", "", fmt.Errorf("contact search: %w", err)
+	}
+	best := bestContactMatch(contacts.Records, name)
+	if best == nil {
+		return "", "", fmt.Errorf("no phone contact found matching '%s'", name)
+	}
+	if number := contactPhoneNumber(*best); number != "" {
+		fullName := strings.TrimSpace(best.FirstName + " " + best.LastName)
+		if fullName == "" {
+			fullName = best.Company
+		}
+		slog.Info("action: resolved phone contact from address book", "name", name, "match", fullName, "id", best.ID)
+		return number, fullName, nil
+	}
+	return "", "", fmt.Errorf("contact '%s' matched but has no callable phone number", name)
+}
+
+func bestContactMatch(records []ringcentral.Contact, name string) *ringcentral.Contact {
+	for i := range records {
+		contact := &records[i]
+		fullName := strings.TrimSpace(contact.FirstName + " " + contact.LastName)
+		if exactMatch(fullName, name) || exactMatch(contact.Email, name) || exactMatch(contact.Company, name) {
+			return contact
+		}
+	}
+	var best *ringcentral.Contact
+	bestLen := int(^uint(0) >> 1)
+	for i := range records {
+		contact := &records[i]
+		fullName := strings.TrimSpace(contact.FirstName + " " + contact.LastName)
+		if fuzzyMatch(fullName, name) || fuzzyMatch(contact.Email, name) || fuzzyMatch(contact.Company, name) {
+			label := fullName
+			if label == "" {
+				label = contact.Company
+			}
+			if len(label) < bestLen {
+				best = contact
+				bestLen = len(label)
+			}
+		}
+	}
+	return best
+}
+
+func contactPhoneNumber(contact ringcentral.Contact) string {
+	return bestContactPhoneNumber(contact.PhoneNumbers,
+		contact.MobilePhone,
+		contact.BusinessPhone,
+		contact.BusinessPhone2,
+		contact.HomePhone,
+		contact.HomePhone2,
+		contact.OtherPhone,
+		contact.AssistantPhone,
+		contact.CallbackPhone,
+		contact.CarPhone,
+		contact.CompanyPhone,
+	)
+}
+
+func bestContactPhoneNumber(phoneNumbers []ringcentral.ContactPhoneNumber, fallbacks ...string) string {
+	preferred := []string{"direct", "mobile", "business", "work", "company", "phone"}
+	for _, want := range preferred {
+		for _, phone := range phoneNumbers {
+			if phone.PhoneNumber == "" {
+				continue
+			}
+			label := strings.ToLower(phone.Type + " " + phone.UsageType)
+			if strings.Contains(label, want) {
+				return strings.TrimSpace(phone.PhoneNumber)
+			}
+		}
+	}
+	for _, phone := range phoneNumbers {
+		if strings.TrimSpace(phone.PhoneNumber) != "" {
+			return strings.TrimSpace(phone.PhoneNumber)
+		}
+	}
+	for _, fallback := range fallbacks {
+		if strings.TrimSpace(fallback) != "" {
+			return strings.TrimSpace(fallback)
+		}
+	}
+	return ""
+}
+
 func isNumericID(s string) bool {
 	if s == "" {
 		return false
@@ -100,9 +200,9 @@ var selfPronouns = map[string]bool{
 	"私": true, "自分": true, // Japanese
 	"나": true, "저": true, // Korean
 	"moi": true, // French
-	"yo": true,  // Spanish
+	"yo":  true, // Spanish
 	"ich": true, // German
-	"я":  true,  // Russian
+	"я":   true, // Russian
 }
 
 func isSelfPronoun(s string) bool {
