@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ringclaw/ringclaw/messaging/persona"
+	"github.com/ringclaw/ringclaw/paths"
 )
 
 var debugMode atomic.Bool
@@ -372,14 +373,7 @@ func DefaultConfig() *Config {
 
 // ConfigPath returns the path to the config file.
 func ConfigPath() (string, error) {
-	if path := strings.TrimSpace(os.Getenv("RINGCLAW_CONFIG")); path != "" {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".ringclaw", "config.json"), nil
+	return paths.ConfigFile()
 }
 
 // Load loads configuration from ~/.ringclaw/config.json. Environment

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ringclaw/ringclaw/agent"
+	"github.com/ringclaw/ringclaw/paths"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -51,11 +52,7 @@ var globalChatCache = &chatCache{
 }
 
 func cacheFilePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".ringclaw", "chat_cache.json")
+	return paths.MustAppPath("chat_cache.json")
 }
 
 func (c *chatCache) ensureLoaded() {

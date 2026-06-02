@@ -13,9 +13,12 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 FROM node:24-bookworm-slim
 
-ARG NPM_REGISTRY=https://nexus-xmn02.int.rclabenv.com/nexus/content/groups/npm-all/
+ARG NPM_REGISTRY=https://registry.npmjs.org/
 ENV DISABLE_AUTOUPDATER=1
 ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
+ENV HOME=/home/ringclaw
+ENV RINGCLAW_HOME=/home/ringclaw/.ringclaw
+WORKDIR /home/ringclaw
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
@@ -24,6 +27,7 @@ RUN apt-get update \
       @openai/codex \
       @anthropic-ai/claude-code \
       @agentclientprotocol/claude-agent-acp \
+    && mkdir -p /home/ringclaw/.ringclaw/workspace /home/ringclaw/.ringclaw/memory \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
@@ -32,5 +36,5 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 
-VOLUME /root/.ringclaw
+VOLUME /home/ringclaw/.ringclaw
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

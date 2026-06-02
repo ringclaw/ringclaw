@@ -3,10 +3,11 @@ package messaging
 import (
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ringclaw/ringclaw/paths"
 )
 
 // ---------------------------------------------------------------------------
@@ -155,16 +156,13 @@ func loadPrompt(name, defaultText string) string {
 	once, _ := promptOnce.LoadOrStore(name, &sync.Once{})
 	once.(*sync.Once).Do(func() {
 		text := defaultText
-		home, err := os.UserHomeDir()
+		customPath, err := paths.AppPath("prompts", name+".md")
 		if err == nil {
-			// Check new path first: ~/.ringclaw/prompts/<name>.md
-			customPath := filepath.Join(home, ".ringclaw", "prompts", name+".md")
 			if data, err := os.ReadFile(customPath); err == nil && len(data) > 0 {
 				text = "\n" + string(data) + "\n"
 				slog.Info("loaded custom prompt", "name", name, "path", customPath)
 			} else if name == "action" {
-				// Legacy compat: ~/.ringclaw/action_prompt.md
-				legacyPath := filepath.Join(home, ".ringclaw", "action_prompt.md")
+				legacyPath := paths.MustAppPath("action_prompt.md")
 				if data, err := os.ReadFile(legacyPath); err == nil && len(data) > 0 {
 					text = "\n" + string(data) + "\n"
 					slog.Info("loaded custom prompt (legacy)", "name", name, "path", legacyPath)

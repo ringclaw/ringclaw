@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
+	"github.com/ringclaw/ringclaw/paths"
 )
 
 const (
@@ -167,11 +167,10 @@ func (r *HeartbeatRunner) isActiveTime() bool {
 }
 
 func (r *HeartbeatRunner) readHeartbeatFile() (string, error) {
-	home, err := os.UserHomeDir()
+	path, err := paths.AppPath(defaultHeartbeatFile)
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(home, ".ringclaw", defaultHeartbeatFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err

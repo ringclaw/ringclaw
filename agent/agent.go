@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/ringclaw/ringclaw/paths"
 )
 
 // AgentInfo holds metadata about an agent for logging/debugging.
@@ -173,11 +175,7 @@ func resolveExistingSymlinks(abs string) string {
 // defaultWorkspace returns ~/.ringclaw/workspace as the default working directory.
 // Ensures it is a git repo so CLI agents like codex don't complain.
 func defaultWorkspace() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return os.TempDir()
-	}
-	dir := filepath.Join(home, ".ringclaw", "workspace")
+	dir := paths.MustAppPath("workspace")
 	os.MkdirAll(dir, 0o755)
 	// Initialize as git repo if not already one
 	gitDir := filepath.Join(dir, ".git")

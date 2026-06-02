@@ -82,6 +82,19 @@ func TestConfig_Resolved_HonoursOverrides(t *testing.T) {
 	}
 }
 
+func TestConfig_Resolved_UsesEnvOverridesWhenUnset(t *testing.T) {
+	t.Setenv("RINGCLAW_SOUL_FILE", "/runtime/config/SOUL.md")
+	t.Setenv("RINGCLAW_MEMORY_DIR", "/runtime/state/memory")
+
+	r := Config{}.Resolved()
+	if r.SoulFile != "/runtime/config/SOUL.md" {
+		t.Fatalf("SoulFile=%q, want env override", r.SoulFile)
+	}
+	if r.MemoryDir != "/runtime/state/memory" {
+		t.Fatalf("MemoryDir=%q, want env override", r.MemoryDir)
+	}
+}
+
 func TestConfig_Resolved_ExpandsHomeTilde(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
