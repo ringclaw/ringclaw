@@ -21,7 +21,7 @@ ENV RINGCLAW_HOME=/home/ringclaw/.ringclaw
 WORKDIR /home/ringclaw
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata curl python3 \
     && npm install -g \
       @zed-industries/codex-acp \
       @openai/codex \
