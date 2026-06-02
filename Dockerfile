@@ -23,10 +23,10 @@ WORKDIR /home/ringclaw
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata curl python3 \
     && npm install -g \
-      @zed-industries/codex-acp \
-      @openai/codex \
+      @zed-industries/codex-acp@0.15.0 \
+      @openai/codex@0.134.0 \
       @anthropic-ai/claude-code \
-      @agentclientprotocol/claude-agent-acp \
+      @agentclientprotocol/claude-agent-acp@0.35.0 \
     && mkdir -p /home/ringclaw/.ringclaw/workspace /home/ringclaw/.ringclaw/memory \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
