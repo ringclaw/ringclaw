@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ringclaw/ringclaw/paths"
 )
 
 // CronJob represents a scheduled job.
@@ -53,11 +54,7 @@ func NewCronStore(path string) *CronStore {
 
 // DefaultCronStorePath returns the default cron store path.
 func DefaultCronStorePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".ringclaw", "cron", "jobs.json"), nil
+	return paths.AppPath("cron", "jobs.json")
 }
 
 // Load reads jobs from disk.

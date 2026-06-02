@@ -8,8 +8,11 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"path/filepath"
+
+	"github.com/ringclaw/ringclaw/paths"
 )
 
 const tokenFileName = "api_token"
@@ -17,12 +20,10 @@ const tokenFileName = "api_token"
 // LoadOrCreateToken reads the API token from ~/.ringclaw/api_token,
 // generating a new one if the file does not exist.
 func LoadOrCreateToken() (string, error) {
-	home, err := os.UserHomeDir()
+	path, err := paths.AppPath(tokenFileName)
 	if err != nil {
-		return "", fmt.Errorf("get home dir: %w", err)
+		return "", fmt.Errorf("get ringclaw path: %w", err)
 	}
-	dir := filepath.Join(home, ".ringclaw")
-	path := filepath.Join(dir, tokenFileName)
 
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -39,6 +40,7 @@ func LoadOrCreateToken() (string, error) {
 	}
 	token := hex.EncodeToString(buf)
 
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create config dir: %w", err)
 	}

@@ -6,10 +6,10 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ringclaw/ringclaw/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -74,13 +74,13 @@ func approvalAPIBase() (string, string, error) {
 }
 
 func loadAPIToken() (string, error) {
-	home, err := os.UserHomeDir()
+	path, err := paths.AppPath("api_token")
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".ringclaw", "api_token"))
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read ~/.ringclaw/api_token: %w", err)
+		return "", fmt.Errorf("read api token: %w", err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }

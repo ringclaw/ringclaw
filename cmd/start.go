@@ -15,6 +15,7 @@ import (
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
 	"github.com/ringclaw/ringclaw/messaging/oob"
+	"github.com/ringclaw/ringclaw/paths"
 	"github.com/ringclaw/ringclaw/ringcentral"
 	"github.com/spf13/cobra"
 )
@@ -112,9 +113,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		if cfg.AgentWorkspace != "" {
 			roots = append(roots, cfg.AgentWorkspace)
 		}
-		if home, err := os.UserHomeDir(); err == nil {
-			roots = append(roots, filepath.Join(home, ".ringclaw", "workspace"))
-		}
+		roots = append(roots, paths.MustAppPath("workspace"))
 		agent.SetWorkspaceRoots(roots)
 		if effective := agent.WorkspaceRoots(); len(effective) > 0 {
 			slog.Info("workspace allowlist configured", "component", "start", "roots", effective)
@@ -259,8 +258,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 // --- Daemon mode ---
 
 func ringclawDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ringclaw")
+	return paths.MustAppPath()
 }
 
 func pidFile() string {

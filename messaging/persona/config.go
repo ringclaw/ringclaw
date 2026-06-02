@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ringclaw/ringclaw/paths"
 )
 
 // Config mirrors the config.json "persona" block. Zero values mean
@@ -65,15 +67,21 @@ type ResolvedConfig struct {
 // when the downstream open attempt fails, rather than silently
 // writing to an unexpected path.
 func (c Config) Resolved() ResolvedConfig {
-	home, _ := os.UserHomeDir()
 	soul := strings.TrimSpace(c.SoulFile)
 	if soul == "" {
-		soul = filepath.Join(home, ".ringclaw", "SOUL.md")
+		soul = paths.MustAppPath("SOUL.md")
+		if resolved, err := paths.ResolveEnvOrDefault("RINGCLAW_SOUL_FILE", "SOUL.md"); err == nil {
+			soul = resolved
+		}
 	}
 	memDir := strings.TrimSpace(c.MemoryDir)
 	if memDir == "" {
-		memDir = filepath.Join(home, ".ringclaw", "memory")
+		memDir = paths.MustAppPath("memory")
+		if resolved, err := paths.ResolveEnvOrDefault("RINGCLAW_MEMORY_DIR", "memory"); err == nil {
+			memDir = resolved
+		}
 	}
+	home, _ := os.UserHomeDir()
 	return ResolvedConfig{
 		Enabled:              c.IsEnabled(),
 		SoulFile:             expandHome(soul, home),
