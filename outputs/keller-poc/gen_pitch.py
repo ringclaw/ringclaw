@@ -243,7 +243,7 @@ for i, (who, what, color) in enumerate(rows):
     txt(s, who, 0.5, yi, 4.5, 0.55, size=17, color=TEXT_WHITE)
     txt(s, what, 5.0, yi, 5.0, 0.55, size=17, bold=True, color=color)
 
-txt(s, "护城河：RC 的 SMS · Fax · Phone API  —  竞争对手没有",
+txt(s, "护城河：RC 的 SMS · Fax · Team Message API  —  竞争对手没有",
     0.5, 6.3, 12, 0.5, size=15, bold=True, color=ACCENT_TEAL)
 
 add_notes(s, "MuleRun 刚发布 Messages 验证了市场。但他们没有 RC 的通信 API 深度。这是我们的护城河。")
@@ -373,51 +373,66 @@ txt(s, "客户自动安抚：51 秒  ·  人只做最终决策  ·  全程审计
 
 add_notes(s, "关键：10:05 tom-bot 自动调查，Tom 没有操作任何东西。Agent-to-Agent 路由让调查自动启动。")
 
-# ── Slide 8: DEMO 3 – Phone Call ────────────────────────────────
+# ── Slide 8: DEMO 3 – Adaptive Card + SMS Context ───────────────
 
 s = add_slide()
 bg(s)
 rect(s, 0, 0, 0.12, 7.5, GREEN_OK)
 
 label(s, "  LIVE DEMO 3  ", 0.5, 0.3, 1.8, 0.38, GREEN_OK, BG_DARK, 11)
-txt(s, "说\"打过去\"，FIJI 真的拨出电话", 2.5, 0.25, 10, 0.55, size=30, bold=True)
+txt(s, "Bot 准备完整上下文，一步发短信安排回电", 2.5, 0.25, 10.5, 0.55, size=26, bold=True)
 
 # Conversation
-rect(s, 0.5, 1.1, 12.3, 0.75, BG_CARD)
-txt(s, "Beth:", 0.7, 1.22, 1.5, 0.4, size=14, color=YELLOW, bold=True)
-txt(s, '"Lowe\'s HQ 未接来电，打过去"', 2.2, 1.22, 10, 0.4, size=16, color=TEXT_WHITE)
+rect(s, 0.5, 1.05, 12.3, 0.65, BG_CARD)
+txt(s, "Beth:", 0.7, 1.15, 1.5, 0.35, size=13, color=YELLOW, bold=True)
+txt(s, '"Lowe\'s HQ 双路升级，帮我处理联络"', 2.2, 1.15, 10, 0.35, size=14, color=TEXT_WHITE)
 
-# Arrow
-txt(s, "↓", 6.5, 1.95, 1.5, 0.5, size=24, color=TEXT_DIM, align=PP_ALIGN.CENTER)
+txt(s, "↓", 6.5, 1.78, 1.5, 0.4, size=20, color=TEXT_DIM, align=PP_ALIGN.CENTER)
 
-# Flow
-flow_steps = [
-    ("beth-bot", "ACTION:PHONE_CALL to=+19195550188", ACCENT_BLUE),
-    ("Control Plane", "记录 action_event：{type: PHONE_CALL, status: client_action_required, details: {make_call}}", BG_CARD),
-    ("FIJI AvaClientActionBridge", "轮询到 event  →  executeAvaClientAction()", ACCENT_TEAL),
-    ("FIJI directCall", "以 Beth 当前登录身份拨出  ✅", GREEN_OK),
+# Adaptive Card mockup
+rect(s, 0.5, 2.25, 7.0, 3.5, BG_CARD)
+txt(s, "📋  Adaptive Card（RC 客户端内渲染）", 0.7, 2.35, 6.5, 0.42, size=12, color=TEXT_GREY)
+txt(s, "⚠️ 需要行动：A8810 双路升级", 0.7, 2.8, 6.5, 0.5, size=16, bold=True, color=YELLOW)
+
+card_facts = [
+    ("Lowe's 质量标记", "REF-2026-0603-11 · SOP §7.3 · 截止 06/10"),
+    ("客户投诉", "Jenkins no-show · sarah-bot 处理中"),
+    ("推荐联系", "Lowe's Compliance  +1 919-555-0188"),
+    ("建议话术", "\"Aware of A8810, Tom handling. Extension to 06/12?\""),
 ]
-for i, (step, action, color) in enumerate(flow_steps):
-    yi = 2.55 + i * 0.9
-    rect(s, 0.5, yi, 2.5, 0.75, color)
-    txt(s, step, 0.6, yi + 0.18, 2.3, 0.45, size=12, bold=True, color=TEXT_WHITE, align=PP_ALIGN.CENTER)
-    txt(s, action, 3.2, yi + 0.18, 9.8, 0.5, size=13, color=TEXT_WHITE)
-    if i < 3:
-        txt(s, "↓", 1.5, yi + 0.77, 1.0, 0.3, size=14, color=TEXT_DIM, align=PP_ALIGN.CENTER)
+for i, (k, v) in enumerate(card_facts):
+    yi = 3.35 + i * 0.45
+    txt(s, k + ":", 0.7, yi, 2.2, 0.38, size=11, color=TEXT_GREY, bold=True)
+    txt(s, v, 2.95, yi, 4.3, 0.38, size=11, color=TEXT_WHITE, wrap=True)
 
-divider(s, 6.35, ACCENT_TEAL)
+# Card buttons
+rect(s, 0.7, 5.3, 2.8, 0.35, ACCENT_BLUE)
+txt(s, "发短信给 Lowe's 安排回电", 0.75, 5.35, 2.7, 0.28, size=10, bold=True, color=TEXT_WHITE, align=PP_ALIGN.CENTER)
+rect(s, 3.7, 5.3, 2.6, 0.35, BG_DARK)
+txt(s, "通知 Karen 我会处理", 3.75, 5.35, 2.5, 0.28, size=10, color=TEXT_GREY, align=PP_ALIGN.CENTER)
 
-# Competitor comparison
-cols = [("Copilot", "✗", RED_WARN), ("Gemini", "✗", RED_WARN), ("AgentRun", "✅", GREEN_OK)]
-for i, (name, mark, color) in enumerate(cols):
-    xi = 1.5 + i * 3.8
-    txt(s, name, xi, 6.5, 3.0, 0.45, size=16, color=TEXT_GREY, align=PP_ALIGN.CENTER)
-    txt(s, mark, xi, 6.92, 3.0, 0.4, size=20, bold=True, color=color, align=PP_ALIGN.CENTER)
+# Right side: result
+txt(s, "Beth 点击「发短信给 Lowe's」", 8.0, 2.25, 5.0, 0.45, size=13, color=TEXT_GREY)
+txt(s, "↓", 10.0, 2.75, 1.5, 0.4, size=18, color=TEXT_DIM, align=PP_ALIGN.CENTER)
 
-txt(s, "护城河：RC Phone API  —  竞争对手没有", 0.5, 7.05, 12, 0.35,
-    size=13, color=TEXT_DIM, italic=True, align=PP_ALIGN.CENTER)
+rect(s, 7.8, 3.2, 5.0, 2.2, BG_CARD)
+txt(s, "📱 Lowe's HQ 收到 SMS：", 8.0, 3.3, 4.6, 0.38, size=11, color=TEXT_GREY)
+sms_text = ('"Hi, Beth Owens from Keller.\n'
+            'Following up on A8810 (REF-2026-0603-11).\n'
+            'Can we schedule a call today?\n'
+            'Available 2-5pm ET.\n'
+            'Direct: +1 404-555-0001."')
+txt(s, sms_text, 8.0, 3.72, 4.6, 1.6, size=12, color=TEXT_WHITE, italic=True, wrap=True)
 
-add_notes(s, "这是最有力的 demo 时刻。Beth 说一句话，FIJI 真的打出电话。这是 RC 独一无二的能力。")
+txt(s, "✅ SMS delivered", 8.0, 5.45, 3.0, 0.35, size=13, bold=True, color=GREEN_OK)
+
+divider(s, 6.25, ACCENT_TEAL)
+txt(s, "为什么比直接打更好：SMS 是异步的  ·  对方有准备  ·  Beth 有充分上下文再打  ·  任意 RC 客户端可用",
+    0.5, 6.38, 12.3, 0.42, size=12, color=TEXT_DIM, align=PP_ALIGN.CENTER)
+txt(s, "护城河：RC Team Message + SMS API  —  一张 Card 就能完成跨部门信息传递",
+    0.5, 6.88, 12.3, 0.42, size=13, color=ACCENT_TEAL, bold=True, align=PP_ALIGN.CENTER)
+
+add_notes(s, "重点：Bot 不打电话，但它把所有上下文和联系信息准备好，Beth 看完 Card 直接点发短信，Lowe's 收到短信会主动回电。这比 bot 自动拨号更符合企业工作流。")
 
 # ── Slide 9: Role Bot Value ──────────────────────────────────────
 
