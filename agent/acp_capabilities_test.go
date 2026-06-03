@@ -167,3 +167,18 @@ func TestSelectAuthMethodID_EmptyWhenAbsent(t *testing.T) {
 		t.Fatalf("selectAuthMethodID(malformed) = %q, want empty", got)
 	}
 }
+
+func TestRequiresStrongAuth(t *testing.T) {
+	if !requiresStrongAuth("cursor_login") {
+		t.Fatalf("requiresStrongAuth(cursor_login) = false, want true")
+	}
+	if !requiresStrongAuth("  CURSOR_LOGIN ") {
+		t.Fatalf("requiresStrongAuth(CURSOR_LOGIN) = false, want true")
+	}
+	if requiresStrongAuth("custom_auth") {
+		t.Fatalf("requiresStrongAuth(custom_auth) = true, want false")
+	}
+	if requiresStrongAuth("") {
+		t.Fatalf("requiresStrongAuth(empty) = true, want false")
+	}
+}

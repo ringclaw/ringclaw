@@ -468,9 +468,18 @@ func (a *ACPAgent) authenticateIfRequired(ctx context.Context, raw json.RawMessa
 	}
 	slog.Info("authenticating ACP agent", "component", "acp", "command", a.command, "method", methodID)
 	if _, err := a.call(ctx, "authenticate", authenticateParams{MethodID: methodID}); err != nil {
-		return err
+		if requiresStrongAuth(methodID) {
+			return err
+		}
+		slog.Warn("ACP authenticate failed; continuing startup without auth",
+			"component", "acp", "command", a.command, "method", methodID, "error", err)
+		return nil
 	}
 	return nil
+}
+
+func requiresStrongAuth(methodID string) bool {
+	return strings.EqualFold(strings.TrimSpace(methodID), "cursor_login")
 }
 
 func selectAuthMethodID(raw json.RawMessage) string {
