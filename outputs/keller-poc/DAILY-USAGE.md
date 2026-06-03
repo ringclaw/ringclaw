@@ -1,520 +1,199 @@
-# AgentRun · Keller 日常使用指南
+# Keller POC — Daily Usage Guide
 
-每个角色一天的真实使用场景。所有交互都在 RC Team Messaging 里完成。
-
----
-
-## Sarah · CSR（客服代表）
-
-### 一天的开始（08:00）
-
-**sarah-bot 自动推送晨检** → Sarah DM：
-
-```
-sarah-bot
-
-  晨检 · 2026-06-04 08:00
-
-  ⚠️ 未确认派单（过夜）：
-  · A8819 · Carlos · 今日 09:30 · 已 18 小时无 CONFIRM
-  · A8820 · David  · 今日 10:00 · 已 16 小时无 CONFIRM
-
-  建议：上班后立即跟进，或联系队长确认
-```
-
-Sarah 看到，直接致电 Carlos 确认。不需要翻聊天记录找派单信息。
+This guide describes how each team member at Keller interacts with the bot system day-to-day, reflecting the updated Cron/Heartbeat capabilities where scheduled agents can now execute ACTION blocks automatically.
 
 ---
 
-### 接到 Lowe's 来的预约（上午，高频）
+## Role Profiles
 
-客户 Williams 预约好了，Sarah 在 #atlanta-orders 直接说：
+### Sarah — CSR (Customer Service Representative)
 
-```
-Sarah Cooper
-  @sarah-bot dispatch A8831 to Mike, Thursday 2pm,
-  421 Northside Dr NW Atlanta GA 30318, Hardwood 400sqft,
-  customer Williams +1 404-555-0444
+Sarah manages dispatch confirmations and field crew coordination. The bot system now reduces a large portion of her manual follow-up work.
 
-sarah-bot
-  [skills index 检测到 dispatch-confirm 激活]
+**Morning (08:00) — orders-bot morning-check Cron**
 
-  确认：30318 的 421 Northside Dr NW，
-  Westside 住宅区还是 Northside 工业侧？
-  （本地知识：两者 GPS 经常混淆）
+Sarah no longer needs to manually scan for unconfirmed dispatch orders at the start of her day. The `morning-check` Cron fires automatically:
 
-Sarah Cooper
-  Westside
+- Posts a TEXT list in the dispatch channel of all orders that have been unconfirmed for more than 18 hours.
+- Automatically creates an `ACTION:TASK` (URGENT priority) for each unconfirmed order — these appear immediately in the task list without Sarah touching anything.
+- Sends `ACTION:SMS` alerts to the crew leader responsible for each unconfirmed order.
 
-sarah-bot
-  核对完成：
-  · A8831 · Mike Reyes · 06/05 14:00
-  · 421 Northside Dr NW, Atlanta GA 30318 ✅ Westside 确认
-  · Hardwood 400sqft · Williams +14045550444
+**Post-dispatch (30 minutes after dispatch) — orders-bot 30min-confirm Cron (new)**
 
-  ✅ Task #T1001 · ✅ SMS Mike +14045550211 · delivered
-  ⏳ 30min 无 CONFIRM → 自动提醒
-```
+After a dispatch is issued, the system fires once at the 30-minute mark:
 
-**Sarah 的感受**：不需要打开电话簿查 Mike 号码，不需要手动发 SMS，不需要记着跟进。说一句话，3 秒完成。
+- Creates another `ACTION:TASK` (URGENT) flagging the order as still unconfirmed if no confirmation has come in.
+- Sends a second `ACTION:SMS` to the crew leader requesting confirmation.
+
+Sarah's role shifts from "chase people all morning" to "review what the system already escalated and act on exceptions." She still handles inbound calls and edge cases, but routine reminders are no longer on her plate.
 
 ---
 
-### 中午接到客户投诉（被动触发，Group B 需 wire）
+### Tom — Store Operations Manager (#atlanta-ops)
 
-客户短信进来，sarah-bot 自动：
-1. 60 秒内回复客户安抚 SMS
-2. 在 #atlanta-orders 发升级提醒
-3. tom-bot 自动开始调查
+Tom oversees daily field operations across his region. He checks the `#atlanta-ops` channel for the end-of-day wrap-up.
 
-**Sarah 什么都不用做**——她会在 #atlanta-orders 看到 bot 已经在处理了。
+**End of day (17:30) — tom-bot Heartbeat**
 
----
+Previously Tom would receive a plain-text summary paragraph. The Heartbeat now outputs:
 
-### 下午改单
+- A **TEXT summary** of the day's activity (still readable inline).
+- An `ACTION:CARD` — a structured daily report Card posted to `#atlanta-ops`. The Card contains:
+  - Today's completed jobs
+  - Delayed orders
+  - Tomorrow's scheduled appointments
+  - Crew staffing gaps
+  - The longest-outstanding open Task
+- `ACTION:TASK` upgrades for any overdue-unresolved Tasks — they are automatically escalated to URGENT status. Tom does not need to manually bump priority.
 
-```
-Alex Kim
-  @sarah-bot reschedule A8819 Thursday 2pm same address,
-  customer Martinez called
+Note: The Heartbeat does not send SMS. If Tom needs to alert a crew leader directly, he can do so from the Card's context or via a manual message.
 
-sarah-bot
-  改期 A8819：Wed 09:30 → Thu 14:00
-
-  ✅ Task 已更新 · ✅ SMS Carlos（改期通知）· ✅ SMS Martinez（客户确认）
-```
+Tom's daily check-in becomes a Card review rather than reading through a text block. Overdue items are already escalated before he reads the Card.
 
 ---
 
-### 17:30 日结自动推送 → #atlanta-orders
+### Karen — Lowe's Account Manager
 
-```
-sarah-bot  [cron 17:30，TEXT ONLY]
+Karen handles the Lowe's account, including weekly SLA reporting and batch SMS dispatch for work order completion notices.
 
-  [Atlanta CSR 日结 · 2026-06-03]
-  今日派单：11 张
-  已确认：9 张 · 未确认：2 张（A8829, A8830）
-  明日预约：8 张
-  客户投诉：1 起（A8810，已处理 ✅）
-```
+**Afternoon (17:00) — karen-bot batch-prep Cron**
 
-**Sarah 的日常**：她只需要说"dispatch to Mike"这一句话。Bot 处理一切执行细节。查状态问 bot，改单问 bot，客户投诉 bot 先响应。
+Previously Karen had to read a plain-text notification list and then type `/lowes-batch` to trigger transmission. The new flow:
 
----
+- Posts a TEXT notification list (still readable for audit).
+- Pushes an `ACTION:CARD` — a "Completion Notice Preparation Card" that contains the full SMS notification queue and a **"Send Batch Completion Notices"** button.
+- Creates an `ACTION:NOTE` updating the SLA ledger note with a daily summary row.
 
-## Tom · 门店经理
+Karen clicks the button on the Card to trigger the actual SMS notification dispatch. This replaces typing a slash command — more discoverable, same one-step human confirmation. SMS batch dispatch is not in the default Cron allowlist, so the SMS notification dispatch still requires Karen's button press; the system will not send SMS notifications autonomously.
 
-### 08:30 晨预警 → Tom DM
+**Friday (17:00) — karen-bot lowe's-sla-weekly Cron**
 
-```
-tom-bot  [cron 08:30]
+- Pushes an `ACTION:CARD` with the Lowe's SLA weekly report (structured, not a text block).
+- Appends an `ACTION:NOTE` to the SLA ledger with the week's summary row.
 
-  Atlanta 晨预警 · 2026-06-04
-
-  ⚠️ 今日需关注：
-  · A8819 Carlos 队 09:30 — 昨日改期，已通知
-  · T941 供应商确认待回复（3 天）— 建议今日跟进
-  · Mike 队周三 -2 人 — 区域协调请求已发出（待 Dallas 确认）
-
-  今日排期：8 单，6 已确认，2 待确认
-  Lowe's 待传：2 份（Karen 今日 EOD 批次）
-```
+Karen reviews the Card in the channel and can forward or screenshot it directly for the Lowe's account record.
 
 ---
 
-### 全天随时查询
+### Beth — Executive (District/Regional Oversight)
 
-Tom 在门店巡查间隙，手机上问：
+Beth receives high-level weekly performance reporting across all 33 stores.
 
-```
-Tom Rivera
-  @tom-bot A8810 今天最新情况
+**Monday (09:00) — beth-bot exec-weekly Cron**
 
-tom-bot
-  A8810 · Jenkins · 投诉处理中
+Previously Beth received a text paragraph in her DM. The new flow:
 
-  · 09:02 客户投诉 SMS 到达
-  · 09:03 自动安抚已发 ✅
-  · 09:05 调查：Mike 未 CONFIRM，无外呼记录
-  · 09:17 Tom 致电 Mike 确认（GPS 问题）
-  · 09:19 道歉 + $50 credit SMS 已发 ✅
-  · 09:31 Mike 到达现场
+- Pushes an `ACTION:CARD` directly to Beth's DM — a structured weekly report Card.
+- The Card highlights stores requiring attention (performance flags, SLA misses, cost overruns).
+- Includes this week's suggested inquiry points.
 
-  Task #T993 状态：In Progress（待 Mike 完工确认）
-```
+Beth's Monday morning starts with a Card in her DM rather than a block of text. The Card format makes it easy to forward to other executives or reference in calls without reformatting.
 
 ---
 
-### 下午决策支持
+### Alex — Finance Manager
 
-```
-Tom Rivera
-  @tom-bot 今天的材料成本情况
+Alex approves payments and manages month-end close. The bot system now automates the multi-step process.
 
-tom-bot
-  [ACTION:PHONE_CALLLOG scope=today] + 读 chat memory
+**Thursday (15:00) — finance-bot subcontractor-payment Cron**
 
-  本周材料消耗（截至今日 14:30）：
-  · Engineered Oak：3,420 sqft（5 单）· 成本在预算内
-  · Hardwood：810 sqft（2 单）· Carlos 队损耗偏高（+11%）
-  · LuxCore：0 sqft（新材料上线前）
+Previously Alex received a text list and had to manually process each item. The new flow:
 
-  ⚠️ Carlos 队 Hardwood 损耗本周第二次超标
-  建议：下次 Hardwood 单前和 Carlos 沟通测量精度
+- Pushes an `ACTION:CARD` to Alex — a payment approval Card containing the full payment list breakdown and an **"[Approve Payment]"** button.
+- Alex clicks the button to authorize the batch. No manual entry required.
 
-Tom Rivera
-  @tom-bot 帮我起草给 Carlos 的消息，提醒他 Hardwood 测量要点，
-  措辞友好不要指责
+**5th of each month — finance-bot lowe's-payment-reconciliation Cron**
 
-tom-bot
-  起草：
-  "Carlos，这周两个 Hardwood 单材料用量都偏多一点（+10% 左右）。
-   下次施工前可以多留 5% 损耗裕量，但注意精准切割以免浪费太多。
-   有什么特殊情况随时告诉我。—— Tom"
-  发到 Carlos DM？
+- Pushes an `ACTION:CARD` to Alex — an overdue receivables detail Card with a **"[Send Collection SMS to Lowe's coordinator]"** button.
+- Appends an `ACTION:NOTE` to the reconciliation ledger with the monthly row.
 
-Tom Rivera
-  确认
+**28th of each month — finance-bot month-end-close Cron**
 
-tom-bot
-  [ACTION:MESSAGE chatid=Carlos-DM → audit notice → Tom 确认 → 发出 ✅]
-```
+The Cron executes all five month-end steps automatically. Alex previously ran these manually over multiple days:
+
+| Step | What happens automatically | Alex's role |
+|------|---------------------------|-------------|
+| 1 | `ACTION:NOTE` — reconciliation ledger summary appended | None (automatic) |
+| 2 | `ACTION:CARD` — payment approval Card pushed to Alex, with [Approve Payment] button | Click to approve |
+| 3 | `ACTION:NOTE` — travel expense allocation detail appended to ledger | None (automatic) |
+| 4 | `ACTION:CARD` — cost overrun alert Card pushed to Alex; flagged stores highlighted, [Notify Karen to Start Contract Review] button | Click to escalate if needed |
+| 5 | `ACTION:CARD` — monthly management report Card pushed to `#exec` channel and Beth's DM | None (automatic) |
+
+Alex's month-end workflow changes from "3 days of manual assembly" to "arrive Monday, see 2 Cards in #finance, click 2 buttons."
 
 ---
 
-### 17:30 日摘要自动推送 → #atlanta-ops
+### Linda — HR Manager
 
-```
-tom-bot  [Heartbeat 17:30，TEXT ONLY]
+Linda manages crew scaling and recurring training compliance.
 
-  [Atlanta Daily · 2026-06-03 17:30]
-  今日完成：8 单，1 延迟（A8825 供应商迟到，明日补）
-  明日：9 预约，7 确认
-  班组缺口：Mike 队周三 -2（Dallas 支援确认中）
-  最久 Task：T941（4 天，供应商确认）
-  Lowe's 待传：2 份（Karen EOD 批次）
-```
+**February 1 (annual) — hr-bot seasonal-crew-scaling Cron**
 
-Tom 读完，如果有需要处理的，直接 @tom-bot 执行。不需要额外整理数据。
+Previously Linda received a text notification and had to call each store manager individually. The new flow:
 
----
+- Sends `ACTION:MESSAGE` to each store manager — a structured inquiry with template questions about peak-season staffing gaps.
+- Initializes an `ACTION:NOTE` — a national staffing gap tracking ledger for the season.
 
-## Karen · Lowe's 联络
+Linda collects responses passively the next day as store managers reply to the MESSAGE. No outbound phone calls needed.
 
-### 每日 17:00 → #lowes-handover
+**Quarterly (1st of each quarter) — hr-bot quarterly-training Cron**
 
-```
-karen-bot  [cron 17:00，TEXT ONLY]
+Previously Linda received a text reminder. The new flow:
 
-  [EOD Batch Prep · 2026-06-03 17:00]
-  今日待传：22 店 · 31 份 · 117 页
-  预计：47 分钟
+- Creates `ACTION:EVENT` — a training session scheduled for each employee who has not completed the current cycle's requirement.
+- Sends `ACTION:SMS` to each non-compliant employee with the training reminder.
 
-  Atlanta：3 份（A8809 · A8815 · A8821）
-  Dallas：4 份 ...
+Linda's quarterly training cycle opens with Events already on people's calendars and SMS reminders already sent.
 
-  执行：/lowes-batch send 2026-06-03
-```
+**Optional Heartbeat (Linda-configured) — hr-bot Heartbeat**
 
-Karen 扫一眼，确认数量对，输入：
+If Linda enables this Heartbeat:
 
-```
-Karen Yates
-  /lowes-batch send 2026-06-03
-
-karen-bot
-  [Batch 开始...]
-  ✅ A8809 Atlanta → FAX-20260603-001（4页，17:02）
-  ✅ ...（31 条，依次发送）
-
-  [Batch 完成 · 17:51]
-  ✅ 31/31 · 耗时 49 分钟
-
-  台账已更新 ✅
-```
-
-**Karen 的感受**：之前每天手工传真需要 4-5 小时，现在等 49 分钟，自己不用操作任何一步。只需确认数量、输入一行命令。
+- Appends an `ACTION:NOTE` updating the monthly training completion rate in the ledger.
+- Pushes an `ACTION:CARD` to Linda's DM summarizing non-compliant employees.
 
 ---
 
-### 收到 Lowe's 入站传真（Group B 后）
+## Automation Reference Table
 
-```
-karen-bot  [inbound fax 自动检测]
+This table summarizes which actions happen automatically, which require user trigger, and which are cross-agent automatic operations.
 
-  [Lowe's HQ Notice · REF-2026-0603-11]
-  订单 A8810 质量标记 · 截止 06/10 · SOP §7.3
-  台账已更新 ✅
+| Bot | Trigger | Time | Auto (no human needed) | User trigger required | Cross-agent / cross-chat |
+|-----|---------|------|------------------------|----------------------|--------------------------|
+| orders-bot | morning-check Cron | 08:00 daily | TEXT list, TASK creation, SMS to crew leaders | — | SMS to crew leaders (cross-chat) |
+| orders-bot | 30min-confirm Cron | 30 min post-dispatch | TASK creation, SMS to crew leaders | — | SMS to crew leaders (cross-chat) |
+| tom-bot | Heartbeat | 17:30 daily | TEXT summary, CARD to #atlanta-ops, overdue TASK escalation to URGENT | — | CARD posted to #atlanta-ops |
+| karen-bot | batch-prep Cron | 17:00 daily | TEXT notification list, CARD with button, NOTE to SLA ledger | **Click "Send Batch Completion Notices" button on Card** | NOTE update to ledger |
+| karen-bot | sla-weekly Cron | Friday 17:00 | CARD (SLA weekly report), NOTE to ledger | — | NOTE to ledger |
+| beth-bot | exec-weekly Cron | Monday 09:00 | CARD to Beth DM | — | CARD direct to Beth DM |
+| finance-bot | subcontractor-payment Cron | Thursday 15:00 | CARD to Alex | **Click "[Approve Payment]" on Card** | CARD to Alex DM |
+| finance-bot | lowe's-payment-reconciliation Cron | 5th of month | CARD to Alex, NOTE to ledger | **Click "[Send Collection SMS to Lowe's coordinator]" on Card (if needed)** | CARD to Alex DM, NOTE to ledger |
+| finance-bot | month-end-close Cron | 28th of month | Steps 1, 3, 5 fully automatic; Steps 2, 4 push Cards | **Click approval buttons on 2 Cards** | CARD to #exec, CARD to Beth DM |
+| hr-bot | seasonal-crew-scaling Cron | Feb 1 annually | MESSAGE to all store managers, NOTE ledger init | — | MESSAGE to each store (cross-chat) |
+| hr-bot | quarterly-training Cron | Quarterly (1st) | EVENT creation, SMS to non-compliant employees | — | SMS to employees (cross-chat) |
+| hr-bot | Heartbeat (optional) | Linda-configured | NOTE to training ledger, CARD to Linda DM | — | CARD to Linda DM |
 
-  ⚠️ 双路升级：A8810 今日同时有客户投诉
+### Key distinctions
 
-Karen Yates
-  @karen-bot 通知 Tom 和 Beth
+**Auto (no human needed):** The Cron or Heartbeat fires, the agent executes the ACTION blocks, and the result appears in the platform without anyone clicking anything.
 
-karen-bot
-  [audit notice × 2 → Karen 确认 → 发出 ✅]
-  · #atlanta-ops：Tom 已通知
-  · Beth DM：双路升级已上报
-```
+**User trigger required:** A human must click a button on a Card (or issue a manual command) before the critical final action (e.g., SMS notification dispatch, payment approval) executes. This one-step confirmation is intentional for irreversible or high-stakes operations.
 
----
-
-### 周五 SLA 报告 → #lowes-handover
-
-```
-karen-bot  [cron 周五 17:00，TEXT ONLY]
-
-  [Lowe's Weekly SLA · W23]
-  发送：156 份
-  按时交付：152/97.4%（目标 ≥95% ✅）
-  失败重试：4 份（已补发）
-
-  Atlanta：100% ✅  Dallas：98.6% ✅
-  Phoenix：91.3% ⚠️（3 份超时，原因：系统故障已恢复）
-
-  月累计 SLA：96.8%（合同要求 ≥95% ✅）
-```
+**Cross-chat:** The ACTION targets a chat or DM other than the one the Cron/Heartbeat is running in. This is now permitted by default for Cron (MESSAGE, NOTE, TASK, CARD, SMS) and Heartbeat (MESSAGE, NOTE, TASK, CARD — no SMS).
 
 ---
 
-## Beth · Chief of Staff
-
-### 每周一 09:00 → Beth DM
-
-```
-beth-bot  [cron 周一 09:00，TEXT ONLY]
-
-  [Weekly Snapshot · W23 · 2026-06-03]
-  安装量：243（↑6%）· CSAT：4.4（↓0.3 ⚠）
-  Lowe's SLA：96% ✅ · 班组缺口：7 次（↑2）
-
-  ⚠️ 关注：Atlanta CSAT 4.2（↓0.5，48h no-show ×3）
-  💡 建议询问 Tom：no-show 根因？
-```
-
-Beth 读完，觉得需要跟进：
-
-```
-Beth Owens
-  帮我给 Tom 发消息，关于 Atlanta CSAT，友好问询
-
-beth-bot
-  起草：[...] 发到 Tom DM？
-
-Beth Owens
-  确认
-
-beth-bot  [ACTION:MESSAGE → Tom DM · audit notice · Beth 确认 ✅]
-```
-
----
-
-### 日常随时查询
-
-```
-Beth Owens
-  看看今天未接来电，需要的发个短信
-
-beth-bot
-  [ACTION:PHONE_CALLLOG scope=today missing=true next_actions=true]
-
-  📞 3 条未接来电，3 条 follow-up SMS 已发 ✅
-  ⚠️ Lowe's HQ Compliance 11:45 — 建议优先回拨
-
-Beth Owens
-  Lowe's 这个打过去
-
-beth-bot
-  [ACTION:PHONE_CALL to=+19195550188]
-  → FIJI 以 Beth 当前登录身份拨出 ✅
-```
-
----
-
-## 员工 Marcus · 请假申请
-
-### 第一次使用（一次性）
-
-Marcus 打开 RC Team Messaging，找到 hr-bot 私信：
-
-```
-Marcus Johnson
-  你好
-
-[hr-bot 触发 OOB，Linda 在主机 approve，Marcus 自动加入白名单]
-
-hr-bot
-  你好 Marcus！我是 Keller HR 助手，由 Linda 管理。
-  可以帮你：请假申请 · 培训查询 · 余额查询。
-  有什么可以帮到你？
-```
-
-### 申请请假
-
-```
-Marcus Johnson
-  请假申请 6/10-6/12，家庭原因
-
-hr-bot
-  收到，Marcus。
-  6/10-6/12（3天）。余额 4 天 → 申请后 1 天。
-  通知 Mike 审批，理由保密。结果在这里。
-
-[Mike 审批通过]
-
-hr-bot
-  ✅ Mike 已批准，日历已更新。祝你有个好假！
-```
-
-整个过程在私信里完成，不需要填表，不需要找 HR 的 email。**Mike 只知道日期，不知道原因。**
-
-### 查询余额
-
-```
-Marcus Johnson
-  我还有几天假
-
-hr-bot
-  Marcus，你当前 PTO 余额：2 天
-  （已用：8 天，其中 6/10-6/12 扣减后）
-
-  今年可用假期：10 天（第 1 年）
-  下一档升级：入职满 3 年后变为 15 天
-```
-
----
-
-## Alex · Finance Manager
-
-### 每周四 15:00 自动触发
-
-```
-finance-bot  [cron 每周四 15:00]
-
-  [本周分包商付款清单 · 2026-06-05]
-
-  Mike Reyes:    $3,675（A8819, A8821）
-  Carlos Ruiz:   $2,890（A8823, A8826）
-  David Park:    $4,210（A8824, A8825, A8827）
-
-  暂扣（质量标记）：Mike Reyes -$1,890（A8821 待复检）
-
-  本周应付：$8,885
-  待确认：$1,890
-
-  [批准] → "approve payments 20260605"
-
-Alex Chen
-  approve payments 20260605
-
-finance-bot
-  ✅ 付款清单已批准
-  ACH 将于明日（周五）发起
-  3 条付款通知 SMS 已发给各分包商
-```
-
-### 月结（每月 28 日触发）
-
-finance-bot 自动按 5 步走：
-1. 检查 Lowe's 逾期收款 → 生成催款请求给 Karen
-2. 汇总分包商月度付款 → Alex 一次性审批
-3. 汇总跨店差旅费 → 按成本中心分摊
-4. 跑材料成本差异 → 超标门店通知店长
-5. 生成月度管理报告 → 发 #exec + Beth
-
-**Alex 的感受**：月结从"3 天手工整理 Excel"变成"看 bot 的汇总，审批一次"。
-
----
-
-## Linda · HR Manager（管理 hr-bot）
-
-### 每天早上
-
-Linda DM 收到 OOB challenge（可能有几条）：
-
-```
-hr-bot → Linda DM
-
-  Pending approval (abc-123).
-  Marcus Johnson 首次使用 hr-bot DM — 授权？
-  执行：ringclaw approval abc-123
-
-  Pending approval (def-456).
-  Cross-chat MESSAGE → Mike Reyes DM
-  Body: PTO 6/10-6/12 审批请求
-  执行：ringclaw approval def-456
-```
-
-Linda 在主机（或未来：FIJI 审批 inbox）：
-
-```bash
-ringclaw approval abc-123   # 授权 Marcus
-ringclaw approval def-456   # 发送给 Mike
-```
-
-每天 2-5 条 OOB approve，在 DM 里看到就处理，不需要上下文切换。
-
-### 每周一 09:00 HR 摘要 → #hr-private
-
-```
-hr-bot  [cron 周一 09:00，TEXT ONLY]
-
-  [HR 运营周报 · W23]
-  请假处理：3 件（2 批准，1 待队长确认 >24h）
-  培训完成：LuxCore 本周 +5 人（累计 38/50）
-  本周入职：1 名新分包商（Carlos 推荐，入网进行中）
-  工伤：无
-  ⚠️ PTO 审批待确认 >24h：1 件（Marcus→Mike，建议跟进）
-```
-
----
-
-## 使用规律总结
-
-### 自动发生（无需任何人操作）
-
-```
-每天 08:00  → CSR 晨检（未确认派单提醒）→ Sarah DM
-每天 08:30  → 店长晨预警（当日关注项）→ Tom DM
-每天 17:00  → Lowe's 批次准备文本 → Karen #lowes-handover
-每天 17:30  → 门店日摘要 → Tom #atlanta-ops
-每周一 09:00 → 高管周报 → Beth DM
-每周一 09:00 → HR 运营周报 → Linda #hr-private
-每周四 15:00 → 分包商付款清单 → Alex #finance
-每月 28 日  → 月结流程自动启动
-```
-
-### 用户主动触发（一句话）
-
-```
-Sarah："dispatch A8831 to Mike, Thursday 2pm, ..."
-Alex:  "reschedule A8819 Thursday 2pm same address"
-Tom:   "@tom-bot A8810 今天最新情况"
-Tom:   "@tom-bot 帮我起草给 Carlos 的消息"
-Karen: "/lowes-batch send 2026-06-03"
-Beth:  "看看今天未接来电"
-Beth:  "给 Karen 打电话"（→ FIJI 真实拨出）
-Marcus: "请假申请 6/10-6/12，家庭原因"
-Alex:  "approve payments 20260605"
-```
-
-### 跨 Agent 自动发生（用户看到结果，不需要操作）
-
-```
-客户投诉 SMS → sarah-bot 检测 → 自动安抚 → 自动路由 tom-bot 调查
-Lowe's 入站传真 → karen-bot 解析 → 自动通知 tom-bot + beth-bot
-跨店差旅批准 → regional-coord-bot → finance-bot 自动开始追踪
-新分包商入网 → hr-bot → finance-bot 自动添加费率记录
-```
-
-### 没有 Agent 之前 vs 之后
-
-| 动作 | 之前 | Agent 之后 |
-|------|------|-----------|
-| 发一张派单 | 查联系人 + 手写 SMS + 手动创建 Task | 说一句话 · 3 秒 |
-| 传真 31 份完工单 | 4-5 小时手动操作 | /lowes-batch · 等 49 分钟 |
-| 客户投诉首次响应 | 人工看到 → 10-30 分钟才处理 | 60 秒内自动安抚 |
-| 写每日运营摘要 | 30 分钟/人/天 × 33 店 | 0 |
-| 员工请假申请 | 发邮件等 HR 回复 | DM hr-bot · 当天完成 |
-| 分包商月度付款 | 手工整理 Excel 半天 | bot 汇总 · Alex 审批一次 |
-| 月度管理报告 | 3 天整理 | bot 自动生成 |
+## What Changed From the Previous Version
+
+| Behavior | Before | After |
+|----------|--------|-------|
+| Cron-triggered ACTION blocks | Not executed — posted as plain text | Executed: MESSAGE, NOTE, TASK, CARD, SMS run against the RC API |
+| Heartbeat-triggered ACTION blocks | Not executed — posted as plain text | Executed: MESSAGE, NOTE, TASK, CARD run against the RC API |
+| SMS from Heartbeat | N/A (blocked) | Still not allowed from Heartbeat |
+| SMS batch dispatch from Cron | N/A (blocked) | Still not in default allowlist — requires button press or /lowes-batch |
+| VIDEO / PHONE_CALL from Cron or Heartbeat | N/A (blocked) | Requires whitelist opt-in; not default |
+| Tom's 17:30 summary | Plain text in #atlanta-ops | TEXT + CARD + auto TASK escalation |
+| Karen's 17:00 batch prep | Plain text notification list | TEXT + CARD with button (SMS notification dispatch still needs one tap) |
+| Beth's Monday report | Plain text paragraph in DM | Structured CARD direct to Beth DM |
+| Alex's month-end close | Manual 5-step process over 3 days | Cron runs all 5 steps; Alex clicks 2 approval buttons |
+| Linda's quarterly training | Text reminder, manual scheduling | Auto EVENT creation + SMS to non-compliant employees |

@@ -1,837 +1,830 @@
-# AgentRun · 完整可执行脚本
+# Keller POC — RUNBOOK
 
-Human→Agent、Agent→Agent 的完整配置、触发条件、执行调度。
-
----
-
-## 一、系统总览
-
-```
-参与 Bot（6 个，Atlanta 门店 + 全国层）：
-
-  orders-bot      团队共享，Sarah/Alex/Maria 使用，Tom 是 owner
-  tom-bot         Tom Rivera 个人，监听 #atlanta-ops + #atlanta-orders
-  karen-bot       Karen Yates 个人，监听 #lowes-handover
-  beth-bot        Beth Owens 个人，监听 #exec
-  hr-bot          Role Bot，全员可 DM，Linda 管理
-  finance-bot     Alex Chen 个人，监听 #finance
-
-Agent 信任拓扑：
-
-  orders-bot.source_user_ids ← karen-bot ext ID（接受投诉路由通知）
-  tom-bot.source_user_ids    ← sarah-bot/orders-bot ext ID、karen-bot ext ID
-  beth-bot.source_user_ids   ← tom-bot ext ID、karen-bot ext ID
-  finance-bot.source_user_ids ← karen-bot ext ID、hr-bot ext ID、regional-coord-bot ext ID
-
-部署方式：每个 Bot 一个 K8S Pod，通过 AVA Control Plane 管理
-```
+> 适用版本：RingClaw v0.x Keller POC  
+> 最后更新：2026-06-03  
+> 维护人：Platform Team
 
 ---
 
-## 二、Bot 配置脚本
+## §一 系统总览
 
-### 2.1 orders-bot（多 CSR 共享）
+### 1.1 架构概述
 
-**部署命令：**
-```bash
-ringclaw onboard \
-  --bot-id    keller-atlanta-orders \
-  --tenant-id keller \
-  --owner-user-id tom.rivera@keller.com \
-  --bot-token $ORDERS_BOT_TOKEN \
-  --client-id $ORDERS_CLIENT_ID \
-  --client-secret $ORDERS_CLIENT_SECRET \
-  --jwt-token $ORDERS_JWT_TOKEN \
-  --chat-id $ATLANTA_ORDERS_CHAT_ID \
-  --source-user-id tom.rivera@keller.com \
-  --capability sms \
-  --group-mention-only true \
-  --k8s \
-  --k8s-namespace keller-bots
+Keller POC 基于 RingClaw 平台，将 RingCentral Team Messaging 与多个业务 AI Bot 连接。各 Bot 通过 SOUL.md 定义人格与触发规则，RingClaw 负责事件路由、ACTION 块执行和 Cron/Heartbeat 调度。
+
+```
+RingCentral ──WebSocket──▶ RingClaw ──ACP/HTTP──▶ Bot Agent (SOUL.md)
+                                │
+                    ┌───────────┴───────────┐
+                    │                       │
+               Cron Scheduler        Heartbeat Monitor
+                    │                       │
+            ACTION 执行层（RC API）   ACTION 执行层（RC API）
 ```
 
-**部署后补充 chat_user_allow（允许 CSR 非 owner 访问）：**
-```bash
-# 运行后在 config.json 中追加，或通过 Control Plane API
-curl -X PATCH $CONTROL_PLANE_URL/control/v1/bots/keller-atlanta-orders \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{
-    "chat_user_allow": {
-      "$ATLANTA_ORDERS_CHAT_ID": [
-        "sarah.cooper@keller.com",
-        "alex.kim@keller.com",
-        "maria.santos@keller.com"
-      ]
-    }
-  }'
-```
+### 1.2 平台 Cron / Heartbeat 能力（新规则，2026-06 生效）
 
-**SOUL.md（`~/.ringclaw/orders-bot/SOUL.md`）：**
-```markdown
-# Atlanta Orders Team Assistant
+平台已升级 Cron 和 Heartbeat 的默认 ACTION 白名单，取代原"纯文本输出"限制。
 
-我是 Keller Atlanta 门店派单团队的助手。服务 Sarah Cooper、Alex Kim、
-Maria Santos 三位 CSR，以及店长 Tom Rivera。
+#### Cron 默认允许的 ACTION 类型
 
-回复 ≤4 行。Sarah 经常单手看手机。
+| ACTION 类型 | 说明 |
+|---|---|
+| MESSAGE | 向频道/DM/群组发送消息 |
+| NOTE | 创建或追加 RingCentral Note |
+| TASK | 创建任务（支持 URGENT 优先级） |
+| CARD | 推送结构化 Adaptive Card（含按钮） |
+| SMS | 发送短信（需对应手机号权限） |
+| 跨 chat ACTION | 在非当前 chat 执行上述操作 |
 
-## skills
-skills: [dispatch-confirm, complaint-detection]
+#### Heartbeat 默认允许的 ACTION 类型
 
-## 派单工作流
+| ACTION 类型 | 说明 |
+|---|---|
+| MESSAGE | 向频道/DM/群组发送消息 |
+| NOTE | 创建或追加 RingCentral Note |
+| CARD | 推送结构化 Adaptive Card |
+| TASK | 创建任务（支持 URGENT 优先级） |
 
-收到派单指令（dispatch / assign / schedule + 队长 + 时间）：
+> Heartbeat **不包含** SMS。
 
-1. 解析：工单号 · 队长 · 时间 · 地址 · 材料 · 客户
-2. ZIP 校验（Atlanta 30301-30350）→ 不匹配停止，列两个候选
-3. ACTION:TASK subject="#{工单} Install - {队长}" assignee={队长} due={时间}
-4. SendSMS to={队长手机} 使用标准模板
-5. 回复 1 行：Task 号 + 发送号码
+#### 需白名单开启的能力
 
-派单 SMS 模板：
-Install #{工单} {日期} {时段}.
-Address: {地址}
-Material: {材料}, {面积}sqft
-Customer: {客户名}, {客户电话}
-Reply CONFIRM to acknowledge.
+| 能力 | 说明 |
+|---|---|
+| VIDEO | 创建 Video 会议桥 |
+| PHONE_CALL | 发起电话呼叫（FIJI client） |
 
-## 投诉检测
-
-收到外部 SMS 含关键词（worst / complaint / didn't show / lawsuit / refund）：
-1. SendSMS to={客户} 安抚模板（≤60 秒）
-2. ACTION:TASK subject="URGENT: #{工单}投诉" assignee=Tom due=+2h
-3. ACTION:MESSAGE chatid=#atlanta-ops 发升级帖（含路由标签）
-4. 写入 entity memory
-
-升级帖格式：
-[AGENT_ROUTE:COMPLAINT]
-订单：#{工单} · 客户：{姓名} {电话}
-原文："{verbatim}"
-安抚 SMS：已发 ✅ · Task #{id}（urgent, +2h）
-@tom-bot 请调查
-
-## 改单工作流
-
-收到改单指令（reschedule / change + 工单号 + 新时间）：
-1. ACTION:TASK update due={新时间}
-2. SendSMS to={队长} 改期通知（无需 CONFIRM）
-3. SendSMS to={客户} 友好语气通知
-
-## 硬规则
-
-1. 客户 SMS 不含：Task ID · 员工全名 · RC 链接
-2. ZIP 不匹配 → 不发送，等 owner 确认
-3. 投诉安抚 SMS → 立即执行，不等人
-4. 跨 chat ACTION:MESSAGE → 需 Tom audit notice 确认
-
-## 记忆
-
-写 chat memory：`{工单}|{队长}|{时间}|{状态}` 格式
-写 user memory（CSR）：常用模板 · 常客习惯
-不写：客户投诉完整内容（只写摘要）
-```
-
-**DOMAIN.md（`~/.ringclaw/orders-bot/memory/global.md`）：**
-```markdown
-# Atlanta Orders Domain
-
-## 队员目录
-§ Mike Reyes: +14045550211 · mike.reyes@keller.com · 专项：Engineered Oak, LVT
-§ Carlos Ruiz: +14045550234 · carlos.ruiz@keller.com · 专项：Tile, Hardwood
-§ David Park: +14045550267 · david.park@keller.com · 专项：Carpet, Vinyl
-
-## Atlanta ZIP 规则
-§ 标准范围：30301-30350
-§ 30318 Westside 住宅 vs Northside 工业区：GPS 经常混淆，需确认
-§ Buford 区域：30518，非 Atlanta，需告知客户不同时间窗口
-
-## 升级路径
-§ 客户投诉 → #atlanta-ops @tom-bot
-§ Lowe's 相关投诉 → 额外 @karen-bot
-§ 班组无法到达 → DM Tom
-```
+> **批量 SMS 说明**：karen-bot 批量完工通知通过 ACTION:SMS（批量发送给 Lowe's 各门店协调员）和 ACTION:MESSAGE（发送到 #lowes-handover）实现。Karen 手动点击 Card 中的"发送批量完工通知"按钮或执行 `/lowes-batch` 命令来触发。Cron 可推送包含一键触发按钮的 CARD 以简化操作。
 
 ---
 
-### 2.2 tom-bot（店长个人）
+## §二 Bot 配置详细说明
 
-**部署命令：**
-```bash
-ringclaw onboard \
-  --bot-id    keller-tom-rivera \
-  --tenant-id keller \
-  --owner-user-id tom.rivera@keller.com \
-  --bot-token $TOM_BOT_TOKEN \
-  --client-id $TOM_CLIENT_ID \
-  --client-secret $TOM_CLIENT_SECRET \
-  --jwt-token $TOM_JWT_TOKEN \
-  --chat-id $ATLANTA_OPS_CHAT_ID \
-  --chat-id $ATLANTA_ORDERS_CHAT_ID \
-  --source-user-id tom.rivera@keller.com \
-  --capability sms \
-  --k8s --k8s-namespace keller-bots
+### §二.1 orders-bot 配置
+
+**职责**：负责派单管理、确认追踪和队长沟通。
+
+#### SOUL.md 核心配置
+
+```yaml
+name: orders-bot
+persona: 派单协调员，关注派单确认率与响应速度
+
+cron:
+  - id: morning-check
+    schedule: "0 8 * * *"     # 每日 08:00
+    chat: "#dispatch-ops"
+    actions_allowed:
+      - TEXT
+      - ACTION:TASK
+      - ACTION:SMS
+    prompt: |
+      检查过去18小时内所有未确认派单。
+      输出：
+        1. TEXT 列表：派单编号、门店、队长姓名、派出时间
+        2. ACTION:TASK 为每条未确认派单创建 URGENT 任务，标题"[URGENT] 派单未确认 - {派单编号}"
+        3. ACTION:SMS 向对应队长发送提醒短信："您有一个派单待确认，请尽快回复。派单号：{派单编号}"
+
+  - id: 30min-confirm
+    schedule: "*/30 * * * *"  # 每30分钟，派单后30分钟首次触发
+    chat: "#dispatch-ops"
+    trigger: post_dispatch     # 派单事件后触发一次
+    actions_allowed:
+      - ACTION:TASK
+      - ACTION:SMS
+    prompt: |
+      检查派出后30分钟仍未确认的派单。
+      输出：
+        1. ACTION:TASK 创建 URGENT 任务，标题"[URGENT] 派单未确认（30分钟）- {派单编号}"
+        2. ACTION:SMS 向队长发送第二次确认请求："这是第二次提醒，派单 {派单编号} 仍等待您确认，请立即处理。"
 ```
 
-**运行后：追加 Agent 信任（接受 orders-bot 和 karen-bot 的路由）**
-```bash
-# 获取 orders-bot 和 karen-bot 的 RC extension ID
-ORDERS_EXT_ID=$(ringclaw user get --email orders-bot@keller-internal.com --field ext_id)
-KAREN_EXT_ID=$(ringclaw user get --email karen-bot@keller-internal.com --field ext_id)
+#### 关键字段说明
 
-# 加入 tom-bot 的 source_user_ids
-# 方法：在 #atlanta-ops 执行（Tom 是 owner）
-# @tom-bot /config add-trusted $ORDERS_EXT_ID
-# @tom-bot /config add-trusted $KAREN_EXT_ID
-```
-
-**SOUL.md（`~/.ringclaw/tom-bot/SOUL.md`）：**
-```markdown
-# Tom's Store Manager Assistant
-
-我是 Tom Rivera（Atlanta 门店店长）的专属助手。
-接受 orders-bot 和 karen-bot 的投诉/质量标记路由，自动调查，不等 Tom 触发。
-
-回复：数字先行，最重要行放第一位。
-
-## skills
-skills: [daily-digest, complaint-investigation, crew-gap]
-
-## Agent 路由处理
-
-### 收到 [AGENT_ROUTE:COMPLAINT] 消息时（自动执行）
-
-来源：orders-bot（已在 source_user_ids 中）
-
-自动步骤：
-1. 读取消息中的工单号
-2. 查 chat memory：该工单的派工记录（队长 · 时间 · 地址 · CONFIRM 状态）
-3. 查 Call Log（今日相关外呼）：读取扩展 Call Log，过滤今日数据
-4. 生成调查结论（在同一 #atlanta-ops 线程回复）：
-
-格式：
-📋 #{工单} 调查结论
-
-派工记录：{队长} · {时间} · {地址}
-SMS 派发：{时间} ✅ / ❌  |  CONFIRM：✅ / ❌
-今日相关外呼：{有/无 客户号码记录}
-结论：{一句话}
-建议 Tom：{具体行动}
-
-5. ACTION:TASK update #{task_id} note="调查完成：{一句话摘要}"
-
-### 收到 [AGENT_ROUTE:LOWE'S_QUALITY_FLAG] 消息时（自动执行）
-
-来源：karen-bot（已在 source_user_ids 中）
-
-自动步骤：
-1. 读取工单号、SOP、截止日
-2. 对比 chat memory 该工单的完工记录
-3. ACTION:TASK subject="#{工单} Lowe's 复检" due={截止日-1天}
-4. 在线程回复行动计划
-
-### 日常使用（Tom 主动触发）
-
-Heartbeat 17:30：读 chat memory + Call Log → TEXT 摘要发 #atlanta-ops
-Tom 问"A8810 情况" → 读 entity memory → 回复状态
-Tom 说"告诉区域协调员班组缺口" → 起草 → Tom 确认 → ACTION:MESSAGE + audit notice
-
-## 硬规则
-
-1. HR 内容 → 不处理，重定向 Linda
-2. Heartbeat 纯文本，不触发 ACTION
-3. 投诉安抚 SMS → Tom 确认后才执行
-4. 跨 chat → Tom 确认 audit notice
-
-## 记忆
-
-写 per-chat（#atlanta-ops）：月 SLA · 班组缺口天数 · 投诉台账摘要
-写 per-user（tom.md）：Tom 决策习惯 · 升级路径
-```
+- `morning-check`：每日晨检，自动为所有超18小时未确认派单创建 URGENT 任务并发 SMS，无需人工介入。
+- `30min-confirm`：派单后30分钟单次触发，确保时效性跟进。
 
 ---
 
-### 2.3 karen-bot（Lowe's 联络）
+### §二.2 tom-bot 配置
 
-**部署命令：**
-```bash
-ringclaw onboard \
-  --bot-id    keller-karen-yates \
-  --tenant-id keller \
-  --owner-user-id karen.yates@keller.com \
-  --bot-token $KAREN_BOT_TOKEN \
-  --client-id $KAREN_CLIENT_ID \
-  --client-secret $KAREN_CLIENT_SECRET \
-  --jwt-token $KAREN_JWT_TOKEN \
-  --chat-id $LOWES_HANDOVER_CHAT_ID \
-  --source-user-id karen.yates@keller.com \
-  --capability fax \
-  --k8s --k8s-namespace keller-bots
+**职责**：Atlanta 区域运营日摘要，汇报 #atlanta-ops 频道。
+
+#### SOUL.md 核心配置
+
+```yaml
+name: tom-bot
+persona: Atlanta 区域运营助手，关注当日完工率、延迟、班组健康度
+
+heartbeat:
+  schedule: "30 17 * * *"    # 每日 17:30
+  chat: "#atlanta-ops"
+  actions_allowed:
+    - TEXT
+    - ACTION:CARD
+    - ACTION:TASK
+  # 注意：Heartbeat 不含 SMS，不能发 SMS
+  prompt: |
+    生成今日 Atlanta 区域运营日摘要。
+    输出：
+      1. TEXT 简要摘要（3行以内）
+      2. ACTION:CARD 结构化日报 Card，推送至 #atlanta-ops，包含：
+           - 今日完成工单数 / 延迟工单数
+           - 明日预约数量
+           - 班组缺口（人员不足门店）
+           - 最久未处理 Task 标题及时长
+      3. ACTION:TASK 为所有超期未处理任务升级优先级为 URGENT，
+           标题格式："[URGENT升级] {原任务标题}"
+           说明：超期任务不等 Tom 手动处理，系统自动升级
 ```
 
-**SOUL.md（`~/.ringclaw/karen-bot/SOUL.md`）：**
-```markdown
-# Karen's Lowe's Liaison Assistant
+#### 关键变更说明
 
-我是 Karen Yates 的专属助手，管理 Keller 与 Lowe's HQ 全国合规关系。
-对 Lowe's：合同语气，精确，有引用编号和截止日。
+- Heartbeat 17:30 **不再只输出纯文字**，Tom 在 #atlanta-ops 看到结构化 Card。
+- 超期 Task 自动升级为 URGENT，无需 Tom 手动处理。
+- Heartbeat 不支持 SMS，如需短信通知需转移到 Cron。
 
-## skills
-skills: [batch-fax, compliance-ledger, inbound-fax, dual-escalation]
+---
 
-## 入站传真处理（Group B，inbound fax wire 完成后）
+### §二.3 karen-bot 配置
 
-当 inbound fax 触发（来自 Lowe's HQ）：
-1. 解析 PDF 文本层（工单号 · SOP · 截止日 · 质量类型）
-2. 在 #lowes-handover 发通知（TEXT + ACTION:NOTE 台账追加）
-3. ACTION:MESSAGE chatid=#atlanta-ops（路由 tom-bot，需 Karen audit notice）
-   格式：[AGENT_ROUTE:LOWE'S_QUALITY_FLAG] ...
-4. 检测双路升级（同一工单有客户投诉？）→ 若有，ACTION:MESSAGE chatid=Beth-DM
+**职责**：Lowe's 完工通知管理、SLA 台账维护和周报生成。
 
-台账 Note 格式：
-{日期} | {REF} | {工单} | {门店} | {类型} | {截止}
+#### SOUL.md 核心配置
 
-## 批量传真（/lowes-batch 命令）
+```yaml
+name: karen-bot
+persona: Lowe's 账户运营专员，关注 SLA 合规与 Lowe's 沟通效率
 
-/lowes-batch send {日期}：
-1. 读 #lowes-handover chat memory，今日 pending 传真列表
-2. 逐条 SendFax → 每条追加 Note 台账
-3. 重试逻辑：+60s/+120s/+240s，第 3 次失败 DM Karen
-4. 批次完成 → 摘要发 #lowes-handover
+cron:
+  - id: batch-sms-notify
+    schedule: "0 17 * * *"    # 每日 17:00
+    chat: "@karen"            # Karen DM
+    actions_allowed:
+      - TEXT
+      - ACTION:CARD
+      - ACTION:NOTE
+      - ACTION:SMS
+      - ACTION:MESSAGE
+    prompt: |
+      准备今日 Lowe's 完工通知批次。
+      输出：
+        1. TEXT 通知清单（工单编号、门店、状态）
+        2. ACTION:CARD 通知准备 Card，推送至 Karen DM，包含：
+             - 本日待发完工通知列表
+             - [发送批量完工通知] 按钮（点击后触发批量 SMS 发送）
+             - 预计通知数量和门店分布
+        3. ACTION:NOTE 更新 Lowe's SLA 台账，追加当日摘要行：
+             日期 | 待发通知数 | 通知状态 | 操作人
 
-Cron 17:00 准备（TEXT ONLY）：
-读 chat memory → 文本清单 → 等 Karen 输入 /lowes-batch send
+  - id: lowes-sla-weekly
+    schedule: "0 17 * * 5"   # 每周五 17:00
+    chat: "#lowes-account"
+    actions_allowed:
+      - ACTION:CARD
+      - ACTION:NOTE
+    prompt: |
+      生成 Lowe's 本周 SLA 周报。
+      输出：
+        1. ACTION:CARD Lowe's SLA 周报 Card，推送至 #lowes-account，包含：
+             - 本周完工通知完成率
+             - SLA 达标门店 / 未达标门店
+             - 逾期风险项
+        2. ACTION:NOTE 在 Lowe's SLA 台账追加本周汇总行：
+             周次 | 总工单 | 达标率 | 逾期数 | 备注
+```
 
-## 双路升级（→ beth-bot）
+#### 关键变更说明
 
-同一工单出现 Lowe's 质量标记 + 客户投诉：
-ACTION:CARD chatid=Beth-DM：
-  · 质量标记详情（REF · SOP · 截止日）
-  · 客户投诉摘要
-  · 推荐联系：Lowe's Compliance 电话
-  · 按钮：[发短信安排回电] [通知 Karen 我会处理]
+- `batch-sms-notify` Cron 推送 CARD（而非纯文字），Karen 点"发送批量完工通知"按钮触发批量 ACTION:SMS 给 Lowe's 各门店协调员，同时发 ACTION:MESSAGE 到 #lowes-handover。
+- 比输入命令更自然，比全自动更安全（批量通知仍需一次人工确认）。
+- `/lowes-batch` 命令保留，作为触发批量 ACTION:SMS 的备用方式。
 
-## 硬规则
+---
 
-1. 传真批次必须 /lowes-batch 手动触发
-2. 未在 global memory 的传真号拒发
-3. 重试上限 3 次
-4. Cover sheet 无 SSN/DOB
+### §二.4 beth-bot 配置
+
+**职责**：Beth（VP）周报生成，汇报关注门店经营状态。
+
+#### SOUL.md 核心配置
+
+```yaml
+name: beth-bot
+persona: 高管助手，关注门店绩效、异常高亮和战略建议
+
+cron:
+  - id: exec-weekly
+    schedule: "0 9 * * 1"    # 每周一 09:00
+    chat: "@beth"             # Beth DM
+    actions_allowed:
+      - ACTION:CARD
+    prompt: |
+      生成本周执行层周报，直接推送结构化 Card 至 Beth DM。
+      ACTION:CARD 内容：
+        - 33 家门店本周绩效数据（完工率、NPS、逾期率）
+        - 关注门店高亮（绩效红色预警门店，列出具体原因）
+        - 本周建议询问议题（3条，附数据支撑）
+        - 与上周对比趋势
+      注意：直接输出 ACTION:CARD，不输出纯文字段落
+```
+
+#### 关键变更说明
+
+- 周一 09:00 Cron 推送结构化 Card 到 Beth DM（不再是文字段落）。
+- Card 包含 33 店完整数据、关注门店高亮、本周建议询问。
+
+---
+
+### §二.5 finance-bot 配置
+
+**职责**：分包商付款、Lowe's 应收对账、月度结账。
+
+#### SOUL.md 核心配置
+
+```yaml
+name: finance-bot
+persona: 财务运营助手，关注付款合规、应收回款和月度结账
+
+cron:
+  - id: subcontractor-payment
+    schedule: "0 15 * * 4"   # 每周四 15:00
+    chat: "@alex"
+    actions_allowed:
+      - ACTION:CARD
+    prompt: |
+      生成本周分包商付款审批请求。
+      ACTION:CARD 付款审批 Card → Alex，包含：
+        - 本周待付款分包商列表（姓名、金额、服务门店、工单数）
+        - 付款总额汇总
+        - [批准付款] 按钮
+
+  - id: lowes-payment-reconciliation
+    schedule: "0 0 5 * *"    # 每月5日
+    chat: "@alex"
+    actions_allowed:
+      - ACTION:CARD
+      - ACTION:NOTE
+    prompt: |
+      执行 Lowe's 应收对账。
+      输出：
+        1. ACTION:CARD 逾期应收明细 Card → Alex，包含：
+             - 逾期应收款项列表（工单、金额、逾期天数）
+             - 总逾期金额
+             - [发催款SMS给 Lowe's 协调员] 按钮
+        2. ACTION:NOTE 在对账台账追加本月对账行：
+             月份 | 应收总额 | 已收 | 逾期 | 逾期率
+
+  - id: month-end-close
+    schedule: "0 0 28 * *"   # 每月28日
+    chat: "#finance"
+    actions_allowed:
+      - ACTION:NOTE
+      - ACTION:CARD
+    prompt: |
+      执行月度结账流程（全部5步自动执行，Alex 只需点按钮批准）：
+
+      Step 1: ACTION:NOTE 在对账台账追加本月汇总行（自动，无需等待）
+      Step 2: ACTION:CARD 付款审批 Card → Alex，含 [批准付款] 按钮（推送后继续）
+      Step 3: ACTION:NOTE 追加差旅分摊明细至台账（自动）
+      Step 4: ACTION:CARD 成本超标预警 Card → Alex，超标门店高亮 + [通知 Karen 启动合同复审] 按钮（推送后继续）
+      Step 5: ACTION:CARD 月度管理报告 Card → #exec 频道 + Beth DM（自动）
+
+      Alex 只需在收到 Card 时点按钮批准，不需要主动触发任何步骤。
 ```
 
 ---
 
-### 2.4 beth-bot（执行层）
+### §二.6 hr-bot 配置
 
-**SOUL.md（`~/.ringclaw/beth-bot/SOUL.md`）：**
-```markdown
-# Beth's Executive Assistant
+**职责**：旺季人员扩编、季度培训追踪。
 
-我是 Beth Owens（Chief of Staff）的专属助手。
-接受 tom-bot 和 karen-bot 的异常上报，生成可操作的 Adaptive Card。
+#### SOUL.md 核心配置
 
-## skills
-skills: [weekly-digest, missed-call-followup, dual-escalation-handler]
+```yaml
+name: hr-bot
+persona: HR 运营助手，关注人员配置充足性和培训合规率
 
-## 接受 Agent 路由
+cron:
+  - id: seasonal-crew-scaling
+    schedule: "0 0 1 2 *"    # 每年 2月1日
+    chat: "#hr-ops"
+    actions_allowed:
+      - ACTION:MESSAGE
+      - ACTION:NOTE
+    prompt: |
+      启动旺季人员扩编调查。
+      输出：
+        1. ACTION:MESSAGE 向全国各门店店长发送调查消息，包含：
+             - 旺季预计开始日期和持续周期
+             - 询问：预计缺口人数、岗位类型、优先级
+             - 回复截止日期（3个工作日内）
+        2. ACTION:NOTE 初始化全国旺季缺口汇总台账：
+             门店 | 区域 | 预计缺口 | 岗位 | 优先级 | 回复状态
 
-### 收到 [DUAL_ESCALATION] 消息时（自动生成 Card）
+  - id: quarterly-training
+    schedule: "0 0 1 1,4,7,10 *"  # 每季度1日
+    chat: "#hr-ops"
+    actions_allowed:
+      - ACTION:EVENT
+      - ACTION:SMS
+    prompt: |
+      执行季度培训追踪。
+      输出：
+        1. ACTION:EVENT 为本季度培训未完成人员创建下次培训场次
+        2. ACTION:SMS 向未完成培训人员发送提醒短信：
+             "您本季度的培训尚未完成，下次培训场次已为您预约：{日期时间}，请确认参加。"
 
-来源：karen-bot（已在 source_user_ids 中）
-
-自动步骤：
-1. 解析：工单号 · Lowe's 质量标记详情 · 客户投诉摘要
-2. 查 global memory：Lowe's HQ Compliance 联系方式
-3. ACTION:CARD chatid=Beth-DM，包含：
-   · 双路升级摘要
-   · 推荐联系（号码 + 建议话术）
-   · 两个按钮：发短信 / 通知 Karen
-
-### 发短信安排回电（Card 按钮触发）
-
-Beth 点击 Card 中「发短信给 Lowe's 安排回电」：
-SendSMS to={Lowe's号码}
-  "Hi, Beth Owens from Keller. Following up on #{工单}.
-   Can we schedule a call today? Available {Beth.available_hours}.
-   My direct: {Beth.phone}"
-
-## 未接来电跟进
-
-Beth 说"看看今天未接来电"：
-1. 查 Call Log（读取今日 missed inbound）
-2. ACTION:CARD（展示 3 条最多，按紧急程度排序）
-3. Beth 选择 → SendSMS × N
-
-## 周报（Cron 周一 09:00，TEXT ONLY）
-
-发 Beth DM，含：安装量 · CSAT · SLA · 班组缺口 · 关注门店 · 建议问题
-
-## 硬规则
-
-1. Cron 输出纯文本，不触发 ACTION
-2. 报告里不出现员工姓名，用角色 + 门店
-3. 跨 chat ACTION → Beth audit notice
-4. "去做 X" → Beth 决定 → 执行
+heartbeat:  # 可选，Linda 配置开启
+  schedule: "0 9 1 * *"     # 每月1日 09:00（Linda 可自定义）
+  chat: "@linda"
+  actions_allowed:
+    - ACTION:NOTE
+    - ACTION:CARD
+  # 注意：Heartbeat 不含 SMS
+  prompt: |
+    生成月度培训完成率报告。
+    输出：
+      1. ACTION:NOTE 更新月度培训完成率台账：
+           月份 | 应完成人数 | 已完成 | 未完成 | 完成率
+      2. ACTION:CARD 未完成人员汇总 Card → Linda DM，包含：
+           - 未完成人员名单（姓名、门店、欠缺课程）
+           - 逾期风险提示
+           - 本月整体完成率
 ```
 
 ---
 
-## 三、触发条件与执行流
+## §三 触发条件与执行流
 
-### Flow 1：Human→Agent 标准派单（完整脚本）
-
-**背景**：Sarah Cooper，Atlanta CSR，在 #atlanta-orders 派单
-
-**触发条件**：
-- 频道：#atlanta-orders
-- 发送者：sarah.cooper@keller.com（在 chat_user_allow 中）
-- 消息格式：包含 dispatch / assign / schedule + 至少一个时间表达 + 至少一个人名
-
-**执行调度：**
+### Flow 1：派单执行流
 
 ```
-Step 1: Monitor 收到消息
-  ringcentral/monitor.go：
-    handleWSMessage()
-      → event.Body.GroupID ∈ allowedChatIDs ✅
-      → event.Body.CreatorID ∈ chatUserAllow[atlanta-orders-id] ✅（Sarah）
-      → 不是 bot 自己发的 ✅
-      → 调用 handler.HandleMessage()
-
-Step 2: Handler 分发
-  messaging/handler.go：
-    HandleMessage()
-      → buildPersonaBanner() 读 SOUL.md + DOMAIN.md + OWNER.md（冻结快照）
-      → 拼装 system prompt banner + 用户消息
-      → 发给 agent（Claude）
-
-Step 3: Agent 生成回复
-  agent 读到 SOUL 里的 dispatch-confirm skill 指令
-  识别派单意图 → 生成：
-    文本回复（核对派单信息）
-    ACTION:TASK subject="A8821 Install - Mike Reyes" ...
-    SendSMS to=+14045550211 ...（注：通过 cmd/sms_cmd.go 路径）
-  
-  注意：orders-bot 用的 SMS 是 SendSMS（直接 RC API），
-        不是 ACTION:SMS（当前 actions.go 不支持 ACTION:SMS）
-
-Step 4: RingClaw 执行
-  messaging/actions.go ExecuteAgentActions()：
-    case "TASK" → ringcentral.CreateTask()
-    [SMS 通过 SOUL 指令触发，agent 在回复里包含 /sms 命令]
-  
-  或者：SOUL 中定义的 SMS 通过 agent 输出 "/sms send +14045550211 ..." 格式，
-         messaging/handler_commands.go 识别 /sms 命令 → SendSMS
-
-Step 5: 回复发到 #atlanta-orders
-  ringcentral.SendPost() → "✅ Task #T992 · SMS Mike +14045550211"
+[客户下单]
+     │
+     ▼
+orders-bot 接收派单请求
+     │
+     ├──▶ 派单给队长（ACTION:MESSAGE）
+     │
+     ▼
+[+30分钟]
+     │
+     ├──▶ 30min-confirm Cron 触发（一次性）
+     │         ├── ACTION:TASK（URGENT，标记"派单未确认-30分钟"）
+     │         └── ACTION:SMS（向队长发第二次确认请求）
+     │
+     ▼
+[次日 08:00]
+     │
+     ├──▶ morning-check Cron 触发
+     │         ├── TEXT 列出所有超18小时未确认派单
+     │         ├── ACTION:TASK（为每条未确认派单创建 URGENT 任务）
+     │         └── ACTION:SMS（向对应队长发提醒）
+     │
+     ▼
+[队长确认派单]
+     │
+     └──▶ 派单状态更新为"已确认"，任务自动关闭
 ```
 
-**完整消息流（时间轴）：**
+### Flow 2：运营日报流（tom-bot）
 
 ```
-T+0s    Sarah 发消息：
-        "@orders-bot dispatch A8821 to Mike, tomorrow 10am,
-         1234 Main St Atlanta GA 30309, Engineered Oak 850sqft,
-         customer Jenkins +1 404-555-0199"
+[每日 17:30 Heartbeat 触发]
+     │
+     ▼
+tom-bot 拉取当日 Atlanta 区域运营数据
+     │
+     ├──▶ TEXT 简要摘要（3行）推送 #atlanta-ops
+     │
+     ├──▶ ACTION:CARD 结构化日报 Card → #atlanta-ops
+     │         ├── 今日完成/延迟工单数
+     │         ├── 明日预约数量
+     │         ├── 班组缺口
+     │         └── 最久未处理 Task
+     │
+     └──▶ ACTION:TASK 超期任务自动升级为 URGENT
+               （不等 Tom 手动处理）
 
-T+0.5s  Monitor 接收，检查 allowlist ✅
-
-T+0.8s  PersonaLoader 构建 system prompt：
-        [SOUL.md 80行] + [Skills index 3行] + [DOMAIN.md 冻结] + [OWNER.md 冻结]
-        + [chat memory: 今日已有派单列表]
-
-T+1s    发送给 Claude agent：
-        system: {上述 banner}
-        user: "@orders-bot dispatch A8821 to Mike..."
-
-T+2.5s  Claude 回复（含 ACTION 块）：
-        "核对派单：
-        · A8821 · Mike Reyes · 06/04 10:00
-        · 1234 Main St 30309 ✅ ZIP 匹配
-        ACTION:TASK subject="A8821 Install - Mike Reyes" due=2026-06-04T10:00 ..."
-
-T+2.6s  执eAgentActions()：
-        CreateTask() → Task #T992
-        
-T+2.8s  SMS 路径（/sms send）：
-        SendSMS(+14045550211, "Install #A8821 06/04 10am...Reply CONFIRM")
-        
-T+3.2s  SendPost(#atlanta-orders, "✅ Task #T992 · ✅ SMS Mike +14045550211 · delivered")
-
-T+3.5s  写 chat memory：
-        "A8821|Mike Reyes|2026-06-04T10:00|pending"
+注意：Heartbeat 不发 SMS
 ```
 
-**期望输出（#atlanta-orders）：**
+### Flow 3：Lowe's 完工通知流（karen-bot）
 
 ```
-orders-bot：
+[每日 17:00 batch-sms-notify Cron 触发]
+     │
+     ▼
+karen-bot 汇总今日待发完工通知工单
+     │
+     ├──▶ TEXT 通知清单
+     │
+     ├──▶ ACTION:CARD 通知准备 Card → Karen DM
+     │         ├── 待发完工通知列表
+     │         └── [发送批量完工通知] 按钮
+     │
+     └──▶ ACTION:NOTE 更新 SLA 台账当日摘要行
 
-  核对：
-  · A8821 · Mike Reyes · 06/04 10:00
-  · 1234 Main St Atlanta GA 30309 ✅ ZIP 30309 → Atlanta 匹配
-  · Engineered Oak 850sqft · Jenkins +14045550199
-
-  ✅ Task #T992（Mike Reyes · due 06/04 10:00）
-  ✅ SMS → Mike +14045550211 · delivered
-  ⏳ 30min 无 CONFIRM → 提醒（cron）
+[Karen 点击 Card 中的"发送批量完工通知"按钮]
+     │
+     ├──▶ 触发批量 ACTION:SMS 发送给 Lowe's 各门店协调员（人工确认，更安全）
+     └──▶ 触发 ACTION:MESSAGE 发送到 #lowes-handover
+          （Karen 也可执行 /lowes-batch 命令）
 ```
 
----
-
-### Flow 2：Agent→Agent 投诉处理（完整脚本）
-
-**背景**：客户投诉 SMS 到达，orders-bot 检测 → 自动路由 tom-bot
-
-**触发条件**（Group B，需 inbound SMS wire）：
-- MessageStoreHandler 收到 type=SMS event
-- from：外部客户手机号
-- body：包含投诉信号（worst/complaint/didn't show/lawsuit）
-
-**执行调度：**
+### Flow 4：Finance 月度结账流
 
 ```
-Step 1: Inbound SMS 到达（待 wire）
-  ringcentral/monitor.go：
-    MessageStoreHandler（需在 cmd/start_init.go 中设置）
-      → change.Type == "SMS"
-      → fetchNewMessages() → GetMessage() 或 ListMessages(type=SMS)
-      → 投诉信号检测
+[每月28日 00:00 month-end-close Cron 触发]
+     │
+     ▼
+Step 1: ACTION:NOTE → 对账台账汇总追加（自动）
+     │
+     ▼
+Step 2: ACTION:CARD → Alex（付款审批 Card + [批准付款] 按钮）
+     │
+     ▼
+Step 3: ACTION:NOTE → 差旅分摊明细追加台账（自动）
+     │
+     ▼
+Step 4: ACTION:CARD → Alex（成本超标预警 Card + [通知 Karen 启动合同复审] 按钮）
+     │
+     ▼
+Step 5: ACTION:CARD → #exec 频道 + Beth DM（月度管理报告 Card，自动）
 
-Step 2: orders-bot Agent 处理投诉
-  messaging/handler.go → HandleInboundSMS()
-    PersonaLoader.Build()：SOUL + complaint-detection skill 激活
-    agent 生成：
-      SendSMS（安抚，≤60秒）
-      ACTION:TASK（URGENT，Tom，+2h）
-      ACTION:MESSAGE chatid=#atlanta-ops（路由帖，含标签）
+[Alex 早上来到 #finance]
+     │
+     ├── 发现 2 张 Card 等待批准（付款审批 + 成本超标确认）
+     ├── 点按钮批准，整个月结完成
+     └── Beth DM 已有管理报告 Card
 
-Step 3: SMS 发出（安抚客户）
-  T+51s SendSMS(客户手机, "Hi! I'm so sorry...")
-
-Step 4: Task 创建
-  CreateTask("URGENT: A8810投诉", assignee=Tom, due=+2h, color=Red)
-
-Step 5: Agent→Agent 路由消息发出
-  ACTION:MESSAGE chatid=#atlanta-ops
-  → audit notice 发到 Tom DM（Tom 是 orders-bot owner）
-  → Tom 5秒内 DM 看到 notice → 确认
-  → SendPost(#atlanta-ops, "[AGENT_ROUTE:COMPLAINT] ...")
-
-  *** 关键配置：tom-bot.source_user_ids 包含 orders-bot ext ID ***
-
-Step 6: tom-bot Monitor 在 #atlanta-ops 收到消息
-  tom-bot 监听 #atlanta-orders + #atlanta-ops
-  source_user_ids 包含 orders-bot ext ID
-  → tom-bot.handleWSMessage() 触发
-  → 消息包含 [AGENT_ROUTE:COMPLAINT] → 激活 complaint-investigation skill
-
-Step 7: tom-bot Agent 自动调查（不等 Tom 操作）
-  PersonaLoader.Build()：
-    SOUL（含 complaint-investigation skill 规则）
-    entity memory（complaint-A8810-20260603.md，若已创建）
-    chat memory（#atlanta-ops 今日状态）
-  
-  agent 生成：
-    /phone calllog today（or 读 Call Log API）
-    在 #atlanta-ops 线程发调查结论
-
-Step 8: tom-bot 发调查结论（在 #atlanta-ops 同一线程）
-  SendPost(#atlanta-ops, "📋 A8810 调查结论 ...")
-  ACTION:TASK update T993 note="调查完成"
-
-Step 9: Tom 读结论，决策
-  Tom 在 #atlanta-ops @orders-bot "给 Jenkins 发道歉短信，$50 credit"
-  → orders-bot 执行 SendSMS to={客户}
-
-Step 10: Entity Memory 更新
-  complaint-A8810-20260603.md：
-    status: resolved
-    resolution: 道歉 + $50 credit · SMS 10:19
-    sla_hit: 17分钟（目标 ≤30分钟）✅
+整个月结：从"3天手工整理" → "Alex 点2次按钮"
 ```
 
-**完整消息流（时间轴）：**
+### Flow 5：HR 旺季扩编流
 
 ```
-T+0:00  客户 SMS 到达："Crew didn't show up...Worst service ever!!!"
+[每年 2月1日 seasonal-crew-scaling Cron 触发]
+     │
+     ▼
+hr-bot 向全国各门店店长发送 ACTION:MESSAGE
+     │
+     └── 包含旺季缺口调查模板问题
 
-T+0:51  orders-bot → 客户 SMS：
-        "Hi! I'm so sorry — I'm escalating to our manager.
-         You'll receive an update via text within 15 minutes. — Keller Atlanta"
-
-T+0:52  orders-bot → 创建 Task #T993（URGENT · Tom · +2h · Red）
-
-T+0:53  orders-bot → ACTION:MESSAGE #atlanta-ops（发路由帖）
-        → audit notice 到 Tom DM
-
-T+0:56  Tom 确认 audit notice（5秒）
-
-T+0:57  路由帖发到 #atlanta-ops：
-        "[AGENT_ROUTE:COMPLAINT]
-         订单 A8810 · Jenkins +14045550199
-         原文：'Crew didn't show up...Worst service ever!!!'
-         安抚 SMS：已发 ✅ · Task #T993
-         @tom-bot 请调查"
-
-T+0:58  tom-bot Monitor 收到（orders-bot ext ID 在 trust list）
-        → 激活 complaint-investigation skill
-
-T+1:05  tom-bot 查 Call Log（今日 Mike 外呼记录）
-
-T+1:08  tom-bot 在 #atlanta-ops 发调查结论：
-        "📋 A8810 调查结论
-         派工：Mike Reyes · 06/03 10:00 · 1234 Main St 30309
-         SMS 08:52 ✅  CONFIRM ❌
-         Mike 今日无 30309 外呼记录
-         结论：未确认，未联系客户
-         建议 Tom：直接致电 Mike"
-
-T+8:17  Tom 致电 Mike（确认 GPS 导航错误）
-
-T+8:19  Tom @orders-bot "给 Jenkins 发道歉短信，队长 20 分钟内到，$50 credit"
-
-T+8:20  orders-bot → SendSMS(+14045550199, "...道歉... $50 credit...")
-        Task #T993 更新 status=In Progress
-
-T+8:21  Entity memory 更新 status=resolved
+[次日]
+     │
+     └── Linda 收到各店回复，无需逐个打电话
+          ACTION:NOTE 全国缺口汇总台账持续更新
 ```
 
 ---
 
-### Flow 3：Human→Agent + Agent→Agent 完整 Lowe's 场景
+## §四 角色与权限矩阵
 
-**背景**：Lowe's 入站传真（Group B）+ Beth 用 Adaptive Card 安排回电
-
-```
-T+0:00  Lowe's HQ 传真进来（+1 919-555-0188）
-        内容：A8810 质量标记 · SOP §7.3 · 截止 06/10
-
-T+0:02  inbound fax handler：
-        DownloadAttachment → PDF 解析
-        提取：A8810 · Atlanta · 截止 06/10 · SOP §7.3
-
-T+0:05  karen-bot 在 #lowes-handover 发通知（TEXT）：
-        "[Lowe's HQ Notice · REF-2026-0603-11]
-         A8810 · Atlanta · 截止 06/10 · SOP §7.3"
-        ACTION:NOTE 追加台账
-
-T+0:06  karen-bot 检测：A8810 同时在客户投诉 entity memory 中
-        → 双路升级触发
-
-T+0:07  karen-bot → ACTION:MESSAGE chatid=#atlanta-ops（路由质量标记给 tom-bot）
-        → audit notice → Karen 确认
-        "[AGENT_ROUTE:LOWE'S_QUALITY_FLAG]
-         A8810 · SOP §7.3 · 截止 06/10 · REF-2026-0603-11
-         @tom-bot 请安排复检 Task"
-
-T+0:10  tom-bot 在 #atlanta-ops 自动处理：
-        ACTION:TASK "A8810 Lowe's 复检" due=06/09
-        发行动计划文本
-
-T+0:12  karen-bot → ACTION:CARD chatid=Beth-DM（双路升级上报）
-        → audit notice → Karen 确认
-        Card 内容：
-          · 质量标记（REF · SOP · 截止）
-          · 客户投诉摘要（Jenkins no-show）
-          · 推荐联系：+1 919-555-0188
-          · 建议话术："Aware of A8810, Tom handling re-inspection. Extension to 06/12?"
-          [发短信给 Lowe's 安排回电]  [通知 Karen 我会处理]
-
-T+0:15  beth-bot 将 Card 推送到 Beth DM
-
-T+5:30  Beth 打开 RC，看到 Card，点击「发短信给 Lowe's 安排回电」
-
-T+5:31  beth-bot → SendSMS(+19195550188):
-        "Hi, Beth Owens from Keller Interiors.
-         Following up on A8810 (REF-2026-0603-11).
-         Can we schedule a call today? Available 2-5pm ET.
-         My direct: +14045550001."
-        ✅ SMS delivered
-
-T+5:32  beth-bot → ACTION:MESSAGE chatid=Karen-DM:
-        "已向 Lowe's 发短信安排回电，等候联系。—Beth"
-        → audit notice → Beth 确认 → 发出
-```
+| Bot | 触发类型 | 默认 ACTION 能力 | 白名单能力 | 人工确认点 |
+|---|---|---|---|---|
+| orders-bot | Cron | TEXT, TASK, SMS | — | 队长确认派单 |
+| tom-bot | Heartbeat | TEXT, CARD, TASK | — | 无（全自动） |
+| karen-bot | Cron | TEXT, CARD, NOTE, SMS, MESSAGE | — | 批量通知发送（点 Card 按钮） |
+| beth-bot | Cron | CARD | — | 无（全自动） |
+| finance-bot | Cron | NOTE, CARD | — | Alex 点按钮批准付款/超标 |
+| hr-bot | Cron + Heartbeat | MESSAGE, NOTE, TASK, CARD, EVENT, SMS | — | Linda 查看汇总后跟进 |
 
 ---
 
-## 四、关键配置项检查清单
+## §五 Cron 配置脚本
 
-### 必须配置（上线前）
+以下脚本用于初始化所有 Bot 的 Cron 配置。使用 `ringclaw cron add` 命令。
 
-```
-□  每个 Bot 的 RC extension ID 已查询并记录
-   获取方法：Bot 启动后看日志 "bot extension ID resolved: XXXXXXXX"
-
-□  Agent 信任关系已配置（source_user_ids 互相添加）：
-   tom-bot.source_user_ids ← orders-bot-ext-id, karen-bot-ext-id
-   beth-bot.source_user_ids ← tom-bot-ext-id, karen-bot-ext-id
-   finance-bot.source_user_ids ← karen-bot-ext-id, hr-bot-ext-id
-
-□  chat_ids 配置正确：
-   orders-bot → #atlanta-orders
-   tom-bot → #atlanta-ops, #atlanta-orders
-   karen-bot → #lowes-handover
-
-□  chat_user_allow 配置（非 owner CSR）：
-   orders-bot: sarah/alex/maria 加入 #atlanta-orders 的 allow list
-
-□  SOUL.md 已部署到 Pod 的 PVC
-   路径：~/.ringclaw/SOUL.md（或 bot-specific path）
-
-□  DOMAIN.md 已预置关键业务数据
-   队员目录（名字 + 手机）
-   ZIP 规则
-   Lowe's 联系人（karen-bot）
-   差旅政策（finance-bot）
-
-□  OOB 审批配置：
-   owner DM 已解析（Bot 启动日志：bot DM chat resolved）
-   allow_group_mention_authorize 按需设置
-```
-
-### Agent→Agent 路由验证
+### 5.1 orders-bot Cron
 
 ```bash
-# 测试 tom-bot 能否接收 orders-bot 的路由消息
-# 在 #atlanta-ops 里直接发：
-# [AGENT_ROUTE:COMPLAINT]
-# 订单：TEST001 · 客户：Test +10000000000
-# 安抚 SMS：已发 ✅ · Task #TEST
-# @tom-bot 请调查
+# 每日晨检：超18小时未确认派单 → TEXT + TASK(URGENT) + SMS
+ringclaw cron add \
+  --bot orders-bot \
+  --id morning-check \
+  --schedule "0 8 * * *" \
+  --chat "#dispatch-ops" \
+  --actions "TEXT,ACTION:TASK,ACTION:SMS" \
+  --prompt-file ~/.ringclaw/prompts/orders-morning-check.md
 
-# 期望：tom-bot 在 5 秒内自动回复调查结论
-# 如果没有响应：检查 tom-bot 的 source_user_ids 是否包含发送者 ext ID
+# 派单后30分钟确认追踪（新增）→ TASK(URGENT) + SMS
+ringclaw cron add \
+  --bot orders-bot \
+  --id 30min-confirm \
+  --schedule "*/30 * * * *" \
+  --trigger post_dispatch \
+  --trigger-once \
+  --chat "#dispatch-ops" \
+  --actions "ACTION:TASK,ACTION:SMS" \
+  --prompt-file ~/.ringclaw/prompts/orders-30min-confirm.md
+# ACTION 能力说明：
+#   ACTION:TASK - 创建 URGENT 任务（标记未确认30分钟）
+#   ACTION:SMS  - 向队长发送第二次确认请求短信
+```
+
+### 5.2 tom-bot Heartbeat
+
+```bash
+# 每日 17:30 日摘要：TEXT + CARD(结构化日报) + TASK(超期升级)
+ringclaw heartbeat set \
+  --bot tom-bot \
+  --schedule "30 17 * * *" \
+  --chat "#atlanta-ops" \
+  --actions "TEXT,ACTION:CARD,ACTION:TASK" \
+  --prompt-file ~/.ringclaw/prompts/tom-daily-summary.md
+# ACTION 能力说明：
+#   ACTION:CARD - 推送结构化日报 Card（含完工/延迟/预约/班组缺口/最久Task）
+#   ACTION:TASK - 超期任务自动升级为 URGENT
+#   注意：Heartbeat 不含 SMS，不可添加 ACTION:SMS
+```
+
+### 5.3 karen-bot Cron
+
+```bash
+# 每日 17:00 完工通知批次准备：TEXT + CARD(含通知按钮) + NOTE(SLA台账)
+ringclaw cron add \
+  --bot karen-bot \
+  --id batch-sms-notify \
+  --schedule "0 17 * * *" \
+  --chat "@karen" \
+  --actions "TEXT,ACTION:CARD,ACTION:NOTE,ACTION:SMS,ACTION:MESSAGE" \
+  --prompt-file ~/.ringclaw/prompts/karen-batch-sms-notify.md
+# ACTION 能力说明：
+#   ACTION:CARD    - 通知准备 Card，含"发送批量完工通知"按钮（仍需人工点击）
+#   ACTION:NOTE    - 更新 SLA 台账当日摘要行
+#   ACTION:SMS     - 批量发送完工通知给 Lowe's 各门店协调员（Karen 点按钮触发）
+#   ACTION:MESSAGE - 发送完工通知到 #lowes-handover（Karen 点按钮触发）
+#   注意：批量通知需 Karen 点 Card 按钮或 /lowes-batch 触发
+
+# 每周五 17:00 Lowe's SLA 周报：CARD + NOTE
+ringclaw cron add \
+  --bot karen-bot \
+  --id lowes-sla-weekly \
+  --schedule "0 17 * * 5" \
+  --chat "#lowes-account" \
+  --actions "ACTION:CARD,ACTION:NOTE" \
+  --prompt-file ~/.ringclaw/prompts/karen-sla-weekly.md
+# ACTION 能力说明：
+#   ACTION:CARD - Lowe's SLA 周报 Card（含达标率、逾期风险）
+#   ACTION:NOTE - 台账追加周汇总行
+```
+
+### 5.4 beth-bot Cron
+
+```bash
+# 每周一 09:00 执行层周报：CARD（直接推 Beth DM）
+ringclaw cron add \
+  --bot beth-bot \
+  --id exec-weekly \
+  --schedule "0 9 * * 1" \
+  --chat "@beth" \
+  --actions "ACTION:CARD" \
+  --prompt-file ~/.ringclaw/prompts/beth-exec-weekly.md
+# ACTION 能力说明：
+#   ACTION:CARD - 结构化周报 Card（33店数据、关注门店高亮、本周建议询问）
+#   注意：不输出纯文字段落，直接 CARD
+```
+
+### 5.5 finance-bot Cron
+
+```bash
+# 每周四 15:00 分包商付款审批：CARD → Alex
+ringclaw cron add \
+  --bot finance-bot \
+  --id subcontractor-payment \
+  --schedule "0 15 * * 4" \
+  --chat "@alex" \
+  --actions "ACTION:CARD" \
+  --prompt-file ~/.ringclaw/prompts/finance-subcontractor-payment.md
+# ACTION 能力说明：
+#   ACTION:CARD - 付款审批 Card（付款清单明细 + [批准付款] 按钮）
+
+# 每月5日 Lowe's 应收对账：CARD + NOTE
+ringclaw cron add \
+  --bot finance-bot \
+  --id lowes-payment-reconciliation \
+  --schedule "0 0 5 * *" \
+  --chat "@alex" \
+  --actions "ACTION:CARD,ACTION:NOTE" \
+  --prompt-file ~/.ringclaw/prompts/finance-lowes-reconciliation.md
+# ACTION 能力说明：
+#   ACTION:CARD - 逾期应收明细 Card（含[发催款SMS给 Lowe's 协调员] 按钮）
+#   ACTION:NOTE - 对账台账追加月度行
+
+# 每月28日 月度结账（全自动5步）：NOTE + CARD × 3
+ringclaw cron add \
+  --bot finance-bot \
+  --id month-end-close \
+  --schedule "0 0 28 * *" \
+  --chat "#finance" \
+  --actions "ACTION:NOTE,ACTION:CARD" \
+  --prompt-file ~/.ringclaw/prompts/finance-month-end-close.md
+# ACTION 能力说明：
+#   Step1 ACTION:NOTE  - 对账台账汇总追加（自动）
+#   Step2 ACTION:CARD  - 付款审批 Card → Alex（[批准付款]）
+#   Step3 ACTION:NOTE  - 差旅分摊明细追加台账（自动）
+#   Step4 ACTION:CARD  - 成本超标预警 Card → Alex（[通知 Karen 启动合同复审]）
+#   Step5 ACTION:CARD  - 月度管理报告 Card → #exec + Beth DM（自动）
+```
+
+### 5.6 hr-bot Cron
+
+```bash
+# 每年 2月1日 旺季扩编：MESSAGE(各店) + NOTE(汇总台账)
+ringclaw cron add \
+  --bot hr-bot \
+  --id seasonal-crew-scaling \
+  --schedule "0 0 1 2 *" \
+  --chat "#hr-ops" \
+  --actions "ACTION:MESSAGE,ACTION:NOTE" \
+  --prompt-file ~/.ringclaw/prompts/hr-seasonal-scaling.md
+# ACTION 能力说明：
+#   ACTION:MESSAGE - 向全国各门店店长发送旺季缺口调查（含模板问题）
+#   ACTION:NOTE    - 初始化全国缺口汇总台账
+
+# 每季度1日 培训追踪：EVENT(创建培训场次) + SMS(提醒)
+ringclaw cron add \
+  --bot hr-bot \
+  --id quarterly-training \
+  --schedule "0 0 1 1,4,7,10 *" \
+  --chat "#hr-ops" \
+  --actions "ACTION:EVENT,ACTION:SMS" \
+  --prompt-file ~/.ringclaw/prompts/hr-quarterly-training.md
+# ACTION 能力说明：
+#   ACTION:EVENT - 为未完成培训人员创建下次培训场次
+#   ACTION:SMS   - 向未完成培训人员发送提醒短信
+
+# hr-bot Heartbeat（可选，Linda 配置）：NOTE + CARD
+ringclaw heartbeat set \
+  --bot hr-bot \
+  --schedule "0 9 1 * *" \
+  --chat "@linda" \
+  --actions "ACTION:NOTE,ACTION:CARD" \
+  --prompt-file ~/.ringclaw/prompts/hr-monthly-training-report.md
+# ACTION 能力说明：
+#   ACTION:NOTE - 月度培训完成率台账更新
+#   ACTION:CARD - 未完成人员汇总 Card → Linda DM
+#   注意：Heartbeat 不含 SMS
 ```
 
 ---
 
-## 五、Cron 配置脚本（Tom 执行一次）
+## §六 Demo 演示脚本（5分钟版本）
 
-```
-# 在 #atlanta-orders（Tom 是 owner）执行：
+### 分钟 0–1：派单自动追踪（orders-bot）
 
-/cron add "morning-check" "0 8 * * 1-5"
-  "查看 chat memory 中超过 18 小时未确认的派单，输出提醒列表到 Tom DM。"
+**场景**：展示派单后的自动确认追踪，强调"系统不等人"。
 
-/cron add "eod-summary" "30 17 * * 1-5"
-  "读取今日 #atlanta-orders chat memory，生成日结摘要：
-   今日派单数 / 已确认 / 未确认 / 明日预约数。纯文本发到 #atlanta-orders。"
+1. 在 #dispatch-ops 发起一个派单：`/dispatch store=ATL-07 crew=Team-B`
+2. 说明：派单已发出，系统记录派出时间。
+3. **30分钟后自动触发**（演示时可用 `--dry-run` 模拟）：
+   - `30min-confirm` Cron 检测到派单30分钟未确认
+   - 展示自动创建的 URGENT 任务："[URGENT] 派单未确认（30分钟）- ORD-2026-0603"
+   - 展示自动发出的 SMS 提醒（队长 Team-B 手机）
+4. 演示要点："以前这步需要人盯着，现在系统30分钟自动跟进，早高峰派单不再漏确认。"
 
-# 在 #lowes-handover（Karen 是 owner）执行：
-
-/cron add "lowe's-batch-prep" "0 17 * * 1-5"
-  "读取 #lowes-handover chat memory 中今日新增待传真完工单，
-   生成批次清单文本。不执行传真，等 Karen 手动 /lowes-batch send。"
-
-/cron add "lowe's-sla-weekly" "0 17 * * 5"
-  "读取 per-chat memory，生成本周 Lowe's SLA 报告文本，发到 #lowes-handover。"
-
-# 在 Beth DM（Beth 是 owner）执行：
-
-/cron add "exec-weekly" "0 9 * * 1"
-  "生成 Keller 全国 33 店本周运营快照：安装量 · CSAT · Lowe's SLA · 班组缺口。
-   每个指标带 delta。识别连续 3 周以上异常的门店。纯文本到 Beth DM。"
+**指令**（演示环境）：
+```bash
+ringclaw cron trigger --id 30min-confirm --bot orders-bot --dry-run
 ```
 
 ---
 
-## 六、Demo 演示脚本（5 分钟版本）
+### 分钟 1–2：晨间超期派单批量处理（orders-bot）
 
-### 分钟 0-1：Human→Agent 派单
+**场景**：展示 morning-check Cron 的批量处理能力。
 
+1. 模拟触发 morning-check：
+   ```bash
+   ringclaw cron trigger --id morning-check --bot orders-bot --dry-run
+   ```
+2. 展示 #dispatch-ops 输出：
+   - TEXT 列表（3条超18小时未确认派单）
+   - 自动创建的3个 URGENT 任务
+   - 自动发出的3条 SMS（各队长）
+3. 演示要点："以前 ops team 每天早上逐一检查，现在全自动，8点整就完成。"
+
+---
+
+### 分钟 2–3：Atlanta 运营日报 Card（tom-bot）
+
+**场景**：展示 Heartbeat 从"文字摘要"升级为"结构化 Card"。
+
+1. 模拟 tom-bot 17:30 Heartbeat：
+   ```bash
+   ringclaw heartbeat trigger --bot tom-bot --dry-run
+   ```
+2. 打开 #atlanta-ops，展示结构化 Card：
+   - 今日完成：47 单 / 延迟：3 单
+   - 明日预约：52 单
+   - 班组缺口：ATL-12（缺2人）
+   - 最久未处理 Task："电梯维修报告 - 已48小时"
+3. 展示同时自动升级为 URGENT 的任务。
+4. 演示要点："Tom 不用再写日报，Card 直接给所有人看结构化数据；超期任务也自动升级，不等 Tom 发现。"
+
+---
+
+### 分钟 3–4：Beth 周报 Card（beth-bot）
+
+**场景**：展示高管周报从文字段落升级为结构化 Card，Beth 打开 DM 直接看数据。
+
+1. 模拟 beth-bot 周一 09:00 Cron：
+   ```bash
+   ringclaw cron trigger --id exec-weekly --bot beth-bot --dry-run
+   ```
+2. 打开 Beth 的 DM，展示结构化周报 Card（不是文字段落）：
+   - 33 家门店本周数据（完工率、NPS 评分、逾期率）
+   - 关注门店高亮（红色）：ATL-07（NPS 跌至 3.2）、ATL-22（逾期率 18%）
+   - 本周建议询问：
+     1. ATL-07 NPS 连续两周下滑，是否需要启动门店审查？
+     2. 分包商 Team-C 上周两次未准时，是否考虑替换？
+     3. 旺季扩编进展 — 目前缺口 17 人，是否需要加快招聘？
+3. 演示要点："以前 Beth 收到的是一段文字，需要自己找关注点。现在打开 DM 直接看高亮，议题也准备好了。"
+
+---
+
+### 分钟 4–5：Finance 月结 Card（finance-bot）
+
+**场景**：展示月结从"3天手工整理"变为"Alex 点2次按钮"。
+
+1. 模拟 month-end-close Cron（月28日 00:00 触发）：
+   ```bash
+   ringclaw cron trigger --id month-end-close --bot finance-bot --dry-run
+   ```
+2. 展示自动执行的5个步骤（系统日志）：
+   ```
+   [00:00:01] Step1 NOTE → Lowe's 对账台账 ✓
+   [00:00:03] Step2 CARD → @alex（付款审批）✓
+   [00:00:04] Step3 NOTE → 差旅分摊台账 ✓
+   [00:00:06] Step4 CARD → @alex（成本超标预警）✓
+   [00:00:08] Step5 CARD → #exec + @beth ✓
+   ```
+3. 打开 Alex 的消息界面，展示2张等待审批的 Card：
+   - Card 1：付款审批（本月分包商总额 $184,000）→ [批准付款] 按钮
+   - Card 2：成本超标预警（ATL-07 超标 23%）→ [通知 Karen 启动合同复审] 按钮
+4. 打开 Beth DM，展示月度管理报告 Card。
+5. Alex 点击2次按钮，月结完成。
+6. 演示要点："以前月结需要 Alex 花3天手动整理5份报告。现在凌晨系统全跑完，Alex 早上来点2次按钮，Beth 已经有报告了。"
+
+---
+
+## §七 常见问题与排错
+
+### Q1：Cron 中的 ACTION:SMS 没有发出
+
+**可能原因**：
+1. Bot 对应的 RingCentral 账号未绑定手机号权限。
+2. 目标联系人手机号未在 Directory 中登记。
+
+**排查命令**：
+```bash
+ringclaw user list --filter has-phone
+ringclaw cron logs --id morning-check --bot orders-bot --tail 20
 ```
-[演示者控制台：打开 RC Team Messaging，进入 #atlanta-orders]
 
-演示者以 Sarah 身份说：
-"接下来我作为 Atlanta 的 CSR Sarah，派一张安装单给施工队长 Mike。"
+### Q2：Karen 点 Card 按钮后 SMS 没有发出
 
-[输入消息]
-@orders-bot dispatch A8821 to Mike, tomorrow 10am,
-1234 Main St Atlanta GA 30309, Engineered Oak 850sqft,
-customer Jenkins +1 404-555-0199
+**可能原因**：
+1. Lowe's 协调员手机号未在 Directory 中登记。
+2. Bot 对应的 RingCentral 账号 SMS 权限不足（需联系 Platform Team）。
 
-[3 秒等待，bot 回复]
-
-解说：
-"Bot 自动：查了 Mike 的手机号，创建了追踪 Task，
- 把标准派单 SMS 发到了 Mike 的真实手机。
- 之前这个操作要 5 分钟，现在 3 秒。"
+**排查命令**：
+```bash
+ringclaw card logs --bot karen-bot --action-type SMS --tail 10
 ```
 
-### 分钟 1-2：Agent→Agent 自动调查
+### Q3：tom-bot Heartbeat 没有推送 Card
 
-```
-[演示者]
-"现在我模拟一个客户投诉 SMS。
- 注意：接下来两个 Bot 之间的协作，完全不需要人介入。"
+**可能原因**：
+1. Heartbeat 的 `--actions` 中未包含 `ACTION:CARD`。
+2. #atlanta-ops 频道 Bot 权限不足。
 
-[在另一个终端模拟 inbound SMS，或直接在 #atlanta-orders 发路由消息]
-[AGENT_ROUTE:COMPLAINT]
-订单：A8810 · 客户：Jenkins +14045550199
-原文："Crew didn't show up...Worst service ever!!!"
-安抚 SMS：已发 ✅ · Task #T993
-@tom-bot 请调查
-
-[等待 10-15 秒]
-
-[#atlanta-ops 出现 tom-bot 的自动调查结论]
-
-解说：
-"orders-bot 发了投诉升级消息到 #atlanta-ops。
- tom-bot 在这个频道监听，它的 source_user_ids 里有 orders-bot 的 ID，
- 所以它认出这是可信消息，自动查了今天的 Call Log 和派工记录，
- 10 秒内发出了调查结论。Tom 什么都没有操作。"
+**排查命令**：
+```bash
+ringclaw heartbeat status --bot tom-bot
+ringclaw heartbeat logs --bot tom-bot --tail 20
 ```
 
-### 分钟 2-3：Human→Agent 决策执行
+### Q4：finance-bot month-end-close 只执行了部分步骤
 
-```
-[演示者以 Tom 身份]
-"Tom 读到调查结论，知道是 GPS 问题。他做决策："
+**可能原因**：
+Cron prompt 中的多步骤 ACTION 需要按顺序执行，若某步骤 NOTE 写入失败会中断后续。
 
-@orders-bot 给 Jenkins 发道歉短信，队长 20 分钟内到，送 $50 credit
-
-[Bot 回复：SMS delivered]
-
-解说：
-"Bot 不自主道歉，不自主承诺 credit。
- Tom 决策，Bot 执行。这是正确的人机分工。"
+**排查命令**：
+```bash
+ringclaw cron logs --id month-end-close --bot finance-bot --verbose
 ```
 
-### 分钟 3-4：Adaptive Card 跨部门协作
+---
 
-```
-[演示者]
-"最后展示跨部门协作。karen-bot 发现这是双路升级，
- 自动给 Beth 准备了一张可操作的 Card。"
+## §八 版本变更记录
 
-[展示 Beth DM，出现 Adaptive Card]
-  ⚠️ A8810 双路升级
-  Lowe's 质量标记 · SOP §7.3 · 截止 06/10
-  推荐联系：Lowe's Compliance +1 919-555-0188
-  [发短信给 Lowe's 安排回电]  [通知 Karen 我会处理]
+| 版本 | 日期 | 变更摘要 |
+|---|---|---|
+| v1.0 | 2026-06-03 | 初始版本，基于平台新 Cron/Heartbeat 能力规则（2026-06 生效）创建 |
 
-[Beth 点击按钮]
+---
 
-解说：
-"Bot 不打电话，它准备好所有上下文让 Beth 做最优决策。
- 点一下，SMS 发给 Lowe's，把球传给 Lowe's 主动回电。
- 这比 Bot 直接拨号更符合企业工作流。"
-```
-
-### 分钟 4-5：总结
-
-```
-"我们展示了三种协作：
-  · Human→Agent：Sarah 一句话，3 秒完成派单
-  · Agent→Agent：客户投诉，两个 Bot 自动协作，10 秒完成调查
-  · Agent 准备 → Human 决策：Card 给 Beth 完整上下文，Beth 点按钮执行
-
- 这套系统用了：ACTION:MESSAGE · ACTION:TASK · ACTION:NOTE · ACTION:CARD · SMS · Fax
- 没有用 PHONE_CALL，但通过 SMS 和 Card 做到了更好的联络效果。
-
- 护城河是 RC 的通信 API 深度——Team Message · SMS · Fax 这些
- 竞争对手做不到真实执行，我们可以。"
-```
+*文档由 Platform Team 维护。如有问题请联系 #platform-ops 频道。*

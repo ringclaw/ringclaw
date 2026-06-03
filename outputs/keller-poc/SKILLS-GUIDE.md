@@ -1,556 +1,393 @@
-# Skills 使用指南
+# SKILLS-GUIDE — Keller POC Bot 技能文档
 
-12 个 Skill，2 个 Bot（hr-bot · finance-bot），完整的激活机制与应用说明。
-
----
-
-## 一、Skill 是什么，怎么运作
-
-### Skill 在系统里的位置
-
-```
-每条消息到达时，System Prompt 的组装顺序：
-
-  ┌─────────────────────────────────────────┐
-  │ Slot 1: SOUL.md（身份，≤80 行）          │  ← 固定不变
-  │ Slot 2: Skills Index（所有 skill 的      │  ← 固定不变
-  │          名称 + 1 行描述，compact）       │
-  │ Slot 3: DOMAIN.md（领域知识，冻结）      │  ← 固定不变
-  │ Slot 4: OWNER.md（个人偏好，冻结）       │  ← 固定不变
-  │ Slot 5: Chat Memory（当前 chat 状态）    │  ← 每条消息读取
-  │ Slot 6: Active Skill（当前激活的 Skill） │  ← 按需注入
-  │          = SKILL.md 全文                 │
-  │ Slot 7: Entity Memory（当前业务对象）    │  ← 有 entity_id 才注入
-  └─────────────────────────────────────────┘
-```
-
-**关键机制**：
-- Slots 1-4 在 Session 开始时**冻结一次**（Frozen Snapshot），之后不变 → prefix cache 稳定
-- Slot 2（Skills Index）只有名称和描述，不占空间
-- Slot 6（Active Skill）只在**需要时**展开 SKILL.md 全文
-- 这样 SOUL 保持 ≤80 行，不会因为 Skill 内容增加而截断
-
-### Skill 激活的三种方式
-
-```
-方式 1：意图检测（自动）
-  用户消息包含 Skill 的触发关键词
-  Agent 读到 SOUL 里的 "skills:" 声明 + Skills Index
-  → 判断应激活哪个 Skill → 注入该 Skill 的 SKILL.md 全文
-
-方式 2：Agent 路由（自动）
-  另一个 Bot 发来包含路由标签的消息
-  [AGENT_ROUTE:HIRING_REQUEST] → hiring-jd-generator
-  [AGENT_ROUTE:COMPLAINT]      → complaint-investigation
-
-方式 3：定时触发（Cron）
-  Cron 的 prompt 直接指向某个 Skill
-  "触发 month-end-close skill，开始月结流程"
-```
-
-### Skill 与 SOUL 的分工
-
-```
-SOUL.md 说：我是谁，我有哪些 Skill，我的硬规则是什么
-  ↓
-SKILL.md 说：这件事具体怎么一步步做
-  ↓
-DOMAIN.md 说：做这件事需要的业务知识（联系人、规则、模板）
-  ↓
-Agent 说：理解了，按步骤执行
-```
+> 版本：v2.0（2026-06-03）
+> 本文档描述各 Bot 的 Skill 定义、触发方式与 ACTION 能力范围。
 
 ---
 
-## 二、HR Bot 的 7 个 Skills
+## §一 Skill 激活机制
 
-**Bot**：hr-bot（`~/.ringclaw/hr-bot/`）
-**适用对象**：全体 Keller 员工（员工 DM）+ HR 团队（#hr-private）
+Bot Skill 有三种激活方式：
 
----
+### 方式1：用户主动 @ 触发（Command）
 
-### Skill 1：pto-routing
+用户在对话中 @bot 并输入指令，Bot 根据匹配的 Skill 响应，可执行全部允许的 ACTION 类型（MESSAGE / NOTE / TASK / CARD / SMS 等）。
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/hr/pto-routing/SKILL.md` |
-| 触发 | 员工 DM 包含"请假" / "PTO" / "vacation" + 日期 |
-| 激活方式 | 意图检测（自动）|
-| Entity 类型 | `pto-request` |
-| 涉及 ACTION | ACTION:EVENT（日历）· ACTION:MESSAGE（跨 Chat，Linda OOB）|
-| 核心价值 | 请假原因隔离，队长只看日期，tom-bot 只看班组影响 |
+### 方式2：Heartbeat 触发（周期性后台运行）
 
-**SOUL 声明（hr-bot SOUL.md 的 skills 字段）**：
-```yaml
-skills:
-  - pto-routing        # 员工请假申请受理 + 审批路由
-```
+系统按配置频率自动激活 Bot Skill，无需用户触发。
 
-**典型触发消息**：
-```
-员工 DM hr-bot：
-  "请假申请 6/10-6/12，家庭原因"
-  "I need PTO next Monday and Tuesday"
-  "能帮我申请假期吗，6月10到12号"
-```
+**Heartbeat 默认允许的 ACTION 类型：**
+- MESSAGE — 发送消息到指定 Chat / DM
+- NOTE — 写入台账 / 记录
+- CARD — 推送结构化卡片
+- TASK — 创建或更新任务
 
-**完整执行链**：
-```
-员工 DM → 意图检测：PTO request
-→ pto-routing SKILL.md 注入
-→ Agent 按步骤：读余额 → 回复员工 → 通知队长（Linda OOB）→ ACTION:EVENT → 广播
-→ entity memory 写入：pto-{employee}-{date}.md
-```
+**Heartbeat 不含：**
+- SMS — Heartbeat 不发短信
+- VIDEO / PHONE_CALL — 需白名单开启，不在默认能力中
 
----
+### 方式3：定时触发（Cron）
 
-### Skill 2：hiring-jd-generator
+系统在指定时间（时刻 / 每日 / 每周 / 每月 / 每年）自动激活 Skill，无需用户触发。
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/hr/hiring-jd-generator/SKILL.md` |
-| 触发 A | Agent 路由：`[AGENT_ROUTE:HIRING_REQUEST]`（来自 tom-bot）|
-| 触发 B | Linda 输入：`生成 JD：{角色} · {门店}` |
-| 激活方式 | Agent 路由 + 意图检测 |
-| Entity 类型 | `hiring-request` |
-| 涉及 ACTION | ACTION:CARD（JD 草稿）· ACTION:NOTE（发布存档）· ACTION:TASK（跟进任务）|
-| 核心价值 | 用人部门提需求 → JD 自动生成 → Linda 一键审批 → 全员 SMS 发布 |
+**Cron 默认允许的 ACTION 类型：**
+- MESSAGE — 向指定 Chat / 用户发消息
+- NOTE — 写入台账 / 日志
+- TASK — 创建或更新任务（含设置 URGENT 优先级）
+- CARD — 推送结构化操作卡片（可含按钮，供人工一键确认）
+- SMS — 向指定手机号发短信
+- 跨 Chat ACTION — 可跨频道 / DM 推送内容
 
-**SOUL 声明**：
-```yaml
-skills:
-  - hiring-jd-generator  # 招聘需求沟通 + JD 自动生成
-```
+**Cron 不含（需特别注意）：**
+- VIDEO / PHONE_CALL — 需白名单开启，不在默认能力中
 
-**两种触发路径**：
-```
-路径 A（Agent→Agent）：
-  tom-bot 日摘要检测班组缺口 → Tom 确认招募 →
-  tom-bot ACTION:MESSAGE → hr-bot 收到 [AGENT_ROUTE:HIRING_REQUEST] →
-  hiring-jd-generator 激活 → 生成 JD Card
-
-路径 B（Human→Agent）：
-  Linda @hr-bot "生成 JD：CSR · Dallas · 本月内" →
-  意图检测 → hiring-jd-generator 激活
-```
-
-**JD 生成需要 DOMAIN.md 提供**：
-```markdown
-# hiring.role_templates（DOMAIN.md 中）
-§ CSR: 基础职责 · 薪资范围 · 工作强度 · 必需技能
-§ Installer W-2: 体力要求 · 材料专项 · 薪资范围
-§ Installer 1099: 1099 条款 · 保险要求 · 费率说明
-§ Crew Lead: 领导力要求 · 多材料要求 · 薪资范围
-
-# company_profile（DOMAIN.md 中）
-§ 公司介绍：Keller Interiors，Lowe's 27 年合作伙伴，33 门店 15 州
-§ 福利：医保（90天后）· PTO · 材料培训 · 工具支持
-§ 申请方式：hr@keller.com · SMS +1 404-555-0099
-```
+> **旧规则已废除**：此前"Cron / Heartbeat 触发的 Agent 回复 → 纯文本，不执行 ACTION 块"的约束已正式废除。Cron 和 Heartbeat 现在可在各自的默认允许范围内执行 ACTION。
 
 ---
 
-### Skill 3：new-hire-onboarding
+## §二 HR Bot Skills（共 7 个）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/hr/new-hire-onboarding/SKILL.md` |
-| 触发 A | hiring-jd-generator 录用确认后自动衔接 |
-| 触发 B | Linda 输入：`新员工入职 {姓名} {电话} {角色} {门店} {start_date}` |
-| 激活方式 | Skill 链（前置 Skill 触发）+ 意图检测 |
-| Entity 类型 | `onboarding` |
-| 涉及 ACTION | ACTION:EVENT × N（培训日历）· ACTION:MESSAGE × 2（通知店长）|
-| 核心价值 | 7 天 5 个接触点全自动，Linda 只处理异常 |
+HR Bot 由 Linda 负责，管理招聘、培训、旺季扩编等 HR 相关流程。
 
-**完整执行时间轴**：
-```
-录用确认
-  D-7：创建 entity + 欢迎 SMS
-  D-5：文件清单 SMS
-  D-3：排期 ACTION:EVENT × N + 培训提醒 SMS
-  D 0：晨间 SMS + 通知店长 ACTION:MESSAGE
-  D+1：系统配置 SMS（AgentRun 使用说明）
-  D+7：培训确认
-  D+14：Check-in SMS
-  D+30：试用期提醒（Cron 到 Linda DM）
-```
+### Skill 1：hire-request（招聘申请处理）
 
-**CSR 专项（入职培训内容）**：
-```markdown
-# onboarding.csr_training（SKILL.md references 目录）
-模块 1：@orders-bot 基础操作（dispatch 格式）
-模块 2：查询 Task 状态，改单流程
-模块 3：异常处理（ZIP 不匹配、投诉信号）
-```
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | Command（店长 @hr-bot） |
+| 触发指令 | `/hire [门店] [岗位] [人数]` |
+| 主要 ACTION | TASK（创建招聘任务）、NOTE（记录招聘台账）、MESSAGE（通知 Linda） |
+
+**说明：** 店长提交招聘需求后，Bot 自动创建 TASK 并通知 Linda，同时在台账中记录申请详情。
 
 ---
 
-### Skill 4：subcontractor-onboarding
+### Skill 2：onboarding-checklist（入职清单）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/hr/subcontractor-onboarding/SKILL.md` |
-| 触发 | Linda：`新分包商 {姓名} {手机} {专项材料} {所在州}` |
-| 激活方式 | 意图检测（"分包商" / "1099" / "subcontractor"）|
-| Entity 类型 | `subcontractor-onboard` |
-| 涉及 ACTION | ACTION:NOTE（合规台账）· Fax（政府表格）|
-| 联动 | 完成后触发 finance-bot 添加费率记录（Agent 路由）|
-| 核心价值 | 7 步入网，15 州不同政府表格自动匹配，保险核验 |
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | Command（HR @hr-bot） |
+| 触发指令 | `/onboard [员工姓名] [门店] [开始日期]` |
+| 主要 ACTION | TASK（创建入职任务列表）、CARD（入职进度 Card）、NOTE（台账记录） |
 
-**与 finance-bot 的联动**：
-```
-subcontractor-onboarding 完成
-→ [AGENT_ROUTE:CONTRACTOR_ONBOARDED] → finance-bot
-→ finance-bot 在 global memory 添加该分包商费率记录
-→ 下周起自动参与付款计算
-```
+**说明：** 为新员工生成标准入职 Checklist，推送结构化 Card 跟踪进度。
 
 ---
 
-### Skill 5：workers-comp-report
+### Skill 3：offboarding（离职处理）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/hr/workers-comp-report/SKILL.md` |
-| 触发 | 店长或员工：`工伤报告 {姓名} {门店}` / `accident report` |
-| 激活方式 | 意图检测（高优先级关键词匹配）|
-| Entity 类型 | `injury-report` |
-| 涉及 ACTION | Fax（各州劳工局，从 DOMAIN.md state_labor_requirements 读取）|
-| 敏感性 | 极高，所有内容仅存 entity memory，仅 Linda 可读 |
-| 核心价值 | 15 州不同截止时间和表格，自动匹配，防止漏报罚款 |
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | Command（HR @hr-bot） |
+| 触发指令 | `/offboard [员工姓名] [门店] [离职日期]` |
+| 主要 ACTION | TASK（创建离职任务）、NOTE（台账记录）、MESSAGE（通知相关人员） |
 
-**DOMAIN.md 必须预置（state_labor_requirements）**：
-```markdown
-§ GA: Georgia SBWC +14046563875 · 21天 · Form WC-1
-§ TX: Texas DWC 在线申报 · 8天
-§ CA: California DIR +19163273878 · 5天 · Form 5020
-...（15 个州）
-```
+**说明：** 启动离职流程，创建离职清单任务，通知门店和系统管理员。
 
 ---
 
-### Skill 6：training-scheduler
+### Skill 4：attendance-summary（出勤汇总）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/hr/training-scheduler/SKILL.md` |
-| 触发 A | Cron（季度强制培训提醒）|
-| 触发 B | tom-bot 路由 `[MATERIAL_LAUNCHED]`（新材料上线时）|
-| 触发 C | Linda：`schedule training LuxCore all-installers` |
-| 激活方式 | 三种均可 |
-| 涉及 ACTION | ACTION:EVENT（培训场次）|
-| 核心价值 | 合规强制培训自动追踪，续证提醒，报告 ≥95% 达标率 |
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | Command 或 Heartbeat |
+| 触发指令 | `/attendance [周期]` |
+| 主要 ACTION | CARD（出勤汇总 Card）、NOTE（台账更新） |
 
-**与新员工入职的关系**：
-- new-hire-onboarding 调用 training-scheduler 来排期专项培训
-- training-scheduler 独立于入职也能运行（季度全员合规检查）
+**说明：** 生成指定周期的出勤数据汇总，推送 Card 展示异常出勤门店。
 
 ---
 
-### Skill 7：seasonal-crew-scaling
+### Skill 5：performance-review（绩效评估）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/hr/seasonal-crew-scaling/SKILL.md` |
-| 触发 | Cron（每年 2 月 1 日自动触发）|
-| 激活方式 | 定时触发 |
-| Entity 类型 | `seasonal-hiring-round` |
-| 涉及 ACTION | ACTION:MESSAGE × N（各店缺口查询）|
-| 核心价值 | 春季旺季前 6 周启动，分包商网络批量激活，培训批次安排 |
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | Command（Linda @hr-bot） |
+| 触发指令 | `/perf-review [周期] [门店]` |
+| 主要 ACTION | CARD（绩效 Card）、NOTE（台账记录）、TASK（跟进任务） |
 
----
-
-## 三、Finance Bot 的 5 个 Skills
-
-**Bot**：finance-bot（`~/.ringclaw/finance-bot/`）
-**适用对象**：Alex Chen（owner）+ Beth / COO（只读查询）
+**说明：** 汇总指定门店绩效数据，生成评估 Card 供 Linda 审阅。
 
 ---
 
-### Skill 8：lowe's-payment-reconciliation
+### Skill 6：training-scheduler（培训排期）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/finance/lowe's-payment-reconciliation/SKILL.md` |
-| 触发 | Cron（每月 5 日）+ Alex：`reconcile lowe's {month}` |
-| 数据来源 | karen-bot #lowes-handover Note 台账（完工单记录）|
-| 涉及 ACTION | ACTION:CARD（月度报告）· [触发 karen-bot 催款传真] |
-| 核心价值 | Net-30 对账自动化，逾期超 60 天预警，合同争议窗口保护 |
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | **Cron（每季度第1日自动触发）** |
+| Cron 时间 | 每年 1/1、4/1、7/1、10/1 |
+| 主要 ACTION | **ACTION:EVENT**（为未完成培训人员创建下次培训场次）、**ACTION:SMS**（向未完成培训人员发送提醒短信） |
 
-**与 karen-bot 的联动**：
-```
-发现逾期应收
-→ [AGENT_ROUTE:PAYMENT_FOLLOWUP] → karen-bot
-→ karen-bot SendFax 催款传真到 Lowe's HQ
-```
+**说明（更新后）：**
+- Cron 自动检查培训完成情况，对所有**未完成培训人员**自动执行：
+  1. `ACTION:EVENT` — 在系统中为该人员创建下一季度培训场次预约
+  2. `ACTION:SMS` — 向该人员手机发送培训提醒短信（含培训日期、地点、课程信息）
+- Linda 无需手动触发，季度初自动完成全国培训排期与通知
+- Bot 同时输出本季度未完成人员汇总文本，便于 Linda 存档
 
----
-
-### Skill 9：subcontractor-payment
-
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/finance/subcontractor-payment/SKILL.md` |
-| 触发 | Cron（每周四 15:00）+ Alex 手动审批 |
-| 数据来源 | orders-bot chat memory（完工订单）· hr-bot entity memory（分包商费率）|
-| 涉及 ACTION | ACTION:CARD（付款清单，Alex 审批）|
-| 联动 | hr-bot CONTRACTOR_ONBOARDED → finance-bot 添加费率 |
-| 核心价值 | 每周自动生成付款清单，Alex 审批一次，SMS 通知分包商 |
-
-**年度 1099 汇总**（1 月 1 日 Cron）：
-```
-从全年 entity memory 汇总 → 生成 1099-NEC 数据
-→ ACTION:CARD 发 #finance（Alex 核查）
-→ Linda 系统生成正式表格
-截止：1/31（发给分包商）· 2/28（发给 IRS）
-```
+> 旧行为（已废除）：Cron 触发后仅输出纯 TEXT 提醒，需 Linda 手动跟进排期和通知。
 
 ---
 
-### Skill 10：cross-store-expense-tracking
+### Skill 7：seasonal-crew-scaling（旺季人员扩编）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/finance/cross-store-expense-tracking/SKILL.md` |
-| 触发 | Agent 路由：`[TRAVEL_APPROVED]`（来自 regional-coord-bot）|
-| 数据来源 | regional-coord-bot 差旅审批事件 |
-| 涉及 ACTION | ACTION:CARD（月度差旅报告，按成本中心分摊）|
-| 核心价值 | 跨店支援成本追踪到订单级精度，月报自动分摊 |
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | **Cron（每年 2月1日自动触发）** |
+| Cron 时间 | 每年 02/01 |
+| 主要 ACTION | **ACTION:MESSAGE**（向各门店店长发送旺季缺口查询消息）、**ACTION:NOTE**（初始化全国旺季缺口汇总台账） |
 
-**触发路径**：
-```
-区域协调员 Bot 批准跨店支援
-→ [AGENT_ROUTE:TRAVEL_APPROVED] from=regional-coord-bot
-→ finance-bot 接收（source_user_ids 包含 regional-coord-bot）
-→ cross-store-expense-tracking 激活
-→ 创建 entity: travel-{from}-{to}-{date}.md
-→ 4 天后 SMS 队长提交实际费用
-```
+**说明（更新后）：**
+- Cron 在 2/1 自动向**全国各门店店长**发送 `ACTION:MESSAGE`，内容包含：
+  - 旺季用工缺口调查模板问题（岗位需求、时间段、人数估算）
+  - 回复截止日期
+- 同时执行 `ACTION:NOTE`，在台账中初始化当年旺季扩编汇总表（各门店行，待回填数据）
+- Linda 次日收到各店回复汇总，无需逐一致电各门店询问
+
+> 旧行为（已废除）：Cron 触发后仅输出纯 TEXT 通知 Linda，Linda 需手动逐店联系。
 
 ---
 
-### Skill 11：material-cost-variance
+### HR Bot Heartbeat（可选，Linda 配置）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/finance/material-cost-variance/SKILL.md` |
-| 触发 | Agent 路由：`[ORDER_COMPLETED]`（来自 store-mgr bot）· Cron 每月 10 日 |
-| 涉及 ACTION | ACTION:CARD（月度成本分析）· [触发合同费率复查信号 → karen-bot] |
-| 核心价值 | 8% 超标阈值预警，连续 2 月超标触发 Lowe's 合同复审 |
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | Heartbeat（Linda 自定义配置频率） |
+| 主要 ACTION | ACTION:NOTE（月度培训完成率台账更新）、ACTION:CARD（未完成人员汇总 Card → Linda DM） |
 
-**与 karen-bot 的联动**：
-```
-材料成本连续 2 月超合同费率 8%
-→ [AGENT_ROUTE:CONTRACT_RATE_REVIEW] → karen-bot
-→ karen-bot 生成 Lowe's 合同复审材料，准备年度谈判
-```
+**说明：** Linda 可选开启 Heartbeat，定期自动更新培训台账并推送未完成人员汇总 Card 到她的 DM，无需手动查询。
 
 ---
 
-### Skill 12：month-end-close
+## §三 Finance Bot Skills（共 5 个）
 
-| 属性 | 内容 |
-|------|------|
-| 文件 | `skills/finance/month-end-close/SKILL.md` |
-| 触发 | Cron（每月 28 日）|
-| 依赖 | Skills 8-11 的结果都必须在 entity memory 里 |
-| 涉及 ACTION | ACTION:CARD（管理报告，发 #exec + Beth DM）|
-| 核心价值 | 五步关账自动化，月末管理报告一键生成 |
+Finance Bot 由 Alex 负责，管理分包商付款、Lowe's 对账、月结等财务流程。
 
-**五步执行顺序**：
-```
-Step 1: lowe's-payment-reconciliation（逾期催款）
-Step 2: subcontractor-payment（月末付款结清）
-Step 3: cross-store-expense-tracking（差旅分摊）
-Step 4: material-cost-variance（成本分析）
-Step 5: 汇总 → ACTION:CARD 月度管理报告 → #exec + Beth DM
-```
+### Skill 8：lowe's-payment-reconciliation（Lowe's 付款对账）
 
----
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | **Cron（每月5日自动触发）** |
+| Cron 时间 | 每月 05 日 |
+| 主要 ACTION | **ACTION:CARD**（逾期应收明细 Card → Alex）、**ACTION:NOTE**（对账台账追加月度行） |
 
-## 四、Skills 全景图
+**说明（更新后）：**
+- Cron 在每月5日自动执行：
+  1. `ACTION:CARD` — 向 Alex 推送逾期应收明细 Card，Card 包含：
+     - 本月 Lowe's 逾期未付款项明细（项目号、金额、逾期天数）
+     - **[发催款 SMS 给协调员]** 操作按钮（点击后触发实际 SMS 发送，仍需人工确认）
+  2. `ACTION:NOTE` — 在对账台账中追加本月度对账行（日期、应收、实收、差额）
+- Alex 只需在收到 Card 时点按钮确认是否发催款 SMS，无需手动整理数据
 
-### 按触发方式分类
-
-```
-定时触发（Cron/Heartbeat）：
-  seasonal-crew-scaling    ← 每年 2/1
-  training-scheduler       ← 每季度
-  subcontractor-payment    ← 每周四 15:00
-  lowe's-payment-recon     ← 每月 5 日
-  material-cost-variance   ← 每月 10 日
-  month-end-close          ← 每月 28 日
-
-人工触发（Human→Agent）：
-  pto-routing              ← 员工 DM
-  hiring-jd-generator      ← Linda 输入
-  new-hire-onboarding      ← Linda 输入
-  subcontractor-onboarding ← Linda 输入
-  workers-comp-report      ← 店长/员工 DM
-  training-scheduler       ← Linda 输入（也可 Cron）
-
-Agent 路由触发（Agent→Agent）：
-  hiring-jd-generator      ← [HIRING_REQUEST] from tom-bot
-  new-hire-onboarding      ← hiring-jd-generator 完成后自动
-  cross-store-expense      ← [TRAVEL_APPROVED] from regional-coord-bot
-  material-cost-variance   ← [ORDER_COMPLETED] from store-mgr-bot
-  lowe's-payment-recon     ← [FAX_DELIVERED] from karen-bot
-```
-
-### 按 Bot 分类
-
-```
-hr-bot（7 个 Skills）：
-  pto-routing · hiring-jd-generator · new-hire-onboarding
-  subcontractor-onboarding · workers-comp-report
-  training-scheduler · seasonal-crew-scaling
-
-finance-bot（5 个 Skills）：
-  lowe's-payment-reconciliation · subcontractor-payment
-  cross-store-expense-tracking · material-cost-variance
-  month-end-close
-```
-
-### Skills 之间的依赖链
-
-```
-hiring-jd-generator
-    └→ new-hire-onboarding（录用确认后）
-        └→ training-scheduler（排期专项培训）
-        └→ [CONTRACTOR_ONBOARDED] → finance-bot（1099）
-
-subcontractor-onboarding
-    └→ training-scheduler（材料专项培训）
-    └→ [CONTRACTOR_ONBOARDED] → finance-bot
-
-lowe's-payment-reconciliation
-    └→ [PAYMENT_FOLLOWUP] → karen-bot（催款传真）
-
-material-cost-variance
-    └→ [CONTRACT_RATE_REVIEW] → karen-bot（合同复审信号）
-
-cross-store-expense-tracking
-    ← [TRAVEL_APPROVED] from regional-coord-bot
-
-month-end-close
-    ← 依赖 Skills 8-11 的 entity memory 已写入
-    └→ ACTION:CARD 月度管理报告 → beth-bot → #exec
-```
+> 旧行为（已废除）：Cron 触发后仅输出纯 TEXT 对账报告，Alex 需手动操作后续步骤。
 
 ---
 
-## 五、如何配置一个 Bot 使用这些 Skills
+### Skill 9：subcontractor-payment（分包商付款审批）
 
-### Step 1：在 SOUL.md 声明激活的 Skills
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | **Cron（每周四 15:00 自动触发）** |
+| Cron 时间 | 每周四 15:00 |
+| 主要 ACTION | **ACTION:CARD**（付款审批 Card → Alex） |
 
-```markdown
-# hr-bot SOUL.md
+**说明（更新后）：**
+- Cron 在每周四 15:00 自动向 Alex 推送付款审批 Card，Card 包含：
+  - 本周待支付分包商清单（姓名、工程项目、金额、工时汇总）
+  - **[批准付款]** 操作按钮
+- Alex 点击 [批准付款] 后系统自动处理付款流程
+- 无需 Alex 主动查看列表或手动操作，Card 直接送达 DM 等待审批
 
-## Skills
-skills:
-  - pto-routing
-  - hiring-jd-generator
-  - new-hire-onboarding
-  - subcontractor-onboarding
-  - workers-comp-report
-  - training-scheduler
-  - seasonal-crew-scaling
-```
-
-### Step 2：Skills 部署到 Pod 的 skills/ 目录
-
-```
-~/.ringclaw/
-├── SOUL.md
-├── memory/
-│   ├── global.md          ← DOMAIN.md（业务知识）
-│   ├── user/<id>.md       ← 每个员工的记忆
-│   ├── chat/<id>.md       ← 每个频道的上下文
-│   └── entities/          ← 业务实体状态
-│       ├── pto-*.md
-│       ├── onboarding-*.md
-│       └── hiring-*.md
-└── skills/
-    ├── pto-routing/SKILL.md
-    ├── hiring-jd-generator/SKILL.md
-    │   └── references/role_templates.md
-    ├── new-hire-onboarding/SKILL.md
-    │   └── references/orders-bot-quick-guide.md
-    ├── subcontractor-onboarding/SKILL.md
-    ├── workers-comp-report/SKILL.md
-    ├── training-scheduler/SKILL.md
-    └── seasonal-crew-scaling/SKILL.md
-```
-
-### Step 3：Skills Index 自动注入 System Prompt
-
-RingClaw（Hermes 模式）启动时扫描 skills/ 目录，构建 compact index：
-
-```
-[Skills Available]
-pto-routing              · 员工请假申请受理 + 审批路由
-hiring-jd-generator      · 招聘需求沟通 + JD 自动生成
-new-hire-onboarding      · 新员工入职全流程
-subcontractor-onboarding · 1099 分包安装工入网流程
-workers-comp-report      · 工地受伤事故报告
-training-scheduler       · 员工和分包商培训安排
-seasonal-crew-scaling    · 旺季分包商扩编计划
-```
-
-这 7 行就是 system prompt 里的全部技能描述，
-不占 SOUL 的 2000 chars 预算。
-
-### Step 4：Skill 激活时注入全文
-
-Agent 判断需要 `hiring-jd-generator` 时，system prompt 追加：
-
-```xml
-<context type="skill" name="hiring-jd-generator" state="initial">
-[SKILL.md 全文 ~200 行]
-当前 entity：{若已创建则附带 entity memory}
-</context>
-```
-
-Agent 按 SKILL.md 的步骤逐步执行。
-
-### Step 5：配置 Cron（一次性，owner 权限）
-
-```bash
-# 在 #hr-private（Linda 是 owner）执行：
-
-/cron add "seasonal-hiring" "0 9 1 2 *"
-  "触发 seasonal-crew-scaling skill：
-   向各门店查询旺季需求，启动分包商招募流程。"
-
-/cron add "quarterly-training" "0 9 1 */3 *"
-  "触发 training-scheduler skill：
-   检查强制培训完成率，发送提醒 SMS 给未完成人员。"
-
-# 在 #finance（Alex 是 owner）执行：
-
-/cron add "weekly-payroll" "0 15 * * 4"
-  "触发 subcontractor-payment skill：
-   汇总本周完工订单，生成付款清单，等 Alex 审批。"
-
-/cron add "month-end" "0 9 28 * *"
-  "触发 month-end-close skill：按五步完成月结。"
-```
+> 旧行为（已废除）：Cron 触发后输出纯 TEXT 付款清单，需 Alex 看到后手动操作付款流程。
 
 ---
 
-## 六、一句话总结每个 Skill 的价值
+### Skill 10：expense-reconciliation（费用对账）
 
-| Skill | 解决的痛点 | 节省的时间 |
-|-------|-----------|-----------|
-| pto-routing | 请假信息泄露 + 审批等待 | 当天完成 vs 邮件来回 |
-| hiring-jd-generator | JD 手写 + 发布分散 | 1 分钟草稿 vs 1-2 小时 |
-| new-hire-onboarding | 入职步骤遗漏 + 人工跟进 | 7 天自动 vs 手工核对清单 |
-| subcontractor-onboarding | 15 州表格搞混 + 漏报 | 自动匹配 vs 手查法规 |
-| workers-comp-report | 各州截止日不同，漏报有罚款 | 自动识别 vs 忘记 |
-| training-scheduler | 培训完成率不达标 + 证书过期 | 自动追踪 vs Excel 表格 |
-| seasonal-crew-scaling | 旺季前分包商不够用 | 提前 6 周自动启动 |
-| lowe's-payment-recon | 逾期应收发现太晚，超争议窗口 | 月度自动对账 vs 季度手查 |
-| subcontractor-payment | 每周手工整理付款 Excel | Bot 汇总，Alex 一次审批 |
-| cross-store-expense | 差旅费账不清，成本中心乱 | 事件驱动追踪，到订单级精度 |
-| material-cost-variance | 不知道哪个门店超支，Lowe's 谈判无依据 | 月度自动分析，信号自动发给 Karen |
-| month-end-close | 月结需要 3 天手工整理 | Bot 五步关账，Alex 审批关键节点 |
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | Command（Alex @finance-bot） |
+| 触发指令 | `/expense-recon [周期] [门店]` |
+| 主要 ACTION | CARD（费用对账 Card）、NOTE（台账记录） |
+
+**说明：** 生成指定周期的差旅与运营费用对账，推送 Card 供 Alex 审核。
+
+---
+
+### Skill 11：invoice-tracking（发票跟踪）
+
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | Command 或 Heartbeat |
+| 触发指令 | `/invoice-track [客户] [状态]` |
+| 主要 ACTION | CARD（发票状态 Card）、NOTE（台账更新）、TASK（逾期跟进任务） |
+
+**说明：** 跟踪未结发票状态，对逾期发票自动创建跟进 TASK 并推送汇总 Card。
+
+---
+
+### Skill 12：month-end-close（月结自动化）
+
+| 属性 | 值 |
+|------|-----|
+| 触发方式 | **Cron（每月28日自动触发，执行完整5步月结流程）** |
+| Cron 时间 | 每月 28 日 |
+| 主要 ACTION | 见下方5步流程 |
+
+**月结5步执行流程（更新后，全部由 Cron 自动执行）：**
+
+| 步骤 | ACTION 类型 | 内容 | 是否需人工 |
+|------|------------|------|-----------|
+| Step 1 | **ACTION:NOTE** | 对账台账汇总行追加（本月总收入、总支出、净利润） | 自动，无需等待 |
+| Step 2 | **ACTION:CARD** | 付款审批 Card → Alex，含 **[批准付款]** 按钮 | Alex 点按钮批准 |
+| Step 3 | **ACTION:NOTE** | 差旅分摊明细追加台账（各门店费用分摊明细行） | 自动 |
+| Step 4 | **ACTION:CARD** | 成本超标预警 Card → Alex，超标门店高亮，含 **[通知 Karen 启动合同复审]** 按钮 | Alex 点按钮确认 |
+| Step 5 | **ACTION:CARD** | 月度管理报告 Card → #exec 频道 + Beth DM（含关键指标、门店排名、本月亮点） | 自动推送 |
+
+**场景说明（更新后）：**
+- Cron 在月28日自动完成全部5步，无需 Alex 手动触发任何步骤
+- Alex 早上来时，发现 `#finance` 有 2 张 Card 等待审批（Step 2 付款审批 + Step 4 成本超标确认），Beth DM 有管理报告 Card（Step 5）
+- 整个月结从"3天手工整理"变成"Alex 点 2 次按钮"
+
+> 旧行为（已废除）：Cron 触发后输出纯 TEXT 提醒，Alex 需手动执行全部5个步骤，耗时约3天。
+
+---
+
+## §四 Skills 全景图 — 按触发方式分类
+
+### 4.1 Command 触发（用户主动发起）
+
+| Bot | Skill | 指令 | 主要 ACTION |
+|-----|-------|------|------------|
+| hr-bot | hire-request | `/hire` | TASK、NOTE、MESSAGE |
+| hr-bot | onboarding-checklist | `/onboard` | TASK、CARD、NOTE |
+| hr-bot | offboarding | `/offboard` | TASK、NOTE、MESSAGE |
+| hr-bot | performance-review | `/perf-review` | CARD、NOTE、TASK |
+| finance-bot | expense-reconciliation | `/expense-recon` | CARD、NOTE |
+| finance-bot | invoice-tracking | `/invoice-track` | CARD、NOTE、TASK |
+| orders-bot | dispatch-confirm | `/confirm-dispatch` | TASK、SMS、NOTE |
+| karen-bot | batch-sms-notify | `/lowes-batch` | SMS、NOTE、CARD |
+| tom-bot | ops-query | `/ops-query` | CARD、NOTE |
+
+### 4.2 Heartbeat 触发（周期性自动运行）
+
+| Bot | Skill | 频率 | 主要 ACTION |
+|-----|-------|------|------------|
+| tom-bot | daily-summary | 17:30 每日 | **TEXT 摘要 + ACTION:CARD**（结构化日报 Card → #atlanta-ops）+ **ACTION:TASK**（超期任务升级 URGENT） |
+| hr-bot | training-completion-tracker | Linda 自定义 | **ACTION:NOTE**（培训完成率台账）+ **ACTION:CARD**（未完成汇总 Card → Linda DM） |
+| finance-bot | invoice-tracking | 每日 | CARD（发票状态）、NOTE、TASK |
+| hr-bot | attendance-summary | 每周 | CARD（出勤汇总）、NOTE |
+
+> 注意：Heartbeat 不含 SMS、VIDEO、PHONE_CALL。
+
+### 4.3 Cron 触发（指定时间自动执行，含 ACTION）
+
+| Bot | Skill | Cron 时间 | 主要 ACTION（更新后） |
+|-----|-------|----------|---------------------|
+| orders-bot | morning-check | 每日 08:00 | TEXT 列表 + **ACTION:TASK**（URGENT，未确认派单）+ **ACTION:SMS**（向队长发提醒） |
+| orders-bot | 30min-confirm（新增） | 派单后30分钟 | **ACTION:TASK**（URGENT，标记未确认）+ **ACTION:SMS**（第二次确认请求） |
+| tom-bot | — | 由 Heartbeat 替代 | 见 Heartbeat 行 |
+| karen-bot | batch-sms-notify | 每日 17:00 | TEXT 清单 + **ACTION:CARD**（SMS 通知准备 Card，含"执行批量 SMS 通知"按钮）+ **ACTION:NOTE**（SLA 台账摘要） |
+| karen-bot | lowes-sla-weekly | 每周五 17:00 | **ACTION:CARD**（Lowe's SLA 周报 Card）+ **ACTION:NOTE**（台账追加周汇总行） |
+| beth-bot | exec-weekly | 每周一 09:00 | **ACTION:CARD**（结构化周报 Card，关注门店高亮 → Beth DM） |
+| finance-bot | subcontractor-payment | 每周四 15:00 | **ACTION:CARD**（付款审批 Card → Alex，含 [批准付款] 按钮） |
+| finance-bot | lowe's-payment-reconciliation | 每月 05 日 | **ACTION:CARD**（逾期应收明细 Card → Alex，含 [发催款 SMS] 按钮）+ **ACTION:NOTE**（对账台账月度行） |
+| finance-bot | month-end-close | 每月 28 日 | 5步自动执行：**NOTE×2 + CARD×3**（付款审批 + 成本预警 + 月报，Alex 仅需点2次按钮） |
+| hr-bot | seasonal-crew-scaling | 每年 02/01 | **ACTION:MESSAGE**（向各店发旺季缺口查询）+ **ACTION:NOTE**（缺口汇总台账初始化） |
+| hr-bot | training-scheduler | 每季度 1 日 | **ACTION:EVENT**（创建培训场次）+ **ACTION:SMS**（向未完成人员发提醒短信） |
+
+---
+
+## §五 ACTION 类型说明与权限范围
+
+| ACTION 类型 | 说明 | Command | Heartbeat | Cron |
+|------------|------|---------|-----------|------|
+| MESSAGE | 发送消息到 Chat / DM | ✓ | ✓ | ✓ |
+| NOTE | 写入台账 / 日志记录 | ✓ | ✓ | ✓ |
+| TASK | 创建/更新任务（含 URGENT 优先级） | ✓ | ✓ | ✓ |
+| CARD | 推送结构化操作卡片（可含按钮） | ✓ | ✓ | ✓ |
+| SMS | 向手机号发短信 | ✓ | ✗ | ✓ |
+| EVENT | 创建日历 / 培训场次 | ✓ | ✓ | ✓ |
+| VIDEO | 视频通话 | 白名单 | 白名单 | 白名单 |
+| PHONE_CALL | 语音通话 | 白名单 | 白名单 | 白名单 |
+
+---
+
+## §六 一句话总结表格
+
+| Bot | Skill | 触发方式 | 自动化效果（更新后） |
+|-----|-------|---------|-------------------|
+| hr-bot | training-scheduler | Cron 每季度 | 自动为未完成培训员工创建场次预约 + 发 SMS 提醒，Linda 无需手动排期 |
+| hr-bot | seasonal-crew-scaling | Cron 每年 2/1 | 自动向全国各店发 MESSAGE 查询旺季缺口 + 初始化台账，Linda 次日直接看汇总 |
+| hr-bot | training-completion-tracker | Heartbeat | 自动更新培训台账 + 推 Card 给 Linda，无需手动查询 |
+| finance-bot | lowe's-payment-reconciliation | Cron 每月 5 日 | 自动推逾期应收 Card（含一键催款 SMS 按钮）+ 台账记录，Alex 点按钮即完成 |
+| finance-bot | subcontractor-payment | Cron 每周四 | 自动推付款审批 Card（含批准按钮）到 Alex DM，无需 Alex 主动查清单 |
+| finance-bot | month-end-close | Cron 每月 28 日 | 5步月结全自动执行，Alex 仅需点 2 次按钮，整个月结从"3天手工"变"2次点击" |
+| orders-bot | morning-check | Cron 每日 08:00 | 自动创建超时未确认派单 URGENT 任务 + SMS 通知队长，无需人工筛查 |
+| orders-bot | 30min-confirm | Cron 派单后30分钟 | 自动二次确认提醒，创建 URGENT 任务 + 发 SMS，关闭确认盲区 |
+| karen-bot | batch-sms-notify | Cron 每日 17:00 | 推 SMS 通知准备 Card（含一键执行按钮）+ 台账更新，比输命令更自然，比全自动更安全 |
+| karen-bot | lowes-sla-weekly | Cron 每周五 | 自动推 Lowe's SLA 周报 Card + 台账周汇总，Karen 无需手动整理周报 |
+| beth-bot | exec-weekly | Cron 每周一 | 自动推结构化周报 Card 到 Beth DM，关注门店高亮，Beth 一眼掌握全局 |
+| tom-bot | daily-summary | Heartbeat 17:30 | 结构化日报 Card 发 #atlanta-ops + 超期任务自动升级 URGENT，Tom 不再依赖文字摘要 |
+
+---
+
+## §七 场景叙事速览
+
+### Case 2：tom-bot 日摘要（Heartbeat 17:30）
+
+**更新前：** Heartbeat 17:30 触发，#atlanta-ops 收到一段文字摘要，Tom 阅读后手动处理超期任务。
+
+**更新后：** Heartbeat 17:30 触发，Tom 在 #atlanta-ops 看到结构化 Card，Card 包含：
+- 今日完成派单数 / 延迟派单数
+- 明日预约汇总
+- 班组缺口提示
+- 最久未处理 Task（含负责人）
+
+超期 Task 在 Cron 触发时自动升级为 URGENT，不等 Tom 手动处理。
+
+---
+
+### Case 3：beth-bot 周报（Cron 周一 09:00）
+
+**更新前：** Cron 周一 09:00 触发，Beth DM 收到文字段落格式的周报，需逐段阅读。
+
+**更新后：** Cron 周一 09:00 推送结构化 Card 到 Beth DM，Card 包含：
+- 全国33店核心数据（完成率、收入、超期单）
+- 关注门店高亮（指标异常门店自动标记）
+- 本周建议询问事项
+
+Beth 一眼掌握全国态势，无需逐行阅读文字。
+
+---
+
+### Case 4：karen-bot 批量 SMS 通知（Cron 17:00）
+
+**更新前：** Cron 17:00 触发，输出纯文字清单，Karen 看到后需手动输入 `/lowes-batch` 触发操作。
+
+**更新后：** Cron 17:00 推送 SMS 通知准备 Card（不是文字），Card 包含当日完工通知清单明细 + **[执行批量 SMS 通知]** 按钮。Karen 点按钮触发，比输入命令更自然，比全自动更安全（SMS 仍需一次人工确认）。
+
+> 注意：Cron 推送 CARD 作为中间层，让 Karen 完成人工确认后再发批量 SMS 通知。
+
+---
+
+### Case 5：finance-bot 月结（Cron 每月 28 日）
+
+**更新前：** Cron 月28日触发，输出 TEXT 提醒，Alex 需手动执行5个步骤，耗时约3天。
+
+**更新后：** Cron 月28日自动完成全部5步：
+1. 台账汇总自动写入（NOTE）
+2. 付款审批 Card 推给 Alex（Card + [批准付款] 按钮）
+3. 差旅分摊明细自动写入台账（NOTE）
+4. 成本超标预警 Card 推给 Alex（Card + [通知 Karen 启动合同复审] 按钮）
+5. 月度管理报告 Card 推给 #exec + Beth DM（CARD）
+
+Alex 早上来发现 `#finance` 有 2 张 Card 等待批准，Beth DM 有管理报告 Card。整个月结从"3天手工整理"变成"Alex 点2次按钮"。
+
+---
+
+### Case 6：hr-bot 旺季扩编（Cron 每年 2/1）
+
+**更新前：** Cron 2/1 触发，输出 TEXT 通知 Linda，Linda 需逐一致电各门店询问旺季用工缺口。
+
+**更新后：** Cron 2/1 自动向全国各门店店长发送 MESSAGE，内含旺季用工调查模板。同时在台账初始化当年旺季扩编汇总表。Linda 次日收到各店回复汇总，无需逐个打电话询问，节省约1天的信息收集工作。
