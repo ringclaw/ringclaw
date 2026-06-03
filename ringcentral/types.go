@@ -131,6 +131,24 @@ type WSSubscriptionBody struct {
 	DeliveryMode WSDeliveryMode `json:"deliveryMode"`
 }
 
+// MessageStoreEvent is the payload delivered when the
+// /restapi/v1.0/account/~/extension/~/message-store filter fires.
+// Changes carries one entry per affected message type; handlers should
+// query the message-store API to fetch concrete records.
+type MessageStoreEvent struct {
+	ID              int64                `json:"id,omitempty"`
+	ExtensionID     int64                `json:"extensionId,omitempty"`
+	LastUpdatedTime string               `json:"lastUpdatedTime,omitempty"`
+	Changes         []MessageStoreChange `json:"changes,omitempty"`
+}
+
+// MessageStoreChange describes one type of message-store delta.
+type MessageStoreChange struct {
+	Type         string `json:"type"`
+	NewCount     int    `json:"newCount,omitempty"`
+	UpdatedCount int    `json:"updatedCount,omitempty"`
+}
+
 // WSDeliveryMode specifies the transport type.
 type WSDeliveryMode struct {
 	TransportType string `json:"transportType"`

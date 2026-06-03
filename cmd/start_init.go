@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/api"
@@ -254,6 +256,55 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 			go hbRunner.Start(ctx)
 		}
 	}
+}
+
+// buildMessageStoreHandler wires the inbound message-store websocket
+// path to concrete message-store reads and hands fetched records to the
+// messaging-layer processor that handles CONFIRM, complaint, and fax
+// notifications.
+func buildMessageStoreHandler(cfg *config.Config, _ *messaging.Handler) ringcentral.MessageStoreHandler {
+	alertChatID := ""
+	routeChatID := ""
+	if len(cfg.RC.ChatIDs) > 0 {
+		alertChatID = strings.TrimSpace(cfg.RC.ChatIDs[0])
+		routeChatID = alertChatID
+	}
+	if len(cfg.RC.ChatIDs) > 1 {
+		routeChatID = strings.TrimSpace(cfg.RC.ChatIDs[1])
+	}
+	processor := messaging.NewInboundMessageStoreProcessor(messaging.InboundMessageStoreConfig{
+		AlertChatID:  alertChatID,
+		RouteChatID:  routeChatID,
+		Capabilities: cfg.RC.Capabilities,
+	})
+	return func(ctx context.Context, client *ringcentral.Client, evt ringcentral.MessageStoreEvent) {
+		for _, change := range evt.Changes {
+			msgType := strings.TrimSpace(change.Type)
+			if msgType == "" || change.NewCount <= 0 {
+				continue
+			}
+			list, err := client.ListMessages(ctx, ringcentral.MessageStoreListOptions{
+				MessageType: msgType,
+				Direction:   "Inbound",
+				PerPage:     inboundPerPage(change.NewCount),
+				DateFrom:    time.Now().Add(-15 * time.Minute).UTC().Format(time.RFC3339),
+			})
+			if err != nil {
+				slog.Warn("message-store list failed", "component", "start", "messageType", msgType, "error", err)
+				continue
+			}
+			for _, record := range list.Records {
+				processor.HandleRecord(ctx, client, record)
+			}
+		}
+	}
+}
+
+func inboundPerPage(newCount int) int {
+	if newCount > 5 {
+		return newCount
+	}
+	return 5
 }
 
 // checkAliasConflicts warns about alias conflicts at startup.

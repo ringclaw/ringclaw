@@ -124,6 +124,9 @@ func runRuntimeStart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := materializeRuntimeBotContent(cfg); err != nil {
+		return err
+	}
 	if err := os.Setenv("RINGCLAW_CONFIG", configPath); err != nil {
 		return fmt.Errorf("set RINGCLAW_CONFIG: %w", err)
 	}
@@ -239,6 +242,20 @@ func writeClaimedRuntimeConfig(path string, cfg *config.Config) (string, error) 
 		return "", err
 	}
 	return path, nil
+}
+
+func materializeRuntimeBotContent(cfg *config.Config) error {
+	if cfg == nil || strings.TrimSpace(cfg.BotContent.SoulMarkdown) == "" {
+		return nil
+	}
+	resolved := cfg.Persona.Resolved()
+	if err := os.MkdirAll(filepath.Dir(resolved.SoulFile), 0o700); err != nil {
+		return fmt.Errorf("create SOUL dir: %w", err)
+	}
+	if err := os.WriteFile(resolved.SoulFile, []byte(cfg.BotContent.SoulMarkdown), 0o600); err != nil {
+		return fmt.Errorf("write SOUL.md: %w", err)
+	}
+	return nil
 }
 
 func startRuntimeHeartbeat(ctx context.Context, opts runtimeStartOptions, cfg *config.Config) func() {

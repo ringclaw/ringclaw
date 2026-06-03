@@ -36,6 +36,10 @@ type MessageHandler func(ctx context.Context, replyClient *Client, readClient *C
 // MUST NOT dispatch it to the agent.
 type MentionAuthorizeFunc func(ctx context.Context, replyClient *Client, readClient *Client, post Post)
 
+// MessageStoreHandler is invoked for inbound message-store events such
+// as SMS, MMS, and Fax notifications.
+type MessageStoreHandler func(ctx context.Context, client *Client, evt MessageStoreEvent)
+
 // Monitor manages the WebSocket connection for receiving messages.
 // The bot client is required and used for WS connection and replies.
 // The private client is optional and used for reading other chats.
@@ -58,6 +62,10 @@ type Monitor struct {
 	// original post is NOT dispatched to the message handler; the
 	// callback owns the post.
 	mentionAuthorize MentionAuthorizeFunc
+	// messageStoreHandler, when non-nil, opts the monitor into the
+	// message-store websocket filter and routes inbound notifications
+	// to the registered callback.
+	messageStoreHandler MessageStoreHandler
 	failures         int
 	sentPosts        map[string]time.Time // post ID -> timestamp
 	lastEvict        time.Time
@@ -196,6 +204,15 @@ func (m *Monitor) SetMentionAuthorize(fn MentionAuthorizeFunc) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mentionAuthorize = fn
+}
+
+// SetMessageStoreHandler registers a callback for message-store
+// notifications. Call before Run so the subscription includes the
+// message-store filter.
+func (m *Monitor) SetMessageStoreHandler(fn MessageStoreHandler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messageStoreHandler = fn
 }
 
 // isChatUserAllowed reports whether the given (chat, user) pair is on
@@ -403,6 +420,13 @@ func (m *Monitor) connectAndListen(ctx context.Context) error {
 }
 
 func (m *Monitor) subscribe(conn *websocket.Conn) error {
+	filters := []string{"/team-messaging/v1/posts"}
+	m.mu.Lock()
+	if m.messageStoreHandler != nil {
+		filters = append(filters, "/restapi/v1.0/account/~/extension/~/message-store")
+	}
+	m.mu.Unlock()
+
 	subReq := []interface{}{
 		WSClientRequest{
 			Type:      "ClientRequest",
@@ -411,9 +435,7 @@ func (m *Monitor) subscribe(conn *websocket.Conn) error {
 			Path:      "/restapi/v1.0/subscription/",
 		},
 		WSSubscriptionBody{
-			EventFilters: []string{
-				"/team-messaging/v1/posts",
-			},
+			EventFilters: filters,
 			DeliveryMode: WSDeliveryMode{
 				TransportType: "WebSocket",
 			},
@@ -439,6 +461,10 @@ func (m *Monitor) subscribe(conn *websocket.Conn) error {
 
 func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 	slog.Debug("raw WS message", "component", "monitor", "message", string(msg))
+
+	if m.routeNonPostEvent(ctx, msg) {
+		return
+	}
 
 	// RingCentral WebSocket messages are JSON arrays: [header, body]
 	// Try to parse as array first, then extract the event from the second element.
@@ -580,8 +606,6 @@ func (m *Monitor) calcBackoff() time.Duration {
 	return d
 }
 
-
-
 // isBotMentioned checks if the bot's extension ID appears in the post mentions.
 func (m *Monitor) isBotMentioned(mentions []Mention) bool {
 	botID := m.client.OwnerID()
@@ -598,4 +622,55 @@ func (m *Monitor) isBotMentioned(mentions []Mention) bool {
 
 func isBotMessage(text string) bool {
 	return strings.HasPrefix(text, "--------answer--------") || text == "Thinking..."
+}
+
+func (m *Monitor) routeNonPostEvent(ctx context.Context, msg []byte) bool {
+	envelope, ok := extractEventEnvelope(msg)
+	if !ok || envelope.Event == "" {
+		return false
+	}
+	if strings.Contains(envelope.Event, "/message-store") {
+		m.dispatchMessageStore(ctx, envelope.Body)
+		return true
+	}
+	return false
+}
+
+func (m *Monitor) dispatchMessageStore(ctx context.Context, body []byte) {
+	m.mu.Lock()
+	handler := m.messageStoreHandler
+	m.mu.Unlock()
+	if handler == nil {
+		return
+	}
+	var evt MessageStoreEvent
+	if err := json.Unmarshal(body, &evt); err != nil {
+		slog.Warn("parse message-store event", "component", "monitor", "error", err)
+		return
+	}
+	go handler(ctx, m.client, evt)
+}
+
+type rawEnvelope struct {
+	UUID           string          `json:"uuid"`
+	Event          string          `json:"event"`
+	Timestamp      string          `json:"timestamp"`
+	SubscriptionID string          `json:"subscriptionId"`
+	OwnerID        string          `json:"ownerId"`
+	Body           json.RawMessage `json:"body"`
+}
+
+func extractEventEnvelope(msg []byte) (rawEnvelope, bool) {
+	var envelope rawEnvelope
+	var arr []json.RawMessage
+	if err := json.Unmarshal(msg, &arr); err == nil && len(arr) >= 2 {
+		if err := json.Unmarshal(arr[1], &envelope); err != nil {
+			return rawEnvelope{}, false
+		}
+		return envelope, true
+	}
+	if err := json.Unmarshal(msg, &envelope); err != nil {
+		return rawEnvelope{}, false
+	}
+	return envelope, true
 }

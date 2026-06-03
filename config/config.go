@@ -64,6 +64,13 @@ type Config struct {
 	// value is valid (the feature defaults to enabled with stock
 	// paths); see messaging/persona for the full resolution logic.
 	Persona persona.Config `json:"persona,omitempty"`
+	// BotContent carries runtime-provisioned bot brain artifacts that
+	// should be materialized locally before the bot starts.
+	BotContent BotContentConfig `json:"bot_content,omitempty"`
+}
+
+type BotContentConfig struct {
+	SoulMarkdown string `json:"soul_markdown,omitempty"`
 }
 
 // BotConfig identifies a long-lived RingClaw bot runtime. In Kubernetes,

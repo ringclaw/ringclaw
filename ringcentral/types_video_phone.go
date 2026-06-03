@@ -231,6 +231,71 @@ type SMSMessage struct {
 	LastModifiedTime        string     `json:"lastModifiedTime,omitempty"`
 }
 
+// MessageStoreListOptions controls message-store list queries.
+type MessageStoreListOptions struct {
+	DateFrom    string
+	DateTo      string
+	MessageType string
+	Direction   string
+	PerPage     int
+	PageToken   string
+}
+
+// MessageStoreList is the message-store list response.
+type MessageStoreList struct {
+	URI        string             `json:"uri,omitempty"`
+	Records    []MessageStoreItem `json:"records,omitempty"`
+	Paging     MessageStorePaging `json:"paging,omitempty"`
+	Navigation MessageStoreNav    `json:"navigation,omitempty"`
+}
+
+// MessageStoreItem is one message-store entry.
+type MessageStoreItem struct {
+	ID                  any                `json:"id,omitempty"`
+	URI                 string             `json:"uri,omitempty"`
+	Type                string             `json:"type,omitempty"`
+	CreationTime        string             `json:"creationTime,omitempty"`
+	ReadStatus          string             `json:"readStatus,omitempty"`
+	Priority            string             `json:"priority,omitempty"`
+	Attachments         []MessageStoreFile `json:"attachments,omitempty"`
+	Direction           string             `json:"direction,omitempty"`
+	Availability        string             `json:"availability,omitempty"`
+	Subject             string             `json:"subject,omitempty"`
+	MessageStatus       string             `json:"messageStatus,omitempty"`
+	FaxResolution       string             `json:"faxResolution,omitempty"`
+	FaxPageCount        int                `json:"faxPageCount,omitempty"`
+	From                SMSParty           `json:"from,omitempty"`
+	To                  []SMSParty         `json:"to,omitempty"`
+	LastModifiedTime    string             `json:"lastModifiedTime,omitempty"`
+	VoicemailDurationMs int                `json:"vmDuration,omitempty"`
+}
+
+type MessageStoreFile struct {
+	ID          any    `json:"id,omitempty"`
+	URI         string `json:"uri,omitempty"`
+	Type        string `json:"type,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	FileName    string `json:"fileName,omitempty"`
+}
+
+type MessageStorePaging struct {
+	Page          int `json:"page,omitempty"`
+	TotalPages    int `json:"totalPages,omitempty"`
+	PerPage       int `json:"perPage,omitempty"`
+	TotalElements int `json:"totalElements,omitempty"`
+}
+
+type MessageStoreNav struct {
+	FirstPage    *NavLink `json:"firstPage,omitempty"`
+	NextPage     *NavLink `json:"nextPage,omitempty"`
+	PreviousPage *NavLink `json:"previousPage,omitempty"`
+	LastPage     *NavLink `json:"lastPage,omitempty"`
+}
+
+type NavLink struct {
+	URI string `json:"uri,omitempty"`
+}
+
 // ExtensionPhoneNumberList is the extension phone-number list response.
 type ExtensionPhoneNumberList struct {
 	Records []ExtensionPhoneNumber `json:"records"`

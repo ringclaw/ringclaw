@@ -50,6 +50,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	if err := materializeRuntimeBotContent(cfg); err != nil {
+		return err
+	}
 
 	// Initialize log level and format: flag > config > default
 	levelStr := cfg.LogLevel
@@ -238,6 +241,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 				"component", "start", "ownerDMChatID", ownerDM)
 		}
 	}
+	monitor.SetMessageStoreHandler(buildMessageStoreHandler(cfg, handler))
 
 	// Mandatory sender allowlist: monitor and handler both deny anyone not on
 	// the trusted set. Findings #1 and #7 from the security review.

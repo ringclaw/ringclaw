@@ -82,6 +82,37 @@ func smsEndpoint() string {
 	return "/restapi/v1.0/account/~/extension/~/sms"
 }
 
+func messageStoreEndpoint(messageID string) string {
+	return fmt.Sprintf("/restapi/v1.0/account/~/extension/~/message-store/%s", url.PathEscape(messageID))
+}
+
+func messageStoreListEndpoint(opts MessageStoreListOptions) string {
+	params := url.Values{}
+	if opts.DateFrom != "" {
+		params.Set("dateFrom", opts.DateFrom)
+	}
+	if opts.DateTo != "" {
+		params.Set("dateTo", opts.DateTo)
+	}
+	if opts.MessageType != "" {
+		params.Set("messageType", opts.MessageType)
+	}
+	if opts.Direction != "" {
+		params.Set("direction", opts.Direction)
+	}
+	if opts.PerPage > 0 {
+		params.Set("perPage", strconv.Itoa(opts.PerPage))
+	}
+	if opts.PageToken != "" {
+		params.Set("pageToken", opts.PageToken)
+	}
+	path := "/restapi/v1.0/account/~/extension/~/message-store"
+	if len(params) > 0 {
+		path += "?" + params.Encode()
+	}
+	return path
+}
+
 func ringOutEndpoint(ringOutID string) string {
 	return fmt.Sprintf("%s/%s", ringOutsEndpoint(), url.PathEscape(ringOutID))
 }
