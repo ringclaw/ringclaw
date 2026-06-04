@@ -1389,3 +1389,29 @@ func TestMonitor_LegacyAllowAll_EmptyAllowlistsTrustEveryone(t *testing.T) {
 		t.Errorf("legacy allowAllSenders=true with empty allowlists must trust every sender")
 	}
 }
+
+func TestMonitor_AllowAllSenders_TrustsEveryoneWithConfiguredAllowlist(t *testing.T) {
+	var mu sync.Mutex
+	var dispatched bool
+	bot := NewBotClient("", "fake-bot-token")
+	bot.SetOwnerID("bot-1")
+	m := NewMonitor(bot, func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		dispatched = true
+		mu.Unlock()
+	}, []string{"chat-A"}, []string{"owner-1"}, false)
+	m.SetAllowAllSenders(true)
+
+	msg := makeWSMessage(Post{
+		ID: "p2", GroupID: "chat-A", Type: "TextMessage",
+		Text: "hi", CreatorID: "guest-1", EventType: "PostAdded",
+	})
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !dispatched {
+		t.Errorf("allowAllSenders=true must trust every sender even when source_user_ids is configured")
+	}
+}

@@ -131,6 +131,10 @@ type RCConfig struct {
 	JWTToken      string   `json:"jwt_token,omitempty"`
 	ChatIDs       []string `json:"chat_ids,omitempty"`
 	SourceUserIDs []string `json:"source_user_ids,omitempty"`
+	// AllowAllSenders restores the legacy sender trust model: any sender
+	// that passes the chat gate may drive the bot. This is intentionally
+	// explicit because it bypasses source_user_ids and chat_user_allow.
+	AllowAllSenders *bool `json:"allow_all_senders,omitempty"`
 	// Capabilities records optional Product/AVA capabilities this runtime is
 	// expected to support. It is advisory metadata for onboarding, K8S
 	// rendering, and operator checks; actual enforcement remains the selected
@@ -308,6 +312,15 @@ func (rc RCConfig) IsAllowUnlistedGroupChats() bool {
 		return false
 	}
 	return *rc.AllowUnlistedGroupChats
+}
+
+// IsAllowAllSenders reports whether the runtime should allow any sender that
+// passes the chat gate to drive the bot. Defaults to false.
+func (rc RCConfig) IsAllowAllSenders() bool {
+	if rc.AllowAllSenders == nil {
+		return false
+	}
+	return *rc.AllowAllSenders
 }
 
 const defaultGroupSummaryMessageLimit = 200

@@ -242,9 +242,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 	monitor.SetMessageStoreHandler(buildMessageStoreHandler(cfg, handler))
 
 	// Mandatory sender allowlist: monitor and handler both deny anyone not on
-	// the trusted set. Findings #1 and #7 from the security review.
-	monitor.EnforceSenderAllowlist()
-	handler.EnforceSenderAllowlist()
+	// the trusted set unless the operator explicitly opts into allow-all mode.
+	if cfg.RC.IsAllowAllSenders() {
+		monitor.SetAllowAllSenders(true)
+		slog.Warn("allow_all_senders enabled; any sender that passes the chat gate may drive the bot",
+			"component", "start")
+	} else {
+		monitor.EnforceSenderAllowlist()
+		handler.EnforceSenderAllowlist()
+	}
 	if !monitor.HasTrustedSenders() && len(cfg.RC.ChatUserAllow) == 0 {
 		slog.Error("sender allowlist is empty: no source_user_ids configured and no Private App owner detected; the bot will drop ALL incoming messages until you add ringcentral.source_user_ids or configure a Private App",
 			"component", "start")

@@ -363,6 +363,29 @@ func TestIsAllowUnlistedGroupChats_ExplicitFalse(t *testing.T) {
 	}
 }
 
+func TestIsAllowAllSenders_Default(t *testing.T) {
+	rc := RCConfig{}
+	if rc.IsAllowAllSenders() {
+		t.Error("expected default IsAllowAllSenders=false")
+	}
+}
+
+func TestIsAllowAllSenders_ExplicitTrue(t *testing.T) {
+	v := true
+	rc := RCConfig{AllowAllSenders: &v}
+	if !rc.IsAllowAllSenders() {
+		t.Error("expected IsAllowAllSenders=true")
+	}
+}
+
+func TestIsAllowAllSenders_ExplicitFalse(t *testing.T) {
+	v := false
+	rc := RCConfig{AllowAllSenders: &v}
+	if rc.IsAllowAllSenders() {
+		t.Error("expected IsAllowAllSenders=false")
+	}
+}
+
 // TestLoad_DeprecatedBotMentionOnly_IsMigrated confirms that a
 // config.json written before the rename still boots and that Load
 // transparently migrates `bot_mention_only` into `group_mention_only`,

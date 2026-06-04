@@ -51,6 +51,7 @@ type Monitor struct {
 	allowedChatIDs          map[string]bool
 	allowedUserIDs          map[string]bool
 	allowAllSenders         bool // when true, empty allowedUserIDs means "allow all"; default false = mandatory allowlist
+	forceAllowAllSenders    bool // explicit operator opt-in; trusts every sender even when allowlists are populated
 	handler                 MessageHandler
 	// chatUserAllow maps chat ID -> set of numeric user IDs that may
 	// drive the bot in that specific chat. Layered ON TOP of
@@ -279,19 +280,25 @@ func (m *Monitor) SetPrivateClient(c *Client) {
 	m.privateClient = c
 }
 
-// SetAllowAllSenders toggles whether an empty sender allowlist permits every
-// user (true, legacy default) or denies every user (false, strict mode).
+// SetAllowAllSenders toggles whether every sender that passes the chat gate
+// may drive the bot. When false, strict sender allowlist mode is restored.
 // Production callers should set this to false after populating the trusted
 // sender list via AddTrustedSender.
 func (m *Monitor) SetAllowAllSenders(allow bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.allowAllSenders = allow
+	m.forceAllowAllSenders = allow
 }
 
 // EnforceSenderAllowlist switches the monitor into strict mode: an empty
 // allowlist denies all senders, and only IDs added via the constructor or
 // AddTrustedSender may drive the agent.
 func (m *Monitor) EnforceSenderAllowlist() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.allowAllSenders = false
+	m.forceAllowAllSenders = false
 }
 
 // AddTrustedSender adds a single user ID to the sender allowlist.
@@ -560,6 +567,7 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 	// keeps the snapshot focused on the fields that have no helper.
 	m.mu.Lock()
 	allowAll := m.allowAllSenders
+	forceAllowAll := m.forceAllowAllSenders
 	nGlobal := len(m.allowedUserIDs)
 	globalHit := m.allowedUserIDs[event.Body.CreatorID]
 	authorizeFn := m.mentionAuthorize
@@ -575,7 +583,8 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 		return
 	}
 	// Trust sources, in priority order:
-	//   1. Legacy "allow all" mode with no global allowlist configured.
+	//   1. Explicit "allow all" mode, or legacy allow-all with no
+	//      configured global allowlist.
 	//   2. Sender appears on the global source_user_ids allowlist.
 	//   3. Sender appears on the per-chat chat_user_allow set for
 	//      this destination chat (seeded from config.json or pushed
@@ -585,7 +594,7 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 	// the per-chat path remains the only way in.
 	senderTrusted := false
 	switch {
-	case allowAll && nGlobal == 0:
+	case forceAllowAll || (allowAll && nGlobal == 0):
 		senderTrusted = true
 	case globalHit:
 		senderTrusted = true
