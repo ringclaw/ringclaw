@@ -27,6 +27,10 @@
 - Create: `controlplane/service.go`
 - Test: `controlplane/service_test.go`
 
+**Default runtime config policy:**
+- Render `ringcentral.allow_unlisted_group_chats: true` for AVA-managed bots unless the request explicitly overrides it.
+- Keep `ringcentral.group_mention_only: true` by default so unlisted groups still require `@bot`.
+
 - [ ] Write failing tests for private user visibility and one active bot per user.
 - [ ] Implement `CreateBot`, `ListBotsForUser`, token reservation, and runtime bootstrap token creation.
 - [ ] Verify `go test ./controlplane -count=1`.

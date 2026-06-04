@@ -18,31 +18,31 @@ import (
 var onboardOpts onboardOptions
 
 type onboardOptions struct {
-	BotID               string
-	TenantID            string
-	OwnerUserID         string
-	ConversationNS      string
-	BotToken            string
-	ClientID            string
-	ClientSecret        string
-	JWTToken            string
-	ServerURL           string
-	ChatIDs             []string
-	SourceUserIDs       []string
-	Capabilities        []string
-	GroupMentionOnly    bool
+	BotID                   string
+	TenantID                string
+	OwnerUserID             string
+	ConversationNS          string
+	BotToken                string
+	ClientID                string
+	ClientSecret            string
+	JWTToken                string
+	ServerURL               string
+	ChatIDs                 []string
+	SourceUserIDs           []string
+	Capabilities            []string
+	GroupMentionOnly        bool
 	AllowUnlistedGroupChats bool
-	FromEnv             bool
-	SkipValidate        bool
-	NoSave              bool
-	ConfigOut           string
-	Manifest            string
-	OutputDir           string
-	RenderKubernetes    bool
-	KubernetesImage     string
-	KubernetesNamespace string
-	DiscoverOwnerDM     bool
-	AllowPartialUpdate  bool
+	FromEnv                 bool
+	SkipValidate            bool
+	NoSave                  bool
+	ConfigOut               string
+	Manifest                string
+	OutputDir               string
+	RenderKubernetes        bool
+	KubernetesImage         string
+	KubernetesNamespace     string
+	DiscoverOwnerDM         bool
+	AllowPartialUpdate      bool
 }
 
 type onboardResult struct {
@@ -73,24 +73,24 @@ type onboardManifest struct {
 }
 
 type onboardManifestBot struct {
-	BotID                 string                        `json:"bot_id,omitempty"`
-	TenantID              string                        `json:"tenant_id,omitempty"`
-	OwnerUserID           string                        `json:"owner_user_id,omitempty"`
-	ConversationNamespace string                        `json:"conversation_namespace,omitempty"`
-	BotToken              string                        `json:"bot_token,omitempty"`
-	ClientID              string                        `json:"client_id,omitempty"`
-	ClientSecret          string                        `json:"client_secret,omitempty"`
-	JWTToken              string                        `json:"jwt_token,omitempty"`
-	ServerURL             string                        `json:"server_url,omitempty"`
-	ChatIDs               []string                      `json:"chat_ids,omitempty"`
-	SourceUserIDs         []string                      `json:"source_user_ids,omitempty"`
-	Capabilities          []string                      `json:"capabilities,omitempty"`
-	GroupMentionOnly      *bool                         `json:"group_mention_only,omitempty"`
-	AllowUnlistedGroupChats *bool                       `json:"allow_unlisted_group_chats,omitempty"`
-	DefaultAgent          string                        `json:"default_agent,omitempty"`
-	AgentWorkspace        string                        `json:"agent_workspace,omitempty"`
-	APIAddr               string                        `json:"api_addr,omitempty"`
-	Agents                map[string]config.AgentConfig `json:"agents,omitempty"`
+	BotID                   string                        `json:"bot_id,omitempty"`
+	TenantID                string                        `json:"tenant_id,omitempty"`
+	OwnerUserID             string                        `json:"owner_user_id,omitempty"`
+	ConversationNamespace   string                        `json:"conversation_namespace,omitempty"`
+	BotToken                string                        `json:"bot_token,omitempty"`
+	ClientID                string                        `json:"client_id,omitempty"`
+	ClientSecret            string                        `json:"client_secret,omitempty"`
+	JWTToken                string                        `json:"jwt_token,omitempty"`
+	ServerURL               string                        `json:"server_url,omitempty"`
+	ChatIDs                 []string                      `json:"chat_ids,omitempty"`
+	SourceUserIDs           []string                      `json:"source_user_ids,omitempty"`
+	Capabilities            []string                      `json:"capabilities,omitempty"`
+	GroupMentionOnly        *bool                         `json:"group_mention_only,omitempty"`
+	AllowUnlistedGroupChats *bool                         `json:"allow_unlisted_group_chats,omitempty"`
+	DefaultAgent            string                        `json:"default_agent,omitempty"`
+	AgentWorkspace          string                        `json:"agent_workspace,omitempty"`
+	APIAddr                 string                        `json:"api_addr,omitempty"`
+	Agents                  map[string]config.AgentConfig `json:"agents,omitempty"`
 }
 
 func init() {
@@ -137,6 +137,7 @@ then pass the resulting credentials to this command.`,
 
 func runOnboard(cmd *cobra.Command, args []string) error {
 	opts := onboardOpts
+	opts.AllowUnlistedGroupChats = resolveAllowUnlistedGroupChatsOption(cmd, opts.AllowUnlistedGroupChats)
 	if opts.FromEnv {
 		opts.applyEnv()
 	}
@@ -313,6 +314,7 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 }
 
 func runOnboardManifest(cmd *cobra.Command, opts onboardOptions) error {
+	opts.AllowUnlistedGroupChats = resolveAllowUnlistedGroupChatsOption(cmd, opts.AllowUnlistedGroupChats)
 	if opts.OutputDir == "" && !opts.NoSave {
 		return fmt.Errorf("--output-dir is required with --manifest unless --no-save is set")
 	}
@@ -513,6 +515,20 @@ func mergeManifestBot(defaults, bot onboardManifestBot) onboardManifestBot {
 		out.Agents = bot.Agents
 	}
 	return out
+}
+
+func resolveAllowUnlistedGroupChatsOption(cmd *cobra.Command, value bool) bool {
+	if cmd == nil {
+		return true
+	}
+	flags := cmd.Flags()
+	if flags == nil {
+		return true
+	}
+	if f := flags.Lookup("allow-unlisted-group-chats"); f == nil || !f.Changed {
+		return true
+	}
+	return value
 }
 
 func (o *onboardOptions) applyEnv() {

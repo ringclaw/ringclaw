@@ -393,6 +393,7 @@ For MVP, the Operator can render the existing RingClaw config schema into `/root
     "jwt_token": "...from secret...",
     "chat_ids": ["123456"],
     "source_user_ids": ["summer.gan"],
+    "allow_unlisted_group_chats": true,
     "group_mention_only": true,
     "allow_group_mention_authorize": false
   },

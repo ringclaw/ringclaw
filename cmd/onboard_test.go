@@ -129,25 +129,29 @@ func TestPrintOnboardResultJSON(t *testing.T) {
 func TestMergeManifestBot_DefaultsAndOverrides(t *testing.T) {
 	defFalse := false
 	botTrue := true
+	defAllow := true
+	botDeny := false
 	got := mergeManifestBot(
 		onboardManifestBot{
-			TenantID:         "tenant",
-			ServerURL:        "https://platform.ringcentral.com",
-			ChatIDs:          []string{"default-chat"},
-			SourceUserIDs:    []string{"owner"},
-			Capabilities:     []string{"video"},
-			GroupMentionOnly: &defFalse,
-			DefaultAgent:     "codex",
+			TenantID:                "tenant",
+			ServerURL:               "https://platform.ringcentral.com",
+			ChatIDs:                 []string{"default-chat"},
+			SourceUserIDs:           []string{"owner"},
+			Capabilities:            []string{"video"},
+			GroupMentionOnly:        &defFalse,
+			AllowUnlistedGroupChats: &defAllow,
+			DefaultAgent:            "codex",
 			Agents: map[string]config.AgentConfig{
 				"codex": {Type: "http", Endpoint: "https://default.example.com"},
 			},
 		},
 		onboardManifestBot{
-			BotID:            "bot-a",
-			OwnerUserID:      "alice",
-			ChatIDs:          []string{"bot-chat", "default-chat"},
-			Capabilities:     []string{"phone", "video"},
-			GroupMentionOnly: &botTrue,
+			BotID:                   "bot-a",
+			OwnerUserID:             "alice",
+			ChatIDs:                 []string{"bot-chat", "default-chat"},
+			Capabilities:            []string{"phone", "video"},
+			GroupMentionOnly:        &botTrue,
+			AllowUnlistedGroupChats: &botDeny,
 			Agents: map[string]config.AgentConfig{
 				"codex": {Type: "http", Endpoint: "https://bot.example.com", APIKey: "bot-key"},
 			},
@@ -162,6 +166,9 @@ func TestMergeManifestBot_DefaultsAndOverrides(t *testing.T) {
 	}
 	if got.GroupMentionOnly == nil || !*got.GroupMentionOnly {
 		t.Fatalf("GroupMentionOnly override not applied: %#v", got.GroupMentionOnly)
+	}
+	if got.AllowUnlistedGroupChats == nil || *got.AllowUnlistedGroupChats {
+		t.Fatalf("AllowUnlistedGroupChats override not applied: %#v", got.AllowUnlistedGroupChats)
 	}
 	if strings.Join(got.Capabilities, ",") != "video,phone" {
 		t.Fatalf("Capabilities = %#v", got.Capabilities)
@@ -231,6 +238,8 @@ func TestRenderKubernetesManifest_MountsConfigSecretAsLongLivedBot(t *testing.T)
 	cfg.RC.ChatIDs = []string{"123"}
 	cfg.RC.SourceUserIDs = []string{"summer.gan"}
 	cfg.RC.Capabilities = []string{"video", "phone"}
+	allowUnlisted := true
+	cfg.RC.AllowUnlistedGroupChats = &allowUnlisted
 
 	body, err := renderKubernetesManifest(kubernetesRenderOptions{
 		Namespace: "ava",
@@ -248,6 +257,7 @@ func TestRenderKubernetesManifest_MountsConfigSecretAsLongLivedBot(t *testing.T)
 		`"capabilities": [`,
 		`"video"`,
 		`"phone"`,
+		`"allow_unlisted_group_chats": true`,
 		"kind: Deployment",
 		"name: personal-ava-summer",
 		"replicas: 1",
@@ -339,5 +349,67 @@ func TestRunOnboardManifest_RenderKubernetesManifestFiles(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "k8s="+k8sPath) {
 		t.Fatalf("summary should include k8s path, got %q", out.String())
+	}
+
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read rendered config: %v", err)
+	}
+	var cfg config.Config
+	if err := json.Unmarshal(configData, &cfg); err != nil {
+		t.Fatalf("unmarshal rendered config: %v", err)
+	}
+	if cfg.RC.AllowUnlistedGroupChats == nil || !*cfg.RC.AllowUnlistedGroupChats {
+		t.Fatalf("expected rendered config allow_unlisted_group_chats=true, got %#v", cfg.RC.AllowUnlistedGroupChats)
+	}
+}
+
+func TestRunOnboardManifest_ExplicitAllowUnlistedGroupChatsOverride(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "bots.json")
+	outputDir := filepath.Join(dir, "rendered")
+	body := `{
+	  "defaults": {
+	    "tenant_id": "fiji",
+	    "server_url": "https://platform.ringcentral.com",
+	    "default_agent": "codex",
+	    "allow_unlisted_group_chats": true
+	  },
+	  "bots": [
+	    {
+	      "bot_id": "personal-ava-summer",
+	      "owner_user_id": "summer.gan",
+	      "bot_token": "bot-token",
+	      "client_id": "client-id",
+	      "client_secret": "client-secret",
+	      "jwt_token": "jwt-token",
+	      "allow_unlisted_group_chats": false
+	    }
+	  ]
+	}`
+	if err := os.WriteFile(manifestPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	if err := runOnboardManifest(onboardCmd, onboardOptions{
+		Manifest:                manifestPath,
+		OutputDir:               outputDir,
+		GroupMentionOnly:        true,
+		AllowUnlistedGroupChats: true,
+	}); err != nil {
+		t.Fatalf("runOnboardManifest() error = %v", err)
+	}
+
+	configPath := filepath.Join(outputDir, "personal-ava-summer", "config.json")
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read rendered config: %v", err)
+	}
+	var cfg config.Config
+	if err := json.Unmarshal(configData, &cfg); err != nil {
+		t.Fatalf("unmarshal rendered config: %v", err)
+	}
+	if cfg.RC.AllowUnlistedGroupChats == nil || *cfg.RC.AllowUnlistedGroupChats {
+		t.Fatalf("expected rendered config allow_unlisted_group_chats=false, got %#v", cfg.RC.AllowUnlistedGroupChats)
 	}
 }
