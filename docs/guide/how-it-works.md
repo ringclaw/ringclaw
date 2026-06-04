@@ -74,12 +74,15 @@ graph LR
 
 ### Routing
 
-Messages from chats not in `chat_ids` are silently dropped by the monitor.
+When `chat_ids` is non-empty, messages from chats outside `chat_ids` are
+silently dropped by the monitor. When `chat_ids` is empty, the monitor accepts
+messages from all chats before the later sender / mention / command gates run.
 
 | Source chat | Reply client | Read/Action client |
 |-------------|-------------|-------------------|
 | Bot DM (auto-discovered) | Bot | Private App (if configured) or Bot |
 | Chat in `chat_ids` | Bot | Private App (if configured) or Bot |
+| Any chat when `chat_ids` is empty | Bot | Private App (if configured) or Bot |
 
 ### Group Chat Behavior
 

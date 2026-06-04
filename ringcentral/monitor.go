@@ -47,6 +47,7 @@ type Monitor struct {
 	client          *Client // bot client (required)
 	privateClient   *Client // private app client (optional)
 	botMentionOnly  bool
+	allowAllChats   bool
 	allowedChatIDs  map[string]bool
 	allowedUserIDs  map[string]bool
 	allowAllSenders bool // when true, empty allowedUserIDs means "allow all"; default false = mandatory allowlist
@@ -115,7 +116,7 @@ func (m *Monitor) IsSentPost(id string) bool {
 
 // NewMonitor creates a new WebSocket monitor.
 // botClient is used for WS connection and replies.
-// chatIDs limits which chats are monitored; empty means no chats.
+// chatIDs limits which chats are monitored; empty means all chats.
 // sourceUserIDs is the sender allowlist. By default the allowlist is advisory
 // (empty means allow all) for backward compatibility; production callers
 // should call EnforceSenderAllowlist after populating the list to switch the
@@ -137,6 +138,7 @@ func NewMonitor(botClient *Client, handler MessageHandler, chatIDs []string, sou
 	return &Monitor{
 		client:          botClient,
 		botMentionOnly:  mentionOnly,
+		allowAllChats:   len(chatIDs) == 0,
 		handler:         handler,
 		allowedChatIDs:  allowed,
 		allowedUserIDs:  allowedUsers,
@@ -512,8 +514,8 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 		return
 	}
 
-	// Filter by allowed chat IDs (empty = reject all)
-	if !m.allowedChatIDs[event.Body.GroupID] {
+	// Filter by allowed chat IDs when an allowlist is configured.
+	if !m.allowAllChats && !m.allowedChatIDs[event.Body.GroupID] {
 		slog.Debug("ignoring message from non-allowed chat", "component", "monitor", "chatID", event.Body.GroupID)
 		return
 	}

@@ -74,12 +74,15 @@ graph LR
 
 ### 路由规则
 
-不在 `chat_ids` 中的消息会被 monitor 直接丢弃。
+当 `chat_ids` 非空时，不在 `chat_ids` 中的消息会被 monitor 直接丢弃；当
+`chat_ids` 为空时，monitor 会接收所有 chat 的消息，再继续走后续 sender /
+mention / command 权限层。
 
 | 消息来源 | 回复客户端 | 读取/操作客户端 |
 |----------|-----------|---------------|
 | Bot 私聊（自动发现） | Bot | Private App（如已配置）或 Bot |
 | `chat_ids` 中的聊天 | Bot | Private App（如已配置）或 Bot |
+| `chat_ids` 为空时的任意聊天 | Bot | Private App（如已配置）或 Bot |
 
 ### 群聊行为
 

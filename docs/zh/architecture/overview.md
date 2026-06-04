@@ -97,7 +97,7 @@ WebSocket 路径会经过所有安全层，其他入口各有各的门控。
 
 | 层 | 代码位置 | 详细页 |
 |---|---|---|
-| -1（chat allowlist） | `ringcentral/monitor.go`（丢弃 `ringcentral.chat_ids` 之外的聊天） | [安全概览](../security/) |
+| -1（chat allowlist） | `ringcentral/monitor.go`（当 `ringcentral.chat_ids` 非空时，丢弃不在列表内的聊天） | [安全概览](../security/) |
 | 0（sender allowlist） | `ringcentral/monitor.go` + `messaging/handler.go`（双重检查） | [发送者白名单](../security/sender-allowlist) |
 | 1（每条命令授权） | `messaging/handler.go` + `messaging/handler_commands.go` | [命令授权](../security/command-authorization) |
 | 2（跨聊天 ACTION） | `messaging/actions.go`（`crossChatOOBChallenge`、`announceCrossChatOrRefuse`） | [跨聊天 Action](../security/cross-chat-actions) |

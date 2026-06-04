@@ -78,11 +78,12 @@ processes on the same host.
 :::
 
 ::: tip Chat allowlist is the outermost ring
-**Layer -1**: messages from chats **not** in `ringcentral.chat_ids`
-are dropped by the WebSocket monitor before Layer 0 even applies
-(`ringcentral/monitor.go`). If a message silently disappears,
-check the chat allowlist first — the log line reads
-`ignoring message from non-allowed chat`.
+**Layer -1**: when `ringcentral.chat_ids` is non-empty, messages from chats
+**not** in that list are dropped by the WebSocket monitor before Layer 0 even
+applies (`ringcentral/monitor.go`). If `chat_ids` is empty, this layer is
+effectively disabled and all chats reach the later sender/command gates. If a
+message silently disappears, check the chat allowlist first — the log line
+reads `ignoring message from non-allowed chat`.
 :::
 
 ## Permission Matrix

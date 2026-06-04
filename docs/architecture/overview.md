@@ -99,7 +99,7 @@ others have their own gates.
 
 | Layer | Code path | Detail page |
 |---|---|---|
-| -1 (chat allowlist) | `ringcentral/monitor.go` (drops messages from chats outside `ringcentral.chat_ids`) | [Security overview](../security/) |
+| -1 (chat allowlist) | `ringcentral/monitor.go` (when `ringcentral.chat_ids` is non-empty, drops messages from chats outside it) | [Security overview](../security/) |
 | 0 (sender allowlist) | `ringcentral/monitor.go` + `messaging/handler.go` (enforced twice) | [Sender Allowlist](../security/sender-allowlist) |
 | 1 (per-command authorization) | `messaging/handler.go` + `messaging/handler_commands.go` | [Command Authorization](../security/command-authorization) |
 | 2 (cross-chat ACTION) | `messaging/actions.go` (`crossChatOOBChallenge`, `announceCrossChatOrRefuse`) | [Cross-Chat Actions](../security/cross-chat-actions) |

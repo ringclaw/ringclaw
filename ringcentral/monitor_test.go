@@ -188,6 +188,38 @@ func TestMonitor_HandleWSMessage_FilterByChatID(t *testing.T) {
 	}
 }
 
+func TestMonitor_HandleWSMessage_EmptyChatIDsAllowAllChats(t *testing.T) {
+	var mu sync.Mutex
+	var received []Post
+
+	m := newTestMonitor("", func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		received = append(received, post)
+		mu.Unlock()
+	})
+
+	msg := makeWSMessage(Post{
+		ID:        "p3-all",
+		GroupID:   "chat-OTHER",
+		Type:      "TextMessage",
+		Text:      "hello",
+		CreatorID: "user-1",
+		EventType: "PostAdded",
+	})
+
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 1 {
+		t.Fatalf("expected 1 post dispatched with empty chat_ids, got %d", len(received))
+	}
+	if received[0].GroupID != "chat-OTHER" {
+		t.Fatalf("expected message from chat-OTHER, got %q", received[0].GroupID)
+	}
+}
+
 func TestMonitor_HandleWSMessage_IgnoreNonText(t *testing.T) {
 	var called bool
 	m := newTestMonitor("chat-1", func(ctx context.Context, client *Client, _ *Client, post Post) {

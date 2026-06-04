@@ -116,7 +116,7 @@ JWT App 至少需要 `ReadAccounts`；Video/Phone 能力还需要额外的 `Vide
 | 字段 | 类型 | 默认值 | 可选值 / 说明 |
 |------|------|--------|---------------|
 | `bot_token` | string | — | **必填。** RingCentral Public Bot 的访问 token。 |
-| `chat_ids` | string[] | `[]` | **必填。** Bot 允许接收消息的 chat ID 列表。 |
+| `chat_ids` | string[] | `[]` | Bot 允许接收消息的 chat ID 列表。留空表示监听所有 chat；这是高风险配置，通常只建议在配合严格 `source_user_ids` / `chat_user_allow` 时使用。 |
 | `source_user_ids` | string[] | `[]` | 受信任的发信人。可填数字 extension ID、邮箱、E.164 电话号码。空值默认 owner-only，并要求已配置 Private App 凭据。 |
 | `capabilities` | string[] | `[]` | `ringclaw onboard --capability ...` 写入的能力选择元数据。支持：`video`、`phone`、`call_log`。Private JWT App 默认必须具备 `ReadAccounts`；选中的能力还需要对应 scope（`Video`、`RingOut`、`ReadCallLog`）。 |
 | `allow_group_mention_authorize` | bool（可空） | `false`（v0.4.2 起；v0.4.1 默认开启的改动已撤回） | 控制 OOB 审批流程。**默认关闭**，必须显式设为 `true` 才生效。开启后，非授信用户在允许群聊里 `@bot` 会在 owner 私聊弹出 `/approval`；批准后该用户被加入 `chat_user_allow[<chatID>]`（仅作用于该群）并持久化到 `config.json`。需要 Private App + 可解析的 owner 私聊；缺失时禁用功能并打 ERROR。拒绝 / 过期之后，同一 `(chat, user)` 进入 24 小时冷却期。v0.4.3+ 被批准用户运行在非-owner ceiling 下（不可调 `fs/*` / `terminal/*` / `session/request_permission`；文字回复 + RC ACTION 块仍可用）。详见 [安全 › 群成员 OOB 审批的完整启用步骤](../security/sender-allowlist.md#群成员-oob-审批的完整启用步骤)。 |

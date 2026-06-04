@@ -85,9 +85,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if !cfg.RC.HasPrivateApp() {
 		return fmt.Errorf("private app credentials not configured. Add ringcentral.client_id, ringcentral.client_secret, and ringcentral.jwt_token to ~/.ringclaw/config.json or rerun 'ringclaw onboard'")
 	}
-	if len(cfg.RC.ChatIDs) == 0 {
-		return fmt.Errorf("RingCentral chat IDs not configured. Add chat_ids to config file")
-	}
 
 	if config.DetectAndConfigure(cfg) {
 		if err := config.Save(cfg); err != nil {
