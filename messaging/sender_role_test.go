@@ -52,6 +52,21 @@ func TestOriginForPost_NonOwnerStranger(t *testing.T) {
 	}
 }
 
+func TestOriginForPost_AllowAllSenderIsNotOwner(t *testing.T) {
+	h := &Handler{
+		trustedSenders:  map[string]bool{"u-owner": true},
+		allowAllSenders: true,
+	}
+	post := ringcentral.Post{GroupID: "group-1", CreatorID: "agent-bot"}
+	origin := h.originForPost(nil, post)
+	if origin.IsOwner {
+		t.Errorf("allow_all_senders must not promote arbitrary senders to owner, got %+v", origin)
+	}
+	if origin.Reason != "non_owner" {
+		t.Errorf("expected reason=non_owner, got %q", origin.Reason)
+	}
+}
+
 func TestOriginForPost_DMIsOwner(t *testing.T) {
 	// Use a real bot client so IsBotDM returns true.
 	bot := ringcentral.NewBotClient("https://example.com", "token")

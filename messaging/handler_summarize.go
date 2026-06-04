@@ -228,7 +228,7 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 
 	if len(actions) > 0 {
 		results := ExecuteAgentActions(ctx, replyClient, readClient, chatID, actions, ActionContext{
-			OriginIsOwner: h.isTrustedSender(post.CreatorID),
+			OriginIsOwner: h.isOwnerSender(post.CreatorID),
 			OOB:           h.OOBManager(),
 			OwnerDMChat:   h.OwnerDMChatID(),
 			RequesterID:   post.CreatorID,

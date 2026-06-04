@@ -29,7 +29,7 @@ func (h *Handler) originForPost(client *ringcentral.Client, post ringcentral.Pos
 	if client != nil && client.IsBotDM(post.GroupID) {
 		return agent.Origin{IsOwner: true, SenderID: creatorID, Reason: "dm_to_bot"}
 	}
-	if h.isTrustedSender(creatorID) {
+	if h.isOwnerSender(creatorID) {
 		return agent.Origin{IsOwner: true, SenderID: creatorID, Reason: "source_user_ids"}
 	}
 	reason := "non_owner"

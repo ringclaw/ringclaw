@@ -305,6 +305,18 @@ func (h *Handler) isTrustedSender(creatorID string) bool {
 	return h.trustedSenders[creatorID]
 }
 
+// isOwnerSender reports whether a creator ID is explicitly trusted as the
+// machine owner/operator. Unlike isTrustedSender, allow-all mode does not
+// make arbitrary senders owners.
+func (h *Handler) isOwnerSender(creatorID string) bool {
+	if creatorID == "" {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.trustedSenders[creatorID]
+}
+
 // AddChatUserAllow grants a numeric user ID per-chat trust on the
 // handler's defense-in-depth allowlist. Used by the authorize-mention
 // OOB flow on approval and by start.go when seeding from
@@ -998,7 +1010,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			ownerID = actionClient.OwnerID()
 		}
 		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
-			OriginIsOwner: h.isTrustedSender(post.CreatorID),
+			OriginIsOwner: h.isOwnerSender(post.CreatorID),
 			OOB:           h.OOBManager(),
 			OwnerDMChat:   h.OwnerDMChatID(),
 			RequesterID:   post.CreatorID,
