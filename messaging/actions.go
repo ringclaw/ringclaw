@@ -168,6 +168,7 @@ type ActionContext struct {
 	OwnerDMChat   string
 	RequesterID   string
 	OwnerID       string
+	Mentions      []ringcentral.Mention
 	// Capabilities is the runtime capability set selected during onboarding.
 	// Empty means legacy behavior: allow all optional actions.
 	Capabilities []string
@@ -214,8 +215,18 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 
 		targetChat := chatID
 		crossChat := false
+		var currentChatMention *ringcentral.Mention
 		if cid := a.Params["chatid"]; cid != "" {
-			if !opts.OriginIsOwner {
+			if a.Type == "MESSAGE" {
+				if mention := resolveCurrentChatMention(cid, opts.Mentions); mention != nil {
+					currentChatMention = mention
+					slog.Info("action: resolved message target mention to current chat",
+						"chatid", cid, "mentionID", mention.ID, "mentionName", mention.Name, "chatID", chatID)
+				}
+			}
+			if currentChatMention != nil {
+				targetChat = chatID
+			} else if !opts.OriginIsOwner {
 				// Non-owner cross-chat: issue OOB challenge when
 				// the manager is wired; otherwise force to origin
 				// chat (legacy silent-override path).
@@ -371,11 +382,16 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 
 		case "MESSAGE":
 			body := strings.TrimSpace(a.Body)
+			messageClient := actionClient
+			if currentChatMention != nil {
+				body = ensurePersonMentionPrefix(body, currentChatMention.ID)
+				messageClient = replyClient
+			}
 			if body == "" {
 				record("skipped", targetChat, crossChat, map[string]any{"reason": "empty_message"})
 				continue
 			}
-			if err := SendTextReply(ctx, actionClient, targetChat, body); err != nil {
+			if err := SendTextReply(ctx, messageClient, targetChat, body); err != nil {
 				slog.Error("action: send message failed", "error", err, "chatID", targetChat)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to send message: %v", err))

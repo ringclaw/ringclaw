@@ -2264,6 +2264,80 @@ func TestExecuteAgentActions_Message(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_MessageChatIDMentionFallsBackToCurrentChatMention(t *testing.T) {
+	var mu sync.Mutex
+	var postPath string
+	var postedBody string
+	var replyClientPosts int
+	var actionClientPosts int
+
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == "POST" {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			replyClientPosts++
+			postPath = r.URL.Path
+			postedBody, _ = body["text"].(string)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+	}))
+	defer replySrv.Close()
+
+	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == "POST" {
+			mu.Lock()
+			actionClientPosts++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "p-action"})
+	}))
+	defer actionSrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: actionSrv.URL,
+	})
+	actionClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	actions := []AgentAction{{
+		Type:   "MESSAGE",
+		Params: map[string]string{"chatid": "Tom Bot A"},
+		Body:   "想同步一下最近的培训计划安排。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, actionClient, "current-chat", actions, ActionContext{
+		OriginIsOwner: true,
+		Mentions: []ringcentral.Mention{
+			{ID: "20894271004", Type: "Person", Name: "tom bot A"},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(postPath, "/chats/current-chat/") {
+		t.Errorf("expected post to current chat, got %q", postPath)
+	}
+	if replyClientPosts != 1 {
+		t.Errorf("expected current-chat mention MESSAGE to use reply/bot client, got %d posts", replyClientPosts)
+	}
+	if actionClientPosts != 0 {
+		t.Errorf("expected current-chat mention MESSAGE not to use action/private client, got %d posts", actionClientPosts)
+	}
+	if !strings.HasPrefix(postedBody, "![:Person](20894271004)") {
+		t.Errorf("expected target agent mention prefix, got %q", postedBody)
+	}
+	if !strings.Contains(postedBody, "培训计划") {
+		t.Errorf("expected message body in post, got %q", postedBody)
+	}
+}
+
 func TestExecuteAgentActions_NonOwnerForcesOriginChat(t *testing.T) {
 	var mu sync.Mutex
 	var postPaths []string

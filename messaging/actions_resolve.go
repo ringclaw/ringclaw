@@ -209,6 +209,50 @@ func isSelfPronoun(s string) bool {
 	return selfPronouns[strings.ToLower(strings.TrimSpace(s))]
 }
 
+func resolveCurrentChatMention(raw string, mentions []ringcentral.Mention) *ringcentral.Mention {
+	want := strings.TrimSpace(raw)
+	if want == "" {
+		return nil
+	}
+	wantID := extractChatID(want)
+	wantNorm := normalizeMentionLabel(wantID)
+	if wantNorm == "" {
+		return nil
+	}
+	var matched *ringcentral.Mention
+	for i := range mentions {
+		m := &mentions[i]
+		if !strings.EqualFold(strings.TrimSpace(m.Type), "Person") {
+			continue
+		}
+		if strings.TrimSpace(m.ID) == wantID ||
+			normalizeMentionLabel(m.Name) == wantNorm {
+			if matched != nil {
+				return nil
+			}
+			matched = m
+		}
+	}
+	return matched
+}
+
+func normalizeMentionLabel(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
+}
+
+func ensurePersonMentionPrefix(body, personID string) string {
+	body = strings.TrimSpace(body)
+	personID = strings.TrimSpace(personID)
+	if body == "" || personID == "" {
+		return body
+	}
+	prefix := "![:Person](" + personID + ")"
+	if strings.HasPrefix(body, prefix) {
+		return body
+	}
+	return prefix + " " + body
+}
+
 // resolveChatParam resolves a chatid param: numeric IDs pass through,
 // self-pronouns resolve to currentChatID, names are resolved via directory search.
 func resolveChatParam(ctx context.Context, client *ringcentral.Client, raw string, currentChatID string) (string, error) {

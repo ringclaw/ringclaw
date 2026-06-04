@@ -233,6 +233,7 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 			OwnerDMChat:   h.OwnerDMChatID(),
 			RequesterID:   post.CreatorID,
 			OwnerID:       readClient.OwnerID(),
+			Mentions:      post.Mentions,
 			Capabilities:  h.actionCapabilities(),
 		})
 		if len(results) > 0 {

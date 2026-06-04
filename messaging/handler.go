@@ -1015,6 +1015,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			OwnerDMChat:   h.OwnerDMChatID(),
 			RequesterID:   post.CreatorID,
 			OwnerID:       ownerID,
+			Mentions:      post.Mentions,
 			Capabilities:  h.actionCapabilities(),
 		})
 		if len(results) > 0 {
