@@ -23,16 +23,20 @@ type CronScheduler struct {
 	getAgent     func(name string) agent.Agent
 	cronParser   cron.Parser
 	running      sync.Map // job ID -> struct{}, tracks in-flight jobs
+	actionClient *ringcentral.Client // for executing actions (nil = use bot client)
+	actionCtx    ActionContext        // owner context for cross-chat ACTIONs
 }
 
 // NewCronScheduler creates a scheduler.
-func NewCronScheduler(store *CronStore, client *ringcentral.Client, defaultChat string, getAgent func(name string) agent.Agent) *CronScheduler {
+func NewCronScheduler(store *CronStore, client *ringcentral.Client, defaultChat string, getAgent func(name string) agent.Agent, actionClient *ringcentral.Client, actx ActionContext) *CronScheduler {
 	return &CronScheduler{
-		store:       store,
-		client:      client,
-		defaultChat: defaultChat,
-		getAgent:    getAgent,
-		cronParser:  cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		store:        store,
+		client:       client,
+		defaultChat:  defaultChat,
+		getAgent:     getAgent,
+		cronParser:   cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		actionClient: actionClient,
+		actionCtx:    actx,
 	}
 }
 
@@ -137,8 +141,20 @@ func (s *CronScheduler) executeJob(ctx context.Context, job CronJob) {
 	}
 
 	reply = strings.TrimSpace(reply)
-	if reply != "" {
-		text := fmt.Sprintf("**[Cron: %s]** %s", job.Name, reply)
+	clean, actions := ParseAgentActions(reply)
+
+	// Execute actions (Cron allowlist: all except nothing — cron trusts the scheduler owner)
+	if len(actions) > 0 {
+		ac := s.actionClient
+		if ac == nil {
+			ac = s.client
+		}
+		ExecuteAgentActions(ctx, s.client, ac, chatID, actions, s.actionCtx)
+	}
+
+	// Send text part
+	if clean != "" {
+		text := fmt.Sprintf("**[Cron: %s]** %s", job.Name, clean)
 		if err := SendTextReply(ctx, s.client, chatID, text); err != nil {
 			slog.Error("cron: failed to send reply", "component", "cron", "job", job.Name, "error", err)
 			s.recordResult(job, "error", "send failed: "+err.Error())

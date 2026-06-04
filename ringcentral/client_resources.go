@@ -349,3 +349,57 @@ func (c *Client) ListGroupEvents(ctx context.Context, groupID string) (*EventLis
 	return &list, nil
 }
 
+// SendSMS sends an SMS from fromNumber to toNumber.
+// fromNumber is the RC extension phone number (e.g. "+14045550001").
+// Returns the created SMSMessage on success.
+func (c *Client) SendSMS(ctx context.Context, fromNumber, toNumber, text string) (*SMSMessage, error) {
+	body := map[string]interface{}{
+		"from": map[string]string{"phoneNumber": fromNumber},
+		"to":   []map[string]string{{"phoneNumber": toNumber}},
+		"text": text,
+	}
+	data, _ := json.Marshal(body)
+	resp, err := c.doRequest(ctx, http.MethodPost, "/restapi/v1.0/account/~/extension/~/sms", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	var msg SMSMessage
+	if err := json.Unmarshal(resp, &msg); err != nil {
+		return nil, fmt.Errorf("parse sms response: %w", err)
+	}
+	return &msg, nil
+}
+
+// ListCallLog returns call log entries for the current extension.
+func (c *Client) ListCallLog(ctx context.Context, opts ListCallLogOpts) (*CallLogList, error) {
+	params := url.Values{}
+	if opts.Direction != "" {
+		params.Set("direction", opts.Direction)
+	}
+	if opts.Type != "" {
+		params.Set("type", opts.Type)
+	}
+	if opts.DateFrom != "" {
+		params.Set("dateFrom", opts.DateFrom)
+	}
+	if opts.DateTo != "" {
+		params.Set("dateTo", opts.DateTo)
+	}
+	if opts.PerPage > 0 {
+		params.Set("perPage", fmt.Sprintf("%d", opts.PerPage))
+	}
+	path := "/restapi/v1.0/account/~/extension/~/call-log"
+	if len(params) > 0 {
+		path += "?" + params.Encode()
+	}
+	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var list CallLogList
+	if err := json.Unmarshal(resp, &list); err != nil {
+		return nil, fmt.Errorf("parse call log: %w", err)
+	}
+	return &list, nil
+}
+

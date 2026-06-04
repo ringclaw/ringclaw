@@ -373,3 +373,59 @@ type Credentials struct {
 	JWTToken     string `json:"jwt_token"`
 	ServerURL    string `json:"server_url"`
 }
+
+// --- SMS types ---
+
+// SMSMessage represents a sent or received SMS message.
+type SMSMessage struct {
+	ID           string `json:"id"`
+	From         string `json:"from"`
+	To           string `json:"to"`
+	Direction    string `json:"direction"`
+	CreationTime string `json:"creationTime"`
+	Subject      string `json:"subject"`
+}
+
+// --- Call Log types ---
+
+// ListCallLogOpts holds optional query parameters for ListCallLog.
+type ListCallLogOpts struct {
+	Direction string // Inbound, Outbound
+	Type      string // Voice, Fax
+	DateFrom  string // ISO 8601 datetime
+	DateTo    string // ISO 8601 datetime
+	PerPage   int    // number of records per page (max 250)
+}
+
+// CallLogEntry represents a single call log record.
+type CallLogEntry struct {
+	ID        string `json:"id"`
+	SessionID string `json:"sessionId"`
+	StartTime string `json:"startTime"`
+	Duration  int    `json:"duration"`
+	Direction string `json:"direction"`
+	Action    string `json:"action"`
+	Result    string `json:"result"`
+	From      struct {
+		PhoneNumber string `json:"phoneNumber"`
+		Name        string `json:"name"`
+	} `json:"from"`
+	To struct {
+		PhoneNumber string `json:"phoneNumber"`
+		Name        string `json:"name"`
+	} `json:"to"`
+}
+
+// CallLogList is the response from listing call log entries.
+type CallLogList struct {
+	Records    []CallLogEntry `json:"records"`
+	Navigation struct {
+		NextPageToken string `json:"nextPageToken"`
+	} `json:"navigation"`
+	Paging struct {
+		Page          int `json:"page"`
+		PerPage       int `json:"perPage"`
+		TotalPages    int `json:"totalPages"`
+		TotalElements int `json:"totalElements"`
+	} `json:"paging"`
+}

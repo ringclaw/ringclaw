@@ -161,7 +161,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	path, _ := config.ConfigPath()
+	path, _ := config.ConfigPath(dirFlag)
 	fmt.Printf("\nConfiguration saved to %s\n", path)
 	fmt.Println("\nNext steps:")
 	fmt.Println("  ringclaw start     # start the message bridge")

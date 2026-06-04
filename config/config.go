@@ -332,8 +332,12 @@ func DefaultConfig() *Config {
 	}
 }
 
-// ConfigPath returns the path to the config file.
-func ConfigPath() (string, error) {
+// ConfigPath returns the path to config.json.
+// If dir is non-empty it is used as the home directory; otherwise ~/.ringclaw.
+func ConfigPath(dir string) (string, error) {
+	if dir != "" {
+		return filepath.Join(dir, "config.json"), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -346,7 +350,7 @@ func ConfigPath() (string, error) {
 func Load() (*Config, error) {
 	cfg := DefaultConfig()
 
-	path, err := ConfigPath()
+	path, err := ConfigPath("")
 	if err != nil {
 		return cfg, nil
 	}
@@ -391,7 +395,7 @@ func normalizeDeprecatedFields(cfg *Config) {
 
 // Save saves the configuration to disk.
 func Save(cfg *Config) error {
-	path, err := ConfigPath()
+	path, err := ConfigPath("")
 	if err != nil {
 		return err
 	}

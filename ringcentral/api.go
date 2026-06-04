@@ -49,6 +49,12 @@ type ResourceAccessor interface {
 	GetAdaptiveCard(ctx context.Context, cardID string) (*AdaptiveCard, error)
 	UpdateAdaptiveCard(ctx context.Context, cardID string, card json.RawMessage) (*AdaptiveCard, error)
 	DeleteAdaptiveCard(ctx context.Context, cardID string) error
+
+	// SMS
+	SendSMS(ctx context.Context, from, to, text string) (*SMSMessage, error)
+
+	// Call Log
+	ListCallLog(ctx context.Context, opts ListCallLogOpts) (*CallLogList, error)
 }
 
 // DirectoryAccessor is implemented by Client for chat and user lookup operations.

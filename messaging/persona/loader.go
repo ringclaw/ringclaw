@@ -44,11 +44,11 @@ func (l *Loader) Store() *Store {
 }
 
 // Build returns the context banner to prepend to a user message. The
-// banner is composed of four XML-tagged sections (persona, global
-// memory, user memory, chat memory). Any section that resolves to an
-// empty string is omitted entirely so a fresh install with no memory
-// produces no banner at all — agent behaviour is unchanged from the
-// pre-persona baseline.
+// banner is composed of XML-tagged sections (persona, skills index,
+// global memory, user memory, chat memory). Any section that resolves
+// to an empty string is omitted entirely so a fresh install with no
+// memory produces no banner at all — agent behaviour is unchanged from
+// the pre-persona baseline.
 //
 // chatID / userID must be the raw IDs observed on the incoming post;
 // Build runs them through SanitizeID internally. isDM feeds the
@@ -58,7 +58,21 @@ func (l *Loader) Store() *Store {
 // The ctx parameter is plumbed through for future expansion (timeouts
 // on memory backends) but is currently unused by the file-backed
 // Store.
-func (l *Loader) Build(_ context.Context, chatID, userID string, isDM bool) string {
+func (l *Loader) Build(ctx context.Context, chatID, userID string, isDM bool) string {
+	return l.buildBanner(ctx, chatID, userID, isDM, "")
+}
+
+// BuildWithEntity is like Build but also injects entity memory when
+// entityID is non-empty. The entity section is inserted after chat
+// memory using the scope="entity" attribute so agents can distinguish
+// it from per-user or per-chat memory.
+func (l *Loader) BuildWithEntity(ctx context.Context, chatID, userID string, isDM bool, entityID string) string {
+	return l.buildBanner(ctx, chatID, userID, isDM, entityID)
+}
+
+// buildBanner is the shared implementation behind Build and
+// BuildWithEntity. An empty entityID skips entity memory injection.
+func (l *Loader) buildBanner(_ context.Context, chatID, userID string, isDM bool, entityID string) string {
 	if !l.Enabled() {
 		return ""
 	}
@@ -80,6 +94,19 @@ func (l *Loader) Build(_ context.Context, chatID, userID string, isDM bool) stri
 		slog.Warn("persona: load chat memory failed", "component", "persona", "error", err)
 	}
 
+	var entity string
+	if entityID != "" {
+		entity, err = l.store.LoadEntity(entityID)
+		if err != nil {
+			slog.Warn("persona: load entity memory failed", "component", "persona", "error", err)
+		}
+	}
+
+	skillsIndex, err := l.store.LoadSkillsIndex()
+	if err != nil {
+		slog.Warn("persona: load skills index failed", "component", "persona", "error", err)
+	}
+
 	chatType := "Group"
 	if isDM {
 		chatType = "DM"
@@ -88,6 +115,9 @@ func (l *Loader) Build(_ context.Context, chatID, userID string, isDM bool) stri
 	var parts []string
 	if s := strings.TrimSpace(soul); s != "" {
 		parts = append(parts, wrapSection("persona", "", "", s))
+	}
+	if len(skillsIndex) > 0 {
+		parts = append(parts, buildSkillsIndexSection(skillsIndex))
 	}
 	if s := strings.TrimSpace(global); s != "" {
 		parts = append(parts, wrapSection("memory", "global", "", s))
@@ -98,6 +128,9 @@ func (l *Loader) Build(_ context.Context, chatID, userID string, isDM bool) stri
 	if s := strings.TrimSpace(chat); s != "" {
 		parts = append(parts, wrapSection("memory", "chat", chatType, s))
 	}
+	if s := strings.TrimSpace(entity); s != "" {
+		parts = append(parts, wrapSection("memory", "entity", "", s))
+	}
 
 	if len(parts) == 0 {
 		return ""
@@ -105,6 +138,25 @@ func (l *Loader) Build(_ context.Context, chatID, userID string, isDM bool) stri
 	// Trailing blank line separates the banner from the real user
 	// message so the boundary is obvious to the agent.
 	return strings.Join(parts, "\n\n") + "\n\n"
+}
+
+// buildSkillsIndexSection formats the skills index as a compact
+// <context type="skills"> block with one "name · description" line per
+// skill. Only the name is emitted when the description is empty.
+func buildSkillsIndexSection(entries []SkillEntry) string {
+	var sb strings.Builder
+	sb.WriteString(`<context type="skills">`)
+	sb.WriteByte('\n')
+	for _, e := range entries {
+		sb.WriteString(e.Name)
+		if e.Description != "" {
+			sb.WriteString(" · ")
+			sb.WriteString(e.Description)
+		}
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("</context>")
+	return sb.String()
 }
 
 // wrapSection produces one `<context type="..." ...>...</context>`

@@ -28,6 +28,22 @@ const (
 // readClient is always the private app for reading any chat's messages.
 type MessageHandler func(ctx context.Context, replyClient *Client, readClient *Client, post Post)
 
+// MessageStoreEvent is fired when the RC Message Store changes (new SMS/voicemail).
+type MessageStoreEvent struct {
+	ID   string `json:"id"`
+	Type string `json:"type"` // "SMS", "VoiceMail", etc.
+	From struct {
+		PhoneNumber string `json:"phoneNumber"`
+	} `json:"from"`
+	To []struct {
+		PhoneNumber string `json:"phoneNumber"`
+	} `json:"to"`
+	Body string `json:"body"`
+}
+
+// MessageStoreHandler is called for each inbound Message Store notification.
+type MessageStoreHandler func(ctx context.Context, evt MessageStoreEvent)
+
 // MentionAuthorizeFunc is called when a non-trusted sender @mentions
 // the bot in an allowed group chat AND the authorize-mention feature
 // is enabled. Implementations should issue an OOB approval challenge
@@ -58,7 +74,10 @@ type Monitor struct {
 	// original post is NOT dispatched to the message handler; the
 	// callback owns the post.
 	mentionAuthorize MentionAuthorizeFunc
-	failures         int
+	// msgStoreHandler, when non-nil, is called for inbound Message
+	// Store events (SMS, voicemail, etc.) received over WebSocket.
+	msgStoreHandler MessageStoreHandler
+	failures        int
 	sentPosts        map[string]time.Time // post ID -> timestamp
 	lastEvict        time.Time
 	mu               sync.Mutex
@@ -196,6 +215,14 @@ func (m *Monitor) SetMentionAuthorize(fn MentionAuthorizeFunc) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mentionAuthorize = fn
+}
+
+// SetMessageStoreHandler installs the handler called for inbound Message
+// Store events (e.g. new SMS, voicemail). Pass nil to remove it.
+func (m *Monitor) SetMessageStoreHandler(h MessageStoreHandler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.msgStoreHandler = h
 }
 
 // isChatUserAllowed reports whether the given (chat, user) pair is on

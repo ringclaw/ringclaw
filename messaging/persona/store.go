@@ -1,9 +1,11 @@
 package persona
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -23,6 +25,7 @@ const (
 	ScopeGlobal Scope = "global"
 	ScopeUser   Scope = "user"
 	ScopeChat   Scope = "chat"
+	ScopeEntity Scope = "entity"
 )
 
 // truncationMarker is prefixed to truncated content so agents reading
@@ -59,6 +62,8 @@ func (s *Store) memoryFilePath(scope Scope, id string) (string, error) {
 		return filepath.Join(memDir, "user", SanitizeID(id)+".md"), nil
 	case ScopeChat:
 		return filepath.Join(memDir, "chat", SanitizeID(id)+".md"), nil
+	case ScopeEntity:
+		return filepath.Join(memDir, "entities", SanitizeID(id)+".md"), nil
 	default:
 		return "", fmt.Errorf("persona: unknown scope %q", scope)
 	}
@@ -83,6 +88,8 @@ func (s *Store) cap(scope Scope) int {
 		return s.cfg.MaxUserMemoryChars
 	case ScopeChat:
 		return s.cfg.MaxChatMemoryChars
+	case ScopeEntity:
+		return s.cfg.MaxEntityMemoryChars
 	}
 	return 0
 }
@@ -202,6 +209,158 @@ You are an assistant connected to RingCentral via RingClaw. Be helpful, concise,
 > Codex, Gemini, …) share it, so switching agents mid-conversation
 > keeps the voice consistent.
 `
+
+// entityFilePath returns the absolute path for the entity memory file
+// for the given id, rooted under MemoryDir/entities/.
+func (s *Store) entityFilePath(id string) (string, error) {
+	memDir := s.cfg.MemoryDir
+	if memDir == "" {
+		return "", fmt.Errorf("persona: MemoryDir not configured")
+	}
+	return filepath.Join(memDir, "entities", SanitizeID(id)+".md"), nil
+}
+
+// LoadEntity returns the entity memory content for the given id,
+// truncated to MaxEntityMemoryChars. A missing file returns ("", nil).
+func (s *Store) LoadEntity(id string) (string, error) {
+	path, err := s.entityFilePath(id)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("persona: read entity %s: %w", path, err)
+	}
+	return truncateTail(string(data), s.cfg.MaxEntityMemoryChars), nil
+}
+
+// SaveEntity writes content as the entity memory for id, replacing any
+// existing content. Truncates to MaxEntityMemoryChars before writing
+// so the file on disk never grows beyond the cap.
+func (s *Store) SaveEntity(id, content string) error {
+	path, err := s.entityFilePath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("persona: create entity dir: %w", err)
+	}
+	content = truncateTail(content, s.cfg.MaxEntityMemoryChars)
+	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+// ClearEntity removes the entity memory file for id. Missing files are
+// not an error — the postcondition is "no entity memory present".
+func (s *Store) ClearEntity(id string) error {
+	path, err := s.entityFilePath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("persona: clear entity %s: %w", path, err)
+	}
+	return nil
+}
+
+// SkillEntry is a single entry in the skills index: the skill's name
+// (its subdirectory name under SkillsDir) and a short description
+// parsed from the first non-# line after the heading in SKILL.md.
+type SkillEntry struct {
+	Name        string
+	Description string
+}
+
+// LoadSkillsIndex scans SkillsDir for subdirectories that contain a
+// SKILL.md file. For each one it extracts the name (dir name) and a
+// description (the first non-empty line that is not the "# heading").
+// Returns entries sorted by name. An absent or unreadable SkillsDir
+// returns (nil, nil) — callers treat that as "no skills configured".
+func (s *Store) LoadSkillsIndex() ([]SkillEntry, error) {
+	skillsDir := s.cfg.SkillsDir
+	if skillsDir == "" {
+		return nil, nil
+	}
+
+	dirEntries, err := os.ReadDir(skillsDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("persona: read skills dir: %w", err)
+	}
+
+	var entries []SkillEntry
+	for _, de := range dirEntries {
+		if !de.IsDir() {
+			continue
+		}
+		skillMD := filepath.Join(skillsDir, de.Name(), "SKILL.md")
+		data, err := os.ReadFile(skillMD)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			// Skip unreadable skill files rather than hard-failing.
+			continue
+		}
+
+		name, desc := parseSkillHeader(string(data))
+		if name == "" {
+			name = de.Name()
+		}
+		entries = append(entries, SkillEntry{Name: name, Description: desc})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+	return entries, nil
+}
+
+// parseSkillHeader extracts the skill name from the first "# ..." line
+// and the description from the first subsequent non-empty line in s.
+func parseSkillHeader(s string) (name, description string) {
+	scanner := bufio.NewScanner(strings.NewReader(s))
+	seenHeading := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if !seenHeading {
+			if strings.HasPrefix(line, "# ") {
+				name = strings.TrimPrefix(line, "# ")
+				seenHeading = true
+			}
+			continue
+		}
+		// First non-empty line after the heading is the description.
+		description = line
+		return
+	}
+	return
+}
+
+// LoadSkill returns the full content of skills/<name>/SKILL.md.
+// Returns ("", nil) when the file does not exist.
+func (s *Store) LoadSkill(name string) (string, error) {
+	skillsDir := s.cfg.SkillsDir
+	if skillsDir == "" {
+		return "", nil
+	}
+	path := filepath.Join(skillsDir, name, "SKILL.md")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("persona: read skill %s: %w", path, err)
+	}
+	return string(data), nil
+}
 
 // truncateTail keeps the last max characters of s, prepending a
 // marker when content was dropped. The marker's length is counted

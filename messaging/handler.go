@@ -667,6 +667,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	} else if IsPersonaCommand(text) {
 		logSendError(SendTextReply(ctx, client, chatID, h.handlePersonaCommand()))
 		return
+	} else if strings.HasPrefix(text, "/lowes-batch") {
+		logSendError(SendTextReply(ctx, client, chatID, h.handleLowesBatch(ctx, readClient, chatID, text)))
+		return
 	}
 
 	// Explicit action commands: /task, /note, /event (use readClient for API access)

@@ -274,7 +274,7 @@ func TestConfigPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 
-	p, err := ConfigPath()
+	p, err := ConfigPath("")
 	if err != nil {
 		t.Fatalf("ConfigPath() error: %v", err)
 	}

@@ -29,6 +29,7 @@ var (
 	jsonOutput    bool
 	logLevelFlag  string
 	logFormatFlag string
+	dirFlag       string
 )
 
 var rootCmd = &cobra.Command{
@@ -42,6 +43,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "", "Log level: debug, info, warn, error")
 	rootCmd.PersistentFlags().StringVar(&logFormatFlag, "log-format", "", "Log format: text, json, color")
+	rootCmd.PersistentFlags().StringVar(&dirFlag, "dir", "", "RingClaw home directory (default: ~/.ringclaw)")
 	rootCmd.Version = FullVersion()
 }
 

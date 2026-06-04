@@ -103,7 +103,7 @@ func cronAdd(store *CronStore, text, chatID string) string {
 	}
 
 	// Validate schedule by computing next run
-	parser := NewCronScheduler(nil, nil, "", nil)
+	parser := NewCronScheduler(nil, nil, "", nil, nil, ActionContext{})
 	next, err := parser.ComputeNextRun(schedule, time.Now())
 	if err != nil {
 		return fmt.Sprintf("Invalid schedule %q: %v", schedule, err)

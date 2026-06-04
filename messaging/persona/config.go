@@ -17,10 +17,12 @@ type Config struct {
 	Enabled              *bool  `json:"enabled,omitempty"`
 	SoulFile             string `json:"soul_file,omitempty"`
 	MemoryDir            string `json:"memory_dir,omitempty"`
+	SkillsDir            string `json:"skills_dir,omitempty"`
 	MaxSoulChars         int    `json:"max_soul_chars,omitempty"`
 	MaxChatMemoryChars   int    `json:"max_chat_memory_chars,omitempty"`
 	MaxUserMemoryChars   int    `json:"max_user_memory_chars,omitempty"`
 	MaxGlobalMemoryChars int    `json:"max_global_memory_chars,omitempty"`
+	MaxEntityMemoryChars int    `json:"max_entity_memory_chars,omitempty"`
 }
 
 // IsEnabled reports whether the persona machinery should run. Defaults
@@ -41,6 +43,7 @@ const (
 	DefaultMaxChatMemoryChars   = 4000
 	DefaultMaxUserMemoryChars   = 2000
 	DefaultMaxGlobalMemoryChars = 2000
+	DefaultMaxEntityMemoryChars = 8000
 )
 
 // ResolvedConfig is Config with all optional fields populated from
@@ -50,10 +53,12 @@ type ResolvedConfig struct {
 	Enabled              bool
 	SoulFile             string
 	MemoryDir            string
+	SkillsDir            string
 	MaxSoulChars         int
 	MaxChatMemoryChars   int
 	MaxUserMemoryChars   int
 	MaxGlobalMemoryChars int
+	MaxEntityMemoryChars int
 }
 
 // Resolved fills in defaults and expands "~" prefixes to the user's
@@ -74,14 +79,20 @@ func (c Config) Resolved() ResolvedConfig {
 	if memDir == "" {
 		memDir = filepath.Join(home, ".ringclaw", "memory")
 	}
+	skillsDir := strings.TrimSpace(c.SkillsDir)
+	if skillsDir == "" {
+		skillsDir = filepath.Join(home, ".ringclaw", "skills")
+	}
 	return ResolvedConfig{
 		Enabled:              c.IsEnabled(),
 		SoulFile:             expandHome(soul, home),
 		MemoryDir:            expandHome(memDir, home),
+		SkillsDir:            expandHome(skillsDir, home),
 		MaxSoulChars:         pickInt(c.MaxSoulChars, DefaultMaxSoulChars),
 		MaxChatMemoryChars:   pickInt(c.MaxChatMemoryChars, DefaultMaxChatMemoryChars),
 		MaxUserMemoryChars:   pickInt(c.MaxUserMemoryChars, DefaultMaxUserMemoryChars),
 		MaxGlobalMemoryChars: pickInt(c.MaxGlobalMemoryChars, DefaultMaxGlobalMemoryChars),
+		MaxEntityMemoryChars: pickInt(c.MaxEntityMemoryChars, DefaultMaxEntityMemoryChars),
 	}
 }
 

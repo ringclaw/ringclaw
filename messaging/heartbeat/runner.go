@@ -13,6 +13,7 @@ import (
 
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/config"
+	"github.com/ringclaw/ringclaw/messaging"
 )
 
 const (
@@ -27,23 +28,39 @@ type SendFunc func(ctx context.Context, chatID, text string) error
 // PromptFunc returns the heartbeat prompt template. Implemented by messaging.HeartbeatPrompt.
 type PromptFunc func() string
 
-// HeartbeatRunner periodically reads HEARTBEAT.md and sends it to the default agent.
-type HeartbeatRunner struct {
-	cfg         config.HeartbeatConfig
-	send        SendFunc
-	chatID      string
-	getAgent    func() agent.Agent
-	prompt      PromptFunc
-	interval    time.Duration
-	location    *time.Location
-	activeStart int // minutes from midnight
-	activeEnd   int // minutes from midnight
-	mu          sync.Mutex
-	recentHash  map[string]time.Time // hash -> last seen
+// ExecuteFunc executes a list of agent actions for a given chat. It is called
+// after filterHeartbeatActions has stripped disallowed action types.
+type ExecuteFunc func(ctx context.Context, chatID string, actions []messaging.AgentAction)
+
+// heartbeatAllowedActions is the set of action types the heartbeat runner is
+// allowed to fire. SMS and PHONE_CALLLOG are excluded to prevent unsolicited
+// outbound communication from the periodic check.
+var heartbeatAllowedActions = map[string]bool{
+	"MESSAGE": true,
+	"NOTE":    true,
+	"CARD":    true,
+	"TASK":    true,
 }
 
-// NewHeartbeatRunner creates a heartbeat runner.
-func NewHeartbeatRunner(cfg config.HeartbeatConfig, send SendFunc, chatID string, getAgent func() agent.Agent, prompt PromptFunc) (*HeartbeatRunner, error) {
+// HeartbeatRunner periodically reads HEARTBEAT.md and sends it to the default agent.
+type HeartbeatRunner struct {
+	cfg            config.HeartbeatConfig
+	send           SendFunc
+	chatID         string
+	getAgent       func() agent.Agent
+	prompt         PromptFunc
+	interval       time.Duration
+	location       *time.Location
+	activeStart    int // minutes from midnight
+	activeEnd      int // minutes from midnight
+	mu             sync.Mutex
+	recentHash     map[string]time.Time // hash -> last seen
+	executeActions ExecuteFunc          // optional; nil = no action execution
+}
+
+// NewHeartbeatRunner creates a heartbeat runner. executeActions is optional
+// (pass nil to disable ACTION execution from heartbeat replies).
+func NewHeartbeatRunner(cfg config.HeartbeatConfig, send SendFunc, chatID string, getAgent func() agent.Agent, prompt PromptFunc, executeActions ...ExecuteFunc) (*HeartbeatRunner, error) {
 	interval := 30 * time.Minute
 	if cfg.Interval != "" {
 		d, err := time.ParseDuration(cfg.Interval)
@@ -74,6 +91,9 @@ func NewHeartbeatRunner(cfg config.HeartbeatConfig, send SendFunc, chatID string
 		interval:   interval,
 		location:   loc,
 		recentHash: make(map[string]time.Time),
+	}
+	if len(executeActions) > 0 {
+		r.executeActions = executeActions[0]
 	}
 
 	if cfg.ActiveHours != "" {
@@ -138,17 +158,27 @@ func (r *HeartbeatRunner) tick(ctx context.Context) {
 	}
 
 	reply = strings.TrimSpace(reply)
-	if reply == "" || strings.EqualFold(reply, heartbeatOKToken) || strings.HasPrefix(strings.TrimSpace(strings.ToUpper(reply)), heartbeatOKToken) {
+	clean, actions := messaging.ParseAgentActions(reply)
+
+	// Execute allowed actions (heartbeat allowlist: MESSAGE, NOTE, CARD, TASK)
+	if r.executeActions != nil && len(actions) > 0 {
+		allowed := filterHeartbeatActions(actions)
+		if len(allowed) > 0 {
+			r.executeActions(ctx, r.chatID, allowed)
+		}
+	}
+
+	if clean == "" || strings.EqualFold(clean, heartbeatOKToken) || strings.HasPrefix(strings.TrimSpace(strings.ToUpper(clean)), heartbeatOKToken) {
 		slog.Info("heartbeat: all clear", "component", "heartbeat")
 		return
 	}
 
-	if r.isDuplicate(reply) {
+	if r.isDuplicate(clean) {
 		slog.Info("heartbeat: duplicate reply suppressed", "component", "heartbeat")
 		return
 	}
 
-	if err := r.send(ctx, r.chatID, "**[Heartbeat]** "+reply); err != nil {
+	if err := r.send(ctx, r.chatID, "**[Heartbeat]** "+clean); err != nil {
 		slog.Error("heartbeat: failed to send reply", "component", "heartbeat", "error", err)
 	}
 }
@@ -197,6 +227,22 @@ func (r *HeartbeatRunner) isDuplicate(reply string) bool {
 		}
 	}
 	return false
+}
+
+// filterHeartbeatActions returns only the actions whose types are in the
+// heartbeat allowlist (MESSAGE, NOTE, CARD, TASK). SMS, PHONE_CALLLOG and
+// any other types are stripped to prevent unsolicited outbound communication
+// from the periodic health-check.
+func filterHeartbeatActions(actions []messaging.AgentAction) []messaging.AgentAction {
+	var allowed []messaging.AgentAction
+	for _, a := range actions {
+		if heartbeatAllowedActions[a.Type] {
+			allowed = append(allowed, a)
+		} else {
+			slog.Info("heartbeat: action type not allowed, stripping", "component", "heartbeat", "type", a.Type)
+		}
+	}
+	return allowed
 }
 
 func isEffectivelyEmpty(content string) bool {

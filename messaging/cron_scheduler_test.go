@@ -69,7 +69,7 @@ func TestExecuteJob_Success(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		return ag
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "j1",
@@ -113,7 +113,7 @@ func TestExecuteJob_NoAgent(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		return nil // no agent
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "j2",
@@ -153,7 +153,7 @@ func TestExecuteJob_AgentError(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		return ag
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "j3",
@@ -194,7 +194,7 @@ func TestExecuteJob_RetryableError(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		return ag
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "j4",
@@ -228,7 +228,7 @@ func TestExecuteJob_EmptyReply(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		return ag
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "j5",
@@ -272,7 +272,7 @@ func TestExecuteJob_UsesChatIDFromJob(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "default-chat", func(name string) agent.Agent {
 		return ag
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "j6",
@@ -315,7 +315,7 @@ func TestExecuteJob_FallbackToDefaultChat(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "default-chat", func(name string) agent.Agent {
 		return ag
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "j7",
@@ -338,7 +338,7 @@ func TestExecuteJob_FallbackToDefaultChat(t *testing.T) {
 
 func TestRecordResult_Success(t *testing.T) {
 	store := newTestStore(t)
-	scheduler := NewCronScheduler(store, nil, "", nil)
+	scheduler := NewCronScheduler(store, nil, "", nil, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "r1",
@@ -371,7 +371,7 @@ func TestRecordResult_Success(t *testing.T) {
 
 func TestRecordResult_Error(t *testing.T) {
 	store := newTestStore(t)
-	scheduler := NewCronScheduler(store, nil, "", nil)
+	scheduler := NewCronScheduler(store, nil, "", nil, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "r2",
@@ -401,7 +401,7 @@ func TestRecordResult_Error(t *testing.T) {
 
 func TestRecordResult_OneShotDisables(t *testing.T) {
 	store := newTestStore(t)
-	scheduler := NewCronScheduler(store, nil, "", nil)
+	scheduler := NewCronScheduler(store, nil, "", nil, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "r3",
@@ -426,7 +426,7 @@ func TestRecordResult_OneShotDisables(t *testing.T) {
 
 func TestRecordResult_ClearsLastError(t *testing.T) {
 	store := newTestStore(t)
-	scheduler := NewCronScheduler(store, nil, "", nil)
+	scheduler := NewCronScheduler(store, nil, "", nil, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "r4",
@@ -451,7 +451,7 @@ func TestRecordResult_ClearsLastError(t *testing.T) {
 
 func TestInitNextRuns_SetsInitialTimes(t *testing.T) {
 	store := newTestStore(t)
-	scheduler := NewCronScheduler(store, nil, "", nil)
+	scheduler := NewCronScheduler(store, nil, "", nil, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "init1",
@@ -475,7 +475,7 @@ func TestInitNextRuns_SetsInitialTimes(t *testing.T) {
 
 func TestInitNextRuns_SkipsAlreadySet(t *testing.T) {
 	store := newTestStore(t)
-	scheduler := NewCronScheduler(store, nil, "", nil)
+	scheduler := NewCronScheduler(store, nil, "", nil, nil, ActionContext{})
 
 	existingNext := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	job := CronJob{
@@ -501,7 +501,7 @@ func TestInitNextRuns_SkipsAlreadySet(t *testing.T) {
 
 func TestInitNextRuns_DisablesInvalidSchedule(t *testing.T) {
 	store := newTestStore(t)
-	scheduler := NewCronScheduler(store, nil, "", nil)
+	scheduler := NewCronScheduler(store, nil, "", nil, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "init3",
@@ -525,7 +525,7 @@ func TestInitNextRuns_DisablesInvalidSchedule(t *testing.T) {
 
 func TestInitNextRuns_SkipsDisabledJobs(t *testing.T) {
 	store := newTestStore(t)
-	scheduler := NewCronScheduler(store, nil, "", nil)
+	scheduler := NewCronScheduler(store, nil, "", nil, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "init4",
@@ -571,7 +571,7 @@ func TestTick_ExecutesDueJob(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		return ag
-	})
+	}, nil, ActionContext{})
 
 	// Add a job that's already due
 	job := CronJob{
@@ -606,7 +606,7 @@ func TestTick_SkipsNotDueJob(t *testing.T) {
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		t.Fatal("should not get agent for not-due job")
 		return nil
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "tick2",
@@ -629,7 +629,7 @@ func TestTick_SkipsDisabledJob(t *testing.T) {
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		t.Fatal("should not get agent for disabled job")
 		return nil
-	})
+	}, nil, ActionContext{})
 
 	job := CronJob{
 		ID:       "tick3",
@@ -651,7 +651,7 @@ func TestStartStop_Lifecycle(t *testing.T) {
 
 	scheduler := NewCronScheduler(store, client, "chat-1", func(name string) agent.Agent {
 		return nil
-	})
+	}, nil, ActionContext{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

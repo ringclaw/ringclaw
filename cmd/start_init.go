@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -243,13 +244,23 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 	}
 	handler.SetCronStore(cronStore)
 
+	// Build the action context for the cron scheduler. Cron jobs are trusted
+	// as owner-initiated (they run on the machine owner's behalf).
+	cronActionCtx := messaging.ActionContext{
+		OriginIsOwner: true,
+		OwnerDMChat:   c.bot.DMChatID(),
+	}
+	if oobMgr != nil {
+		cronActionCtx.OOB = oobMgr
+	}
+
 	cronScheduler := messaging.NewCronScheduler(cronStore, c.bot, defaultChatID, func(name string) agent.Agent {
 		if name == "" {
 			return handler.GetDefaultAgent()
 		}
 		ag, _ := handler.GetAgent(ctx, name)
 		return ag
-	})
+	}, c.lookupClient(), cronActionCtx)
 	go cronScheduler.Start(ctx)
 
 	// Heartbeat runner
@@ -257,11 +268,66 @@ func initServices(ctx context.Context, cfg *config.Config, c *clients, handler *
 		sendFn := func(ctx context.Context, chatID, text string) error {
 			return messaging.SendTextReply(ctx, c.bot, chatID, text)
 		}
-		hbRunner, err := heartbeat.NewHeartbeatRunner(cfg.Heartbeat, sendFn, defaultChatID, handler.GetDefaultAgent, messaging.HeartbeatPrompt)
+		hbActionCtx := messaging.ActionContext{
+			OriginIsOwner: true,
+			OwnerDMChat:   c.bot.DMChatID(),
+		}
+		if oobMgr != nil {
+			hbActionCtx.OOB = oobMgr
+		}
+		hbActionClient := c.lookupClient()
+		hbExecuteFn := func(ctx context.Context, chatID string, actions []messaging.AgentAction) {
+			messaging.ExecuteAgentActions(ctx, c.bot, hbActionClient, chatID, actions, hbActionCtx)
+		}
+		hbRunner, err := heartbeat.NewHeartbeatRunner(cfg.Heartbeat, sendFn, defaultChatID, handler.GetDefaultAgent, messaging.HeartbeatPrompt, hbExecuteFn)
 		if err != nil {
 			slog.Error("failed to start heartbeat runner", "error", err)
 		} else {
 			go hbRunner.Start(ctx)
+		}
+	}
+}
+
+// buildMessageStoreHandler returns a MessageStoreHandler that processes
+// inbound SMS events: CONFIRM messages are logged for dispatch matching
+// and complaint keywords are routed to the messaging handler.
+func buildMessageStoreHandler(cfg *config.Config, h *messaging.Handler, cs *clients) ringcentral.MessageStoreHandler {
+	return func(ctx context.Context, evt ringcentral.MessageStoreEvent) {
+		if evt.Type != "SMS" {
+			return
+		}
+
+		// CONFIRM matching: "CONFIRM #A8821" or "CONFIRM A8821"
+		upper := strings.ToUpper(strings.TrimSpace(evt.Body))
+		if strings.HasPrefix(upper, "CONFIRM") {
+			slog.Info("inbound SMS CONFIRM received", "from", evt.From.PhoneNumber, "body", evt.Body)
+			// TODO: match to open dispatch in chat memory, update task
+			return
+		}
+
+		// Complaint detection keywords
+		complaints := []string{"worst", "complaint", "didn't show", "lawsuit", "refund", "terrible", "horrible"}
+		bodyLower := strings.ToLower(evt.Body)
+		isComplaint := false
+		for _, kw := range complaints {
+			if strings.Contains(bodyLower, kw) {
+				isComplaint = true
+				break
+			}
+		}
+
+		if isComplaint {
+			slog.Info("inbound SMS complaint detected", "from", evt.From.PhoneNumber)
+			defaultChatID := ""
+			if len(cfg.RC.ChatIDs) > 0 {
+				defaultChatID = cfg.RC.ChatIDs[0]
+			}
+			post := ringcentral.Post{
+				GroupID:   defaultChatID,
+				CreatorID: evt.From.PhoneNumber,
+				Text:      fmt.Sprintf("[Inbound SMS from %s] %s", evt.From.PhoneNumber, evt.Body),
+			}
+			h.HandleMessage(ctx, cs.bot, cs.private, post)
 		}
 	}
 }

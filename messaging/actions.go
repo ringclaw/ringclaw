@@ -21,7 +21,7 @@ var crossChatNoticeTimeout = 5 * time.Second
 
 // AgentAction represents a parsed action from the agent's response.
 type AgentAction struct {
-	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE"
+	Type   string // "NOTE", "TASK", "EVENT", "CARD", "MESSAGE", "SMS", "PHONE_CALLLOG"
 	Params map[string]string
 	Body   string
 }
@@ -105,7 +105,7 @@ func parseActionBlock(block string) *AgentAction {
 // parseActionParams parses "title=xxx start=2026-01-01T10:00:00Z end=2026-01-01T11:00:00Z"
 func parseActionParams(s string) []keyValue {
 	var result []keyValue
-	keys := []string{"title", "subject", "start", "end", "chatid", "assignee"}
+	keys := []string{"title", "subject", "start", "end", "chatid", "assignee", "to", "from", "scope"}
 	remaining := s
 	for len(remaining) > 0 {
 		remaining = strings.TrimSpace(remaining)
@@ -318,6 +318,47 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			slog.Info("action: sent message", "chatID", targetChat, "text", util.Truncate(body, 60))
+
+		case "SMS":
+			to := a.Params["to"]
+			from := a.Params["from"] // optional, client uses its own number if empty
+			body := strings.TrimSpace(a.Body)
+			if to == "" || body == "" {
+				results = append(results, "SMS action missing 'to' or body")
+				continue
+			}
+			if _, err := actionClient.SendSMS(ctx, from, to, body); err != nil {
+				slog.Error("action: send SMS failed", "error", err, "to", to)
+				results = append(results, fmt.Sprintf("Failed to send SMS to %s: %v", to, err))
+				continue
+			}
+			slog.Info("action: sent SMS", "to", to)
+
+		case "PHONE_CALLLOG":
+			scope := a.Params["scope"] // "today", "week", or empty=all
+			callLogOpts := ringcentral.ListCallLogOpts{PerPage: 20}
+			if scope == "today" {
+				callLogOpts.DateFrom = time.Now().UTC().Format("2006-01-02") + "T00:00:00Z"
+			} else if scope == "week" {
+				callLogOpts.DateFrom = time.Now().UTC().AddDate(0, 0, -7).Format("2006-01-02") + "T00:00:00Z"
+			}
+			list, err := actionClient.ListCallLog(ctx, callLogOpts)
+			if err != nil {
+				results = append(results, fmt.Sprintf("Failed to fetch call log: %v", err))
+				continue
+			}
+			var lines []string
+			for _, r := range list.Records {
+				lines = append(lines, fmt.Sprintf("%s %s→%s %s", r.StartTime, r.From.PhoneNumber, r.To.PhoneNumber, r.Result))
+			}
+			summary := strings.Join(lines, "\n")
+			if summary == "" {
+				summary = "(no calls)"
+			}
+			if err := SendTextReply(ctx, replyClient, chatID, "📞 Call Log:\n"+summary); err != nil {
+				slog.Error("action: send call log reply failed", "error", err)
+			}
+			slog.Info("action: fetched call log", "count", len(list.Records))
 
 		default:
 			slog.Warn("action: unknown action type, sending body as message", "type", a.Type)

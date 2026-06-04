@@ -272,5 +272,8 @@ func isPrivilegedCommand(text string) bool {
 		sub := memSubcommand(text)
 		return sub == "add" || sub == "del"
 	}
+	if strings.HasPrefix(text, "/lowes-batch") {
+		return true
+	}
 	return false
 }

@@ -99,7 +99,7 @@ func TestCronStore_FileNotExist(t *testing.T) {
 }
 
 func TestComputeNextRun_Every(t *testing.T) {
-	s := NewCronScheduler(nil, nil, "", nil)
+	s := NewCronScheduler(nil, nil, "", nil, nil, ActionContext{})
 	now := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
 
 	next, err := s.ComputeNextRun("every:5m", now)
@@ -113,7 +113,7 @@ func TestComputeNextRun_Every(t *testing.T) {
 }
 
 func TestComputeNextRun_At(t *testing.T) {
-	s := NewCronScheduler(nil, nil, "", nil)
+	s := NewCronScheduler(nil, nil, "", nil, nil, ActionContext{})
 	now := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
 
 	next, err := s.ComputeNextRun("at:2026-04-01T10:00:00Z", now)
@@ -133,7 +133,7 @@ func TestComputeNextRun_At(t *testing.T) {
 }
 
 func TestComputeNextRun_CronExpr(t *testing.T) {
-	s := NewCronScheduler(nil, nil, "", nil)
+	s := NewCronScheduler(nil, nil, "", nil, nil, ActionContext{})
 	now := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
 
 	next, err := s.ComputeNextRun("*/30 * * * *", now)
@@ -147,7 +147,7 @@ func TestComputeNextRun_CronExpr(t *testing.T) {
 }
 
 func TestComputeNextRun_Invalid(t *testing.T) {
-	s := NewCronScheduler(nil, nil, "", nil)
+	s := NewCronScheduler(nil, nil, "", nil, nil, ActionContext{})
 	now := time.Now()
 
 	tests := []string{"bad", "every:-1m", "at:not-a-date", "every:0s"}

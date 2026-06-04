@@ -85,7 +85,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		if err := config.Save(cfg); err != nil {
 			slog.Warn("failed to save auto-detected config", "error", err)
 		} else {
-			path, _ := config.ConfigPath()
+			path, _ := config.ConfigPath(dirFlag)
 			slog.Info("auto-detected agents saved", "path", path)
 		}
 	}
