@@ -44,14 +44,14 @@ type MessageStoreHandler func(ctx context.Context, client *Client, evt MessageSt
 // The bot client is required and used for WS connection and replies.
 // The private client is optional and used for reading other chats.
 type Monitor struct {
-	client          *Client // bot client (required)
-	privateClient   *Client // private app client (optional)
-	botMentionOnly  bool
-	allowAllChats   bool
-	allowedChatIDs  map[string]bool
-	allowedUserIDs  map[string]bool
-	allowAllSenders bool // when true, empty allowedUserIDs means "allow all"; default false = mandatory allowlist
-	handler         MessageHandler
+	client                  *Client // bot client (required)
+	privateClient           *Client // private app client (optional)
+	botMentionOnly          bool
+	allowUnlistedGroupChats bool
+	allowedChatIDs          map[string]bool
+	allowedUserIDs          map[string]bool
+	allowAllSenders         bool // when true, empty allowedUserIDs means "allow all"; default false = mandatory allowlist
+	handler                 MessageHandler
 	// chatUserAllow maps chat ID -> set of numeric user IDs that may
 	// drive the bot in that specific chat. Layered ON TOP of
 	// allowedUserIDs: a sender is considered trusted when they appear
@@ -67,15 +67,15 @@ type Monitor struct {
 	// message-store websocket filter and routes inbound notifications
 	// to the registered callback.
 	messageStoreHandler MessageStoreHandler
-	failures         int
-	sentPosts        map[string]time.Time // post ID -> timestamp
-	lastEvict        time.Time
-	mu               sync.Mutex
+	failures            int
+	sentPosts           map[string]time.Time // post ID -> timestamp
+	lastEvict           time.Time
+	mu                  sync.Mutex
 }
 
 const (
-	sentPostTTL      = 5 * time.Minute
-	evictInterval    = 1 * time.Minute
+	sentPostTTL   = 5 * time.Minute
+	evictInterval = 1 * time.Minute
 )
 
 // MarkSentPost records a post ID as sent by the bot.
@@ -116,7 +116,9 @@ func (m *Monitor) IsSentPost(id string) bool {
 
 // NewMonitor creates a new WebSocket monitor.
 // botClient is used for WS connection and replies.
-// chatIDs limits which chats are monitored; empty means all chats.
+// chatIDs limits which chats are monitored. The bot's own DM chat is
+// always auto-allowed separately. Other chats outside chatIDs are
+// only accepted when SetAllowUnlistedGroupChats(true) is enabled.
 // sourceUserIDs is the sender allowlist. By default the allowlist is advisory
 // (empty means allow all) for backward compatibility; production callers
 // should call EnforceSenderAllowlist after populating the list to switch the
@@ -138,7 +140,6 @@ func NewMonitor(botClient *Client, handler MessageHandler, chatIDs []string, sou
 	return &Monitor{
 		client:          botClient,
 		botMentionOnly:  mentionOnly,
-		allowAllChats:   len(chatIDs) == 0,
 		handler:         handler,
 		allowedChatIDs:  allowed,
 		allowedUserIDs:  allowedUsers,
@@ -215,6 +216,31 @@ func (m *Monitor) SetMessageStoreHandler(fn MessageStoreHandler) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messageStoreHandler = fn
+}
+
+// SetAllowUnlistedGroupChats enables accepting messages from chats
+// outside chat_ids as long as the destination is not the bot's own
+// DM chat. RingClaw already treats "non-bot-DM" as "group-like" for
+// mention gating, so this switch follows the same rule.
+func (m *Monitor) SetAllowUnlistedGroupChats(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.allowUnlistedGroupChats = enabled
+}
+
+func (m *Monitor) isChatAllowed(chatID string) bool {
+	m.mu.Lock()
+	allowUnlisted := m.allowUnlistedGroupChats
+	allowed := m.allowedChatIDs[chatID]
+	m.mu.Unlock()
+
+	if allowed {
+		return true
+	}
+	if allowUnlisted && !m.client.IsBotDM(chatID) {
+		return true
+	}
+	return false
 }
 
 // isChatUserAllowed reports whether the given (chat, user) pair is on
@@ -515,7 +541,7 @@ func (m *Monitor) handleWSMessage(ctx context.Context, msg []byte) {
 	}
 
 	// Filter by allowed chat IDs when an allowlist is configured.
-	if !m.allowAllChats && !m.allowedChatIDs[event.Body.GroupID] {
+	if !m.isChatAllowed(event.Body.GroupID) {
 		slog.Debug("ignoring message from non-allowed chat", "component", "monitor", "chatID", event.Body.GroupID)
 		return
 	}

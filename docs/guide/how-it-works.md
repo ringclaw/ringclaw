@@ -74,15 +74,17 @@ graph LR
 
 ### Routing
 
-When `chat_ids` is non-empty, messages from chats outside `chat_ids` are
-silently dropped by the monitor. When `chat_ids` is empty, the monitor accepts
-messages from all chats before the later sender / mention / command gates run.
+Messages from chats outside `chat_ids` are silently dropped by the monitor,
+except for the bot's own DM which is always auto-allowed. If
+`allow_unlisted_group_chats` is enabled, the monitor also accepts messages
+from any non-bot-DM chat the bot is already in before the later sender /
+mention / command gates run.
 
 | Source chat | Reply client | Read/Action client |
 |-------------|-------------|-------------------|
 | Bot DM (auto-discovered) | Bot | Private App (if configured) or Bot |
 | Chat in `chat_ids` | Bot | Private App (if configured) or Bot |
-| Any chat when `chat_ids` is empty | Bot | Private App (if configured) or Bot |
+| Unlisted non-bot-DM chat when `allow_unlisted_group_chats: true` | Bot | Private App (if configured) or Bot |
 
 ### Group Chat Behavior
 

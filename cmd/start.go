@@ -167,6 +167,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	monitor := ringcentral.NewMonitor(c.bot, handler.HandleMessage, cfg.RC.ChatIDs, resolvedUserIDs, cfg.RC.IsGroupMentionOnly())
+	monitor.SetAllowUnlistedGroupChats(cfg.RC.IsAllowUnlistedGroupChats())
 	if c.private != nil {
 		monitor.SetPrivateClient(c.private)
 		c.private.SetMonitor(monitor)

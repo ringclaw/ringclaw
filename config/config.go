@@ -148,6 +148,12 @@ type RCConfig struct {
 	// bot_mention_only field; see the BotMentionOnly comment below.
 	GroupMentionOnly *bool `json:"group_mention_only,omitempty"`
 
+	// AllowUnlistedGroupChats, when true, bypasses the chat_ids gate
+	// for any non-bot-DM chat. This lets operators keep chat_ids for
+	// explicit routing while still accepting messages from group-like
+	// chats the bot has already joined.
+	AllowUnlistedGroupChats *bool `json:"allow_unlisted_group_chats,omitempty"`
+
 	// Deprecated: renamed to GroupMentionOnly. The bot_mention_only
 	// JSON field is still accepted for backward compatibility —
 	// Load() copies it into GroupMentionOnly and emits a WARN so
@@ -292,6 +298,16 @@ func (rc RCConfig) IsGroupMentionOnly() bool {
 		return true
 	}
 	return *rc.GroupMentionOnly
+}
+
+// IsAllowUnlistedGroupChats reports whether the monitor should accept
+// messages from chats outside chat_ids as long as they are not the
+// bot's own DM chat. Defaults to false.
+func (rc RCConfig) IsAllowUnlistedGroupChats() bool {
+	if rc.AllowUnlistedGroupChats == nil {
+		return false
+	}
+	return *rc.AllowUnlistedGroupChats
 }
 
 const defaultGroupSummaryMessageLimit = 200

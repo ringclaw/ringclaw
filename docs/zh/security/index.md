@@ -68,9 +68,10 @@ RingClaw 可以通过 **四个不同入口** 操作 RingCentral。下一节的
 ::: tip Chat allowlist 是最外层护栏
 **第 -1 层**：当 `ringcentral.chat_ids` 非空时，不在列表中的聊天消息会被
 WebSocket monitor 直接丢弃，连第零层都到不了（`ringcentral/monitor.go`）。
-当 `chat_ids` 为空时，这一层相当于关闭，所有聊天都会继续进入后续
-sender/command 权限层。如果发现消息被静默吞掉，优先检查 chat
-allowlist——日志会打印 `ignoring message from non-allowed chat`。
+bot 自己的私聊会单独自动放行。其他未列出的聊天只有在显式开启
+`allow_unlisted_group_chats: true` 时才会继续进入后续 sender/command
+权限层。如果发现消息被静默吞掉，优先检查 chat allowlist——日志会打印
+`ignoring message from non-allowed chat`。
 :::
 
 ## 权限矩阵

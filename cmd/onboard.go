@@ -31,6 +31,7 @@ type onboardOptions struct {
 	SourceUserIDs       []string
 	Capabilities        []string
 	GroupMentionOnly    bool
+	AllowUnlistedGroupChats bool
 	FromEnv             bool
 	SkipValidate        bool
 	NoSave              bool
@@ -85,6 +86,7 @@ type onboardManifestBot struct {
 	SourceUserIDs         []string                      `json:"source_user_ids,omitempty"`
 	Capabilities          []string                      `json:"capabilities,omitempty"`
 	GroupMentionOnly      *bool                         `json:"group_mention_only,omitempty"`
+	AllowUnlistedGroupChats *bool                       `json:"allow_unlisted_group_chats,omitempty"`
 	DefaultAgent          string                        `json:"default_agent,omitempty"`
 	AgentWorkspace        string                        `json:"agent_workspace,omitempty"`
 	APIAddr               string                        `json:"api_addr,omitempty"`
@@ -105,6 +107,7 @@ func init() {
 	onboardCmd.Flags().StringSliceVar(&onboardOpts.SourceUserIDs, "source-user-id", nil, "Trusted sender ID/email/phone; may be repeated or comma-separated")
 	onboardCmd.Flags().StringSliceVar(&onboardOpts.Capabilities, "capability", nil, "Optional AVA capability to enable: video, phone, call_log, sms; may be repeated or comma-separated")
 	onboardCmd.Flags().BoolVar(&onboardOpts.GroupMentionOnly, "group-mention-only", true, "Require @mention in group chats")
+	onboardCmd.Flags().BoolVar(&onboardOpts.AllowUnlistedGroupChats, "allow-unlisted-group-chats", true, "Accept messages from non-bot-DM chats even when they are not listed in chat_ids")
 	onboardCmd.Flags().BoolVar(&onboardOpts.FromEnv, "from-env", false, "Read RC_* and RINGCLAW_* onboarding values from environment")
 	onboardCmd.Flags().BoolVar(&onboardOpts.SkipValidate, "skip-validate", false, "Write config without calling RingCentral APIs")
 	onboardCmd.Flags().BoolVar(&onboardOpts.NoSave, "no-save", false, "Validate and print summary without writing config")
@@ -209,6 +212,8 @@ func runOnboard(cmd *cobra.Command, args []string) error {
 	cfg.RC.Capabilities = capabilities
 	groupMentionOnly := opts.GroupMentionOnly
 	cfg.RC.GroupMentionOnly = &groupMentionOnly
+	allowUnlistedGroupChats := opts.AllowUnlistedGroupChats
+	cfg.RC.AllowUnlistedGroupChats = &allowUnlistedGroupChats
 
 	requiredScopes := requiredScopesForCapabilities(cfg.RC.Capabilities)
 	result := onboardResult{
@@ -355,6 +360,12 @@ func runOnboardManifest(cmd *cobra.Command, opts onboardOptions) error {
 			v := opts.GroupMentionOnly
 			cfg.RC.GroupMentionOnly = &v
 		}
+		if merged.AllowUnlistedGroupChats != nil {
+			cfg.RC.AllowUnlistedGroupChats = merged.AllowUnlistedGroupChats
+		} else {
+			v := opts.AllowUnlistedGroupChats
+			cfg.RC.AllowUnlistedGroupChats = &v
+		}
 
 		if cfg.RC.BotToken == "" && !opts.AllowPartialUpdate {
 			return fmt.Errorf("manifest bot %q missing bot_token", merged.BotID)
@@ -485,6 +496,9 @@ func mergeManifestBot(defaults, bot onboardManifestBot) onboardManifestBot {
 	out.Capabilities = mergeStrings(defaults.Capabilities, bot.Capabilities)
 	if bot.GroupMentionOnly != nil {
 		out.GroupMentionOnly = bot.GroupMentionOnly
+	}
+	if bot.AllowUnlistedGroupChats != nil {
+		out.AllowUnlistedGroupChats = bot.AllowUnlistedGroupChats
 	}
 	if bot.DefaultAgent != "" {
 		out.DefaultAgent = bot.DefaultAgent

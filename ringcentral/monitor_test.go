@@ -188,14 +188,10 @@ func TestMonitor_HandleWSMessage_FilterByChatID(t *testing.T) {
 	}
 }
 
-func TestMonitor_HandleWSMessage_EmptyChatIDsAllowAllChats(t *testing.T) {
-	var mu sync.Mutex
-	var received []Post
-
+func TestMonitor_HandleWSMessage_EmptyChatIDsDenyUnlistedChats(t *testing.T) {
+	var called bool
 	m := newTestMonitor("", func(ctx context.Context, client *Client, _ *Client, post Post) {
-		mu.Lock()
-		received = append(received, post)
-		mu.Unlock()
+		called = true
 	})
 
 	msg := makeWSMessage(Post{
@@ -210,10 +206,38 @@ func TestMonitor_HandleWSMessage_EmptyChatIDsAllowAllChats(t *testing.T) {
 	m.handleWSMessage(context.Background(), msg)
 	time.Sleep(50 * time.Millisecond)
 
+	if called {
+		t.Fatal("handler should not be called for unlisted chats when chat_ids is empty")
+	}
+}
+
+func TestMonitor_HandleWSMessage_AllowUnlistedGroupChats(t *testing.T) {
+	var mu sync.Mutex
+	var received []Post
+
+	m := newTestMonitor("chat-1", func(ctx context.Context, client *Client, _ *Client, post Post) {
+		mu.Lock()
+		received = append(received, post)
+		mu.Unlock()
+	})
+	m.SetAllowUnlistedGroupChats(true)
+
+	msg := makeWSMessage(Post{
+		ID:        "p3-group",
+		GroupID:   "chat-OTHER",
+		Type:      "TextMessage",
+		Text:      "hello from another group",
+		CreatorID: "user-1",
+		EventType: "PostAdded",
+	})
+
+	m.handleWSMessage(context.Background(), msg)
+	time.Sleep(50 * time.Millisecond)
+
 	mu.Lock()
 	defer mu.Unlock()
 	if len(received) != 1 {
-		t.Fatalf("expected 1 post dispatched with empty chat_ids, got %d", len(received))
+		t.Fatalf("expected 1 post dispatched with allow_unlisted_group_chats, got %d", len(received))
 	}
 	if received[0].GroupID != "chat-OTHER" {
 		t.Fatalf("expected message from chat-OTHER, got %q", received[0].GroupID)

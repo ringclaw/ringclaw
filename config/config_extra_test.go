@@ -340,6 +340,29 @@ func TestIsGroupMentionOnly_ExplicitFalse(t *testing.T) {
 	}
 }
 
+func TestIsAllowUnlistedGroupChats_Default(t *testing.T) {
+	rc := RCConfig{}
+	if rc.IsAllowUnlistedGroupChats() {
+		t.Error("expected default IsAllowUnlistedGroupChats=false")
+	}
+}
+
+func TestIsAllowUnlistedGroupChats_ExplicitTrue(t *testing.T) {
+	v := true
+	rc := RCConfig{AllowUnlistedGroupChats: &v}
+	if !rc.IsAllowUnlistedGroupChats() {
+		t.Error("expected IsAllowUnlistedGroupChats=true")
+	}
+}
+
+func TestIsAllowUnlistedGroupChats_ExplicitFalse(t *testing.T) {
+	v := false
+	rc := RCConfig{AllowUnlistedGroupChats: &v}
+	if rc.IsAllowUnlistedGroupChats() {
+		t.Error("expected IsAllowUnlistedGroupChats=false")
+	}
+}
+
 // TestLoad_DeprecatedBotMentionOnly_IsMigrated confirms that a
 // config.json written before the rename still boots and that Load
 // transparently migrates `bot_mention_only` into `group_mention_only`,
