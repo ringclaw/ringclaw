@@ -49,12 +49,12 @@ func TestConfig_Resolved_FillsDefaults(t *testing.T) {
 	if r.SoulFile == "" || r.MemoryDir == "" {
 		t.Errorf("expected non-empty paths, got SoulFile=%q MemoryDir=%q", r.SoulFile, r.MemoryDir)
 	}
-	// Defaults end with .ringclaw/SOUL.md and .ringclaw/memory.
+	// Defaults end with .ringclaw/SOUL.md and .ringclaw/workspace/memory.
 	if !strings.HasSuffix(r.SoulFile, filepath.Join(".ringclaw", "SOUL.md")) {
 		t.Errorf("SoulFile=%q does not end in default .ringclaw/SOUL.md", r.SoulFile)
 	}
-	if !strings.HasSuffix(r.MemoryDir, filepath.Join(".ringclaw", "memory")) {
-		t.Errorf("MemoryDir=%q does not end in default .ringclaw/memory", r.MemoryDir)
+	if !strings.HasSuffix(r.MemoryDir, filepath.Join(".ringclaw", "workspace", "memory")) {
+		t.Errorf("MemoryDir=%q does not end in default .ringclaw/workspace/memory", r.MemoryDir)
 	}
 }
 

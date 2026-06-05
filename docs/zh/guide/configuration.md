@@ -58,7 +58,7 @@ JWT App 至少需要 `ReadAccounts`；Video/Phone 能力还需要额外的 `Vide
   "persona": {
     "enabled": true,
     "soul_file": "~/.ringclaw/SOUL.md",
-    "memory_dir": "~/.ringclaw/memory",
+    "memory_dir": "~/.ringclaw/workspace/memory",
     "max_soul_chars": 2000,
     "max_chat_memory_chars": 4000,
     "max_user_memory_chars": 2000,
@@ -179,7 +179,7 @@ SOUL.md 在首次启动时如不存在会自动写一份极简中立模板——
 |------|------|--------|---------------|
 | `enabled` | bool（可空） | `true` | 设为 `false` 彻底关闭 banner 注入（slash 命令会回"功能已禁用"的提示）。 |
 | `soul_file` | string | `~/.ringclaw/SOUL.md` | SOUL 文件路径。支持 `~/` 展开。 |
-| `memory_dir` | string | `~/.ringclaw/memory` | memory 树根目录，子项 `global.md`、`user/*.md`、`chat/*.md`。 |
+| `memory_dir` | string | `~/.ringclaw/workspace/memory` | memory 树根目录。默认位于 agent workspace allowlist 内，因此 ACP 文件工具可以读取。子项 `global.md`、`user/*.md`、`chat/*.md`。 |
 | `max_soul_chars` | int | `2000` | SOUL 截断上限。`≤ 0` 表示不截断。 |
 | `max_chat_memory_chars` | int | `4000` | 每个 chat memory 上限。超出保留最新（tail）。 |
 | `max_user_memory_chars` | int | `2000` | 每个 user memory 上限。 |

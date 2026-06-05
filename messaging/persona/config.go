@@ -76,8 +76,8 @@ func (c Config) Resolved() ResolvedConfig {
 	}
 	memDir := strings.TrimSpace(c.MemoryDir)
 	if memDir == "" {
-		memDir = paths.MustAppPath("memory")
-		if resolved, err := paths.ResolveEnvOrDefault("RINGCLAW_MEMORY_DIR", "memory"); err == nil {
+		memDir = paths.MustAppPath("workspace", "memory")
+		if resolved, err := paths.ResolveEnvOrDefault("RINGCLAW_MEMORY_DIR", "workspace", "memory"); err == nil {
 			memDir = resolved
 		}
 	}

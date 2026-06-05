@@ -59,7 +59,7 @@ additional `Video`, `RingOut`, and `ReadCallLog` scopes.
   "persona": {
     "enabled": true,
     "soul_file": "~/.ringclaw/SOUL.md",
-    "memory_dir": "~/.ringclaw/memory",
+    "memory_dir": "~/.ringclaw/workspace/memory",
     "max_soul_chars": 2000,
     "max_chat_memory_chars": 4000,
     "max_user_memory_chars": 2000,
@@ -183,7 +183,7 @@ voice).
 |-------|------|---------|------------------------|
 | `enabled` | bool (nullable) | `true` | Set to `false` to disable banner injection entirely (persona/memory slash commands then return a "feature disabled" diagnostic). |
 | `soul_file` | string | `~/.ringclaw/SOUL.md` | Path to the shared persona file. `~/` is expanded. |
-| `memory_dir` | string | `~/.ringclaw/memory` | Root of the memory tree. `<memory_dir>/global.md`, `<memory_dir>/user/*.md`, `<memory_dir>/chat/*.md`. |
+| `memory_dir` | string | `~/.ringclaw/workspace/memory` | Root of the memory tree. The default lives inside the default agent workspace allowlist so ACP file tools can read it. `<memory_dir>/global.md`, `<memory_dir>/user/*.md`, `<memory_dir>/chat/*.md`. |
 | `max_soul_chars` | int | `2000` | Truncate SOUL.md before injection. `≤ 0` disables truncation. |
 | `max_chat_memory_chars` | int | `4000` | Per-chat memory cap. Tail-keep on overflow. |
 | `max_user_memory_chars` | int | `2000` | Per-user memory cap. Tail-keep. |
