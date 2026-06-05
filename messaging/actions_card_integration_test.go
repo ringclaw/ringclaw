@@ -1,17 +1,14 @@
 //go:build integration
 
-// Integration test for the assumption baked into selectCardClient:
-// the Private App must be allowed to POST adaptive cards into the
-// bot's own DM. If the underlying RingCentral API ever stops
-// honouring this — for example because the Private App role is
-// changed or the platform tightens permissions — this test fails
-// loudly so we can re-introduce the Bot fallback for that one path.
+// Integration diagnostic for Private App adaptive-card permissions. Current
+// chat cards are posted by the bot identity, but cross-chat/OOB paths may
+// still rely on Private App capabilities.
 //
 // Skipped when ~/.ringclaw/config.json is missing or does not have
 // both a Bot token and a Private App configured. Runs only when the
 // `integration` build tag is set:
 //
-//   go test -tags integration ./messaging/ -run CardClientIntegration -v
+//	go test -tags integration ./messaging/ -run CardClientIntegration -v
 package messaging
 
 import (
@@ -33,13 +30,10 @@ const integrationCardJSON = `{
   ]
 }`
 
-// TestCardClientIntegration_PrivateAppCanPostIntoBotDM verifies that
-// selectCardClient's preference for the Private App in a Bot DM is
-// actually honoured by the RingCentral API. It posts a minimal
-// adaptive card with the Private App credentials into the bot's own
-// DM chat and immediately deletes it. The assertion is binary: if
-// the POST succeeds, our routing assumption holds; if it fails, the
-// fallback in selectCardClient must be re-introduced.
+// TestCardClientIntegration_PrivateAppCanPostIntoBotDM posts a minimal
+// adaptive card with Private App credentials into the bot's own DM chat and
+// immediately deletes it. This remains useful for diagnosing platform
+// permission changes even though current-chat cards prefer the bot client.
 func TestCardClientIntegration_PrivateAppCanPostIntoBotDM(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -86,10 +80,9 @@ func TestCardClientIntegration_PrivateAppCanPostIntoBotDM(t *testing.T) {
 	}
 
 	// The actual assertion: Private App can POST into the bot DM.
-	// selectCardClient relies on this being true.
 	paCard, err := pa.CreateAdaptiveCard(ctx, dmChatID, json.RawMessage(integrationCardJSON))
 	if err != nil {
-		t.Fatalf("Private App POST /chats/%s/adaptive-cards failed: %v\n\nselectCardClient assumes the Private App can post cards into the bot DM. If this assertion fails, restore the bot fallback for IsBotDM in messaging/actions_resolve.go.", dmChatID, err)
+		t.Fatalf("Private App POST /chats/%s/adaptive-cards failed: %v", dmChatID, err)
 	}
 	t.Logf("Private App posted card OK: cardID=%s", paCard.ID)
 	if delErr := pa.DeleteAdaptiveCard(ctx, paCard.ID); delErr != nil {

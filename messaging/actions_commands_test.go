@@ -941,32 +941,29 @@ func TestParseActionParams(t *testing.T) {
 
 // --- selectCardClient tests ---
 //
-// Empirically (spike against the live RingCentral instance) the Private
-// App is allowed to POST adaptive cards into the bot's own DM. We
-// therefore prefer the Private App across the board, so the card's
-// creator matches the human owner — the same identity NOTE / TASK /
-// EVENT actions already use. Bot is only used as a last-resort fallback
-// when no Private App is configured.
+// Current-chat posts/cards should use the bot identity so group replies do
+// not require the Private App owner to be a member of the team. Cross-chat
+// actions still use the Private App.
 
-func TestSelectCardClient_PrefersPrivateAppInBotDM(t *testing.T) {
+func TestSelectCardClient_PrefersBotInOriginChat(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
 	botClient.SetDMChatID("dm-1")
 	privateClient := ringcentral.NewBotClient("http://localhost", "private-token")
 
-	selected := selectCardClient(botClient, privateClient, "dm-1")
-	if selected != privateClient {
-		t.Error("expected private client even for bot DM (Private App may post cards there)")
+	selected := selectCardClient(botClient, privateClient, "group-1", "group-1")
+	if selected != botClient {
+		t.Error("expected bot client for cards in the origin chat")
 	}
 }
 
-func TestSelectCardClient_PrefersPrivateAppInGroup(t *testing.T) {
+func TestSelectCardClient_PrefersPrivateAppForCrossChat(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
 	botClient.SetDMChatID("dm-1")
 	privateClient := ringcentral.NewBotClient("http://localhost", "private-token")
 
-	selected := selectCardClient(botClient, privateClient, "group-1")
+	selected := selectCardClient(botClient, privateClient, "target-group", "origin-group")
 	if selected != privateClient {
-		t.Error("expected private client for non-DM chat")
+		t.Error("expected private client for cross-chat card")
 	}
 }
 
@@ -974,10 +971,10 @@ func TestSelectCardClient_FallsBackToBotWhenNoPrivateApp(t *testing.T) {
 	botClient := ringcentral.NewBotClient("http://localhost", "bot-token")
 	botClient.SetDMChatID("dm-1")
 
-	if got := selectCardClient(botClient, nil, "dm-1"); got != botClient {
+	if got := selectCardClient(botClient, nil, "dm-1", "dm-1"); got != botClient {
 		t.Error("expected bot client in DM when action client is nil")
 	}
-	if got := selectCardClient(botClient, nil, "group-1"); got != botClient {
+	if got := selectCardClient(botClient, nil, "group-1", "origin-group"); got != botClient {
 		t.Error("expected bot client in group when action client is nil")
 	}
 }

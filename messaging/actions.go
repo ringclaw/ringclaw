@@ -395,7 +395,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, "Failed to create card: invalid JSON")
 				continue
 			}
-			cardClient := selectCardClient(replyClient, actionClient, targetChat)
+			cardClient := selectCardClient(replyClient, actionClient, targetChat, chatID)
 			card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
 			if err != nil {
 				slog.Error("action: create adaptive card failed", "error", err)
@@ -408,7 +408,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 
 		case "MESSAGE":
 			body := strings.TrimSpace(a.Body)
-			messageClient := actionClient
+			messageClient := selectCurrentChatPostClient(replyClient, actionClient, targetChat, chatID)
 			currentBotID := ""
 			if replyClient != nil {
 				currentBotID = strings.TrimSpace(replyClient.OwnerID())
@@ -468,7 +468,8 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			text := formatVideoMeetingMessage(bridge, event)
-			if err := SendTextReply(ctx, actionClient, targetChat, text); err != nil {
+			postClient := selectCurrentChatPostClient(replyClient, actionClient, targetChat, chatID)
+			if err := SendTextReply(ctx, postClient, targetChat, text); err != nil {
 				slog.Error("action: send video bridge link failed", "error", err, "chatID", targetChat)
 				details := map[string]any{"error": err.Error(), "bridge_id": bridge.ID, "reason": "post_video_link_failed"}
 				if event != nil && event.ID != "" {
@@ -493,7 +494,8 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, fmt.Sprintf("Failed to list video meetings: %s", friendlyVideoAPIError(err)))
 				continue
 			}
-			if err := SendTextReply(ctx, actionClient, targetChat, text); err != nil {
+			postClient := selectCurrentChatPostClient(replyClient, actionClient, targetChat, chatID)
+			if err := SendTextReply(ctx, postClient, targetChat, text); err != nil {
 				slog.Error("action: send video meeting list failed", "error", err, "chatID", targetChat)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "reason": "post_video_list_failed"})
 				results = append(results, fmt.Sprintf("Listed video meetings but failed to post result: %v", err))
@@ -510,7 +512,8 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, fmt.Sprintf("Failed to list call log: %s", friendlyPhoneAPIError(err)))
 				continue
 			}
-			if err := SendTextReply(ctx, actionClient, targetChat, text); err != nil {
+			postClient := selectCurrentChatPostClient(replyClient, actionClient, targetChat, chatID)
+			if err := SendTextReply(ctx, postClient, targetChat, text); err != nil {
 				slog.Error("action: send call log summary failed", "error", err, "chatID", targetChat)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "reason": "post_call_log_failed"})
 				results = append(results, fmt.Sprintf("Listed call log but failed to post result: %v", err))
@@ -531,7 +534,8 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, strings.TrimPrefix(result, "Error: "))
 				continue
 			}
-			if err := SendTextReply(ctx, actionClient, targetChat, result); err != nil {
+			postClient := selectCurrentChatPostClient(replyClient, actionClient, targetChat, chatID)
+			if err := SendTextReply(ctx, postClient, targetChat, result); err != nil {
 				slog.Error("action: send sms confirmation failed", "error", err, "chatID", targetChat)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error(), "reason": "post_sms_confirmation_failed"})
 				results = append(results, fmt.Sprintf("Sent SMS but failed to post confirmation: %v", err))
@@ -1935,7 +1939,7 @@ func awaitCrossChatOOB(actionClient *ringcentral.Client, challenge *oob.Challeng
 				fmt.Sprintf("Cross-chat %s failed: invalid card JSON.", a.Type)))
 			return
 		}
-		cardClient := selectCardClient(actionClient, actionClient, targetChat) // OOB path has no separate replyClient; use actionClient for both roles.
+		cardClient := selectCardClient(actionClient, actionClient, targetChat, originChat) // OOB path has no separate replyClient; use actionClient for both roles.
 		card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
 		if err != nil {
 			logSendError(SendTextReply(ctx, actionClient, originChat,

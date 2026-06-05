@@ -1994,13 +1994,10 @@ func TestExecuteAgentActions_LegacyRingOutAliasesToFijiClientCallAndIgnoresFrom(
 	}
 }
 
-// TestExecuteAgentActions_CardUsesPrivateClientInDM locks the new
-// behavior: when both clients are configured, CARD actions in the
-// bot's own DM are now POSTed under the Private App's identity so
-// the card's creator matches the human owner — same as NOTE / TASK /
-// EVENT. The empirical justification is captured in the
-// integration-tagged test in actions_card_integration_test.go.
-func TestExecuteAgentActions_CardUsesPrivateClientInDM(t *testing.T) {
+// TestExecuteAgentActions_CardUsesBotClientInDM locks current-chat behavior:
+// CARD actions posted back to the triggering chat use the bot identity so
+// the Private App owner does not need to be a member of that chat.
+func TestExecuteAgentActions_CardUsesBotClientInDM(t *testing.T) {
 	var mu sync.Mutex
 	var authHeaders []string
 
@@ -2034,12 +2031,12 @@ func TestExecuteAgentActions_CardUsesPrivateClientInDM(t *testing.T) {
 	if len(authHeaders) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(authHeaders))
 	}
-	if authHeaders[0] != "Bearer private-token" {
-		t.Fatalf("expected private token for card create in bot DM (CARD now follows NOTE/TASK/EVENT identity), got %q", authHeaders[0])
+	if authHeaders[0] != "Bearer bot-token" {
+		t.Fatalf("expected bot token for card create in bot DM, got %q", authHeaders[0])
 	}
 }
 
-func TestExecuteAgentActions_CardUsesPrivateClientInGroup(t *testing.T) {
+func TestExecuteAgentActions_CardUsesBotClientInGroup(t *testing.T) {
 	var mu sync.Mutex
 	var authHeaders []string
 
@@ -2074,8 +2071,8 @@ func TestExecuteAgentActions_CardUsesPrivateClientInGroup(t *testing.T) {
 	if len(authHeaders) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(authHeaders))
 	}
-	if authHeaders[0] != "Bearer private-token" {
-		t.Fatalf("expected private token for card create, got %q", authHeaders[0])
+	if authHeaders[0] != "Bearer bot-token" {
+		t.Fatalf("expected bot token for card create in origin group, got %q", authHeaders[0])
 	}
 }
 
@@ -2354,6 +2351,108 @@ func TestExecuteAgentActions_MessageChatIDMentionFallsBackToCurrentChatMention(t
 	}
 }
 
+func TestExecuteAgentActions_MessageInOriginChatUsesBotClient(t *testing.T) {
+	var mu sync.Mutex
+	var replyClientPosts int
+	var actionClientPosts int
+
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == http.MethodPost {
+			mu.Lock()
+			replyClientPosts++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "p-reply"})
+	}))
+	defer replySrv.Close()
+
+	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == http.MethodPost {
+			mu.Lock()
+			actionClientPosts++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "p-action"})
+	}))
+	defer actionSrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: actionSrv.URL,
+	})
+	actionClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	results := ExecuteAgentActions(context.Background(), replyClient, actionClient, "origin-chat", []AgentAction{{
+		Type: "MESSAGE",
+		Body: "我会直接处理这条续剂请求。",
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if replyClientPosts != 1 {
+		t.Fatalf("expected origin-chat MESSAGE to use bot/reply client, got %d posts", replyClientPosts)
+	}
+	if actionClientPosts != 0 {
+		t.Fatalf("expected origin-chat MESSAGE not to use private/action client, got %d posts", actionClientPosts)
+	}
+}
+
+func TestExecuteAgentActions_CardInOriginChatUsesBotClient(t *testing.T) {
+	var mu sync.Mutex
+	var replyCards int
+	var actionCards int
+
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/adaptive-cards") && r.Method == http.MethodPost {
+			mu.Lock()
+			replyCards++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "card-reply"})
+	}))
+	defer replySrv.Close()
+
+	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/adaptive-cards") && r.Method == http.MethodPost {
+			mu.Lock()
+			actionCards++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "card-action"})
+	}))
+	defer actionSrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: actionSrv.URL,
+	})
+	actionClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	results := ExecuteAgentActions(context.Background(), replyClient, actionClient, "origin-chat", []AgentAction{{
+		Type: "CARD",
+		Body: `{"type":"AdaptiveCard","version":"1.3","body":[]}`,
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if replyCards != 1 {
+		t.Fatalf("expected origin-chat CARD to use bot/reply client, got %d cards", replyCards)
+	}
+	if actionCards != 0 {
+		t.Fatalf("expected origin-chat CARD not to use private/action client, got %d cards", actionCards)
+	}
+}
+
 func TestExecuteAgentActions_MessageRelayCollaboratorPreservedWithoutChatID(t *testing.T) {
 	var mu sync.Mutex
 	var postPath string
@@ -2435,8 +2534,7 @@ func TestExecuteAgentActions_NonOwnerForcesOriginChat(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, _ := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {})
-	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+	client := ringcentral.NewBotClient(srv.URL, "bot-token")
 
 	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
 		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
