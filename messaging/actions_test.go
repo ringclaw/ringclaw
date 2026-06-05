@@ -2210,6 +2210,20 @@ func TestParseAgentActions_Message(t *testing.T) {
 	}
 }
 
+func TestParseAgentActions_MessageHeaderWithChinesePunctuation(t *testing.T) {
+	reply := "ACTION:MESSAGE，并附 audit notice：\n![:Person](20894271004) Hi，想和你聊一下最近的培训计划。\nEND_ACTION"
+	_, actions := ParseAgentActions(reply)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if actions[0].Type != "MESSAGE" {
+		t.Fatalf("expected MESSAGE, got %q", actions[0].Type)
+	}
+	if got := strings.TrimSpace(actions[0].Body); got != "![:Person](20894271004) Hi，想和你聊一下最近的培训计划。" {
+		t.Fatalf("unexpected body: %q", got)
+	}
+}
+
 func TestExecuteAgentActions_Message(t *testing.T) {
 	var mu sync.Mutex
 	var postedBody string

@@ -80,12 +80,11 @@ func parseActionBlock(block string) *AgentAction {
 	}
 	header = header[len("ACTION:"):]
 
-	parts := strings.SplitN(header, " ", 2)
-	actionType := strings.TrimSpace(parts[0])
+	actionType, remainder := parseActionHeader(header)
 
 	params := make(map[string]string)
-	if len(parts) > 1 {
-		for _, p := range parseActionParams(parts[1]) {
+	if remainder != "" {
+		for _, p := range parseActionParams(remainder) {
 			params[p.key] = p.value
 		}
 	}
@@ -101,6 +100,28 @@ func parseActionBlock(block string) *AgentAction {
 		Params: params,
 		Body:   body,
 	}
+}
+
+func parseActionHeader(header string) (string, string) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return "", ""
+	}
+
+	splitIdx := len(header)
+	for i, r := range header {
+		if (r >= 'A' && r <= 'Z') || r == '_' {
+			continue
+		}
+		splitIdx = i
+		break
+	}
+
+	actionType := strings.TrimSpace(header[:splitIdx])
+	remainder := strings.TrimSpace(header[splitIdx:])
+	remainder = strings.TrimLeft(remainder, ",，:：;-")
+	remainder = strings.TrimSpace(remainder)
+	return actionType, remainder
 }
 
 // parseActionParams parses "title=xxx start=2026-01-01T10:00:00Z end=2026-01-01T11:00:00Z"
