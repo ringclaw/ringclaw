@@ -253,6 +253,19 @@ func ensurePersonMentionPrefix(body, personID string) string {
 	return prefix + " " + body
 }
 
+func ensureRelayMentionPrefixes(body, targetPersonID, relayPersonID string) string {
+	body = strings.TrimSpace(body)
+	targetPersonID = strings.TrimSpace(targetPersonID)
+	relayPersonID = strings.TrimSpace(relayPersonID)
+	if body == "" || targetPersonID == "" {
+		return body
+	}
+	if relayPersonID != "" && relayPersonID != targetPersonID {
+		body = ensurePersonMentionPrefix(body, relayPersonID)
+	}
+	return ensurePersonMentionPrefix(body, targetPersonID)
+}
+
 // resolveChatParam resolves a chatid param: numeric IDs pass through,
 // self-pronouns resolve to currentChatID, names are resolved via directory search.
 func resolveChatParam(ctx context.Context, client *ringcentral.Client, raw string, currentChatID string) (string, error) {

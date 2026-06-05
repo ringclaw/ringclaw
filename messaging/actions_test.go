@@ -2312,6 +2312,7 @@ func TestExecuteAgentActions_MessageChatIDMentionFallsBackToCurrentChatMention(t
 	defer actionSrv.Close()
 
 	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	replyClient.SetOwnerID("20762282004")
 	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
 		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: actionSrv.URL,
 	})
@@ -2319,14 +2320,15 @@ func TestExecuteAgentActions_MessageChatIDMentionFallsBackToCurrentChatMention(t
 
 	actions := []AgentAction{{
 		Type:   "MESSAGE",
-		Params: map[string]string{"chatid": "Tom Bot A"},
+		Params: map[string]string{"chatid": "Personal alice 3"},
 		Body:   "想同步一下最近的培训计划安排。",
 	}}
 
 	results := ExecuteAgentActions(context.Background(), replyClient, actionClient, "current-chat", actions, ActionContext{
 		OriginIsOwner: true,
 		Mentions: []ringcentral.Mention{
-			{ID: "20894271004", Type: "Person", Name: "tom bot A"},
+			{ID: "20762282004", Type: "Person", Name: "tom bot A"},
+			{ID: "20894271004", Type: "Person", Name: "Personal alice 3"},
 		},
 	})
 	if len(results) != 0 {
@@ -2344,8 +2346,8 @@ func TestExecuteAgentActions_MessageChatIDMentionFallsBackToCurrentChatMention(t
 	if actionClientPosts != 0 {
 		t.Errorf("expected current-chat mention MESSAGE not to use action/private client, got %d posts", actionClientPosts)
 	}
-	if !strings.HasPrefix(postedBody, "![:Person](20894271004)") {
-		t.Errorf("expected target agent mention prefix, got %q", postedBody)
+	if !strings.HasPrefix(postedBody, "![:Person](20894271004) ![:Person](20762282004)") {
+		t.Errorf("expected target+relay mention prefix, got %q", postedBody)
 	}
 	if !strings.Contains(postedBody, "培训计划") {
 		t.Errorf("expected message body in post, got %q", postedBody)

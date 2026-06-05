@@ -405,7 +405,16 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			body := strings.TrimSpace(a.Body)
 			messageClient := actionClient
 			if currentChatMention != nil {
-				body = ensurePersonMentionPrefix(body, currentChatMention.ID)
+				relayBotID := ""
+				if replyClient != nil {
+					candidate := strings.TrimSpace(replyClient.OwnerID())
+					if candidate != "" && candidate != currentChatMention.ID {
+						if mention := resolveCurrentChatMention(candidate, opts.Mentions); mention != nil {
+							relayBotID = mention.ID
+						}
+					}
+				}
+				body = ensureRelayMentionPrefixes(body, currentChatMention.ID, relayBotID)
 				messageClient = replyClient
 			}
 			if body == "" {

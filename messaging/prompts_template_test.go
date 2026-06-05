@@ -36,9 +36,16 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 	if !strings.Contains(got, "To ask another bot/agent in the current group chat") {
 		t.Error("ActionPromptTemplate should describe current-chat agent-to-agent mention messaging")
 	}
+	if !strings.Contains(got, "current-group bot-to-bot collaboration") ||
+		!strings.Contains(got, "keep that collaborator mention at the start of the body") {
+		t.Error("ActionPromptTemplate should describe bot-to-bot relay mention behavior")
+	}
 	if !strings.Contains(got, "ready-to-send human message") ||
 		!strings.Contains(got, "Do not include assistant framing") {
 		t.Error("ActionPromptTemplate should require human-ready MESSAGE bodies")
+	}
+	if !strings.Contains(got, "For bot-to-bot collaboration requests in a group chat, do not stop at a draft") {
+		t.Error("ActionPromptTemplate should forbid draft-only bot-to-bot replies")
 	}
 	// Templates returned to eval scripts are RAW — no time substitution
 	// must have been applied since the eval should see the same shape
