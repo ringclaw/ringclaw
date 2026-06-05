@@ -2354,6 +2354,68 @@ func TestExecuteAgentActions_MessageChatIDMentionFallsBackToCurrentChatMention(t
 	}
 }
 
+func TestExecuteAgentActions_MessageRelayCollaboratorPreservedWithoutChatID(t *testing.T) {
+	var mu sync.Mutex
+	var postPath string
+	var postedBody string
+
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == "POST" {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody, _ = body["text"].(string)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+	}))
+	defer replySrv.Close()
+
+	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"id": "p-action"})
+	}))
+	defer actionSrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	replyClient.SetOwnerID("20891451004")
+	actionClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: actionSrv.URL,
+	})
+	actionClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	actions := []AgentAction{{
+		Type: "MESSAGE",
+		Body: "![:Person](20891451004) 想跟你对一下新员工培训计划的安排，方便同步下时间节点和分工吗？",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, actionClient, "current-chat", actions, ActionContext{
+		OriginIsOwner: true,
+		RelayCollaborator: &ringcentral.Mention{
+			ID:   "20894271004",
+			Type: "Person",
+			Name: "Personal alice 3",
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(postPath, "/chats/current-chat/") {
+		t.Errorf("expected post to current chat, got %q", postPath)
+	}
+	if !strings.HasPrefix(postedBody, "![:Person](20894271004) ![:Person](20891451004)") {
+		t.Fatalf("expected collaborator+self relay prefix, got %q", postedBody)
+	}
+	if !strings.Contains(postedBody, "培训计划") {
+		t.Fatalf("expected message body in post, got %q", postedBody)
+	}
+}
+
 func TestExecuteAgentActions_NonOwnerForcesOriginChat(t *testing.T) {
 	var mu sync.Mutex
 	var postPaths []string

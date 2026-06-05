@@ -290,6 +290,31 @@ func (h *Handler) buildPersonaBanner(ctx context.Context, client *ringcentral.Cl
 	return loader.Build(ctx, post.GroupID, post.CreatorID, isDM)
 }
 
+func relayCollaboratorMention(client *ringcentral.Client, post ringcentral.Post) *ringcentral.Mention {
+	if client == nil || client.IsBotDM(post.GroupID) {
+		return nil
+	}
+	selfID := strings.TrimSpace(client.OwnerID())
+	if selfID == "" {
+		return nil
+	}
+	var collaborator *ringcentral.Mention
+	for i := range post.Mentions {
+		m := &post.Mentions[i]
+		if !strings.EqualFold(strings.TrimSpace(m.Type), "Person") {
+			continue
+		}
+		if strings.TrimSpace(m.ID) == selfID {
+			continue
+		}
+		if collaborator != nil {
+			return nil
+		}
+		collaborator = m
+	}
+	return collaborator
+}
+
 // isTrustedSender reports whether a given creator ID may drive the agent.
 // Returns true when allow-all mode is enabled, or when the ID is on the
 // trusted senders allowlist. An empty ID is treated as untrusted.
@@ -1010,13 +1035,14 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			ownerID = actionClient.OwnerID()
 		}
 		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
-			OriginIsOwner: h.isOwnerSender(post.CreatorID),
-			OOB:           h.OOBManager(),
-			OwnerDMChat:   h.OwnerDMChatID(),
-			RequesterID:   post.CreatorID,
-			OwnerID:       ownerID,
-			Mentions:      post.Mentions,
-			Capabilities:  h.actionCapabilities(),
+			OriginIsOwner:     h.isOwnerSender(post.CreatorID),
+			OOB:               h.OOBManager(),
+			OwnerDMChat:       h.OwnerDMChatID(),
+			RequesterID:       post.CreatorID,
+			OwnerID:           ownerID,
+			Mentions:          post.Mentions,
+			RelayCollaborator: relayCollaboratorMention(client, post),
+			Capabilities:      h.actionCapabilities(),
 		})
 		if len(results) > 0 {
 			defer func() {

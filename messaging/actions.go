@@ -190,6 +190,11 @@ type ActionContext struct {
 	RequesterID   string
 	OwnerID       string
 	Mentions      []ringcentral.Mention
+	// RelayCollaborator identifies the "other bot" in a current-group
+	// bot-to-bot handoff like "@me @otherBot ...". When set, current-chat
+	// ACTION:MESSAGE replies are normalized to keep the collaborator mention
+	// alive even if the model forgets it.
+	RelayCollaborator *ringcentral.Mention
 	// Capabilities is the runtime capability set selected during onboarding.
 	// Empty means legacy behavior: allow all optional actions.
 	Capabilities []string
@@ -404,6 +409,10 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		case "MESSAGE":
 			body := strings.TrimSpace(a.Body)
 			messageClient := actionClient
+			currentBotID := ""
+			if replyClient != nil {
+				currentBotID = strings.TrimSpace(replyClient.OwnerID())
+			}
 			if currentChatMention != nil {
 				relayBotID := ""
 				if replyClient != nil {
@@ -415,6 +424,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					}
 				}
 				body = ensureRelayMentionPrefixes(body, currentChatMention.ID, relayBotID)
+				messageClient = replyClient
+			} else if targetChat == chatID && opts.RelayCollaborator != nil && currentBotID != "" {
+				body = ensureCurrentChatRelay(body, opts.RelayCollaborator.ID, currentBotID)
 				messageClient = replyClient
 			}
 			if body == "" {
