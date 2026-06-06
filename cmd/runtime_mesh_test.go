@@ -94,12 +94,18 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 			Intent         string `json:"intent"`
 			Title          string `json:"title"`
 			Instructions   string `json:"instructions"`
+			Context        struct {
+				Data map[string]any `json:"data"`
+			} `json:"context"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode create: %v", err)
 		}
 		if req.BotID != "bot-1" || req.BootstrapToken != "boot-1" || req.ToRoleID != "nurse-coordinator" || req.Intent != "coverage.transfer" {
 			t.Fatalf("create request = %#v", req)
+		}
+		if req.Context.Data["source_post_id"] != "post-123" {
+			t.Fatalf("create context data = %#v", req.Context.Data)
 		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -123,6 +129,9 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 		Intent:       "coverage.transfer",
 		Title:        "Alexis absence coverage",
 		Instructions: "Transfer Alexis task queue.",
+		Context: messaging.MeshRuntimeContextPackage{
+			Data: map[string]interface{}{"source_post_id": "post-123"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateMeshTask() error = %v", err)

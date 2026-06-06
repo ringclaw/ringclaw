@@ -238,3 +238,44 @@ func TestMeshRunnerAllowsTargetAgentToDelegateMeshTask(t *testing.T) {
 		t.Fatalf("action events = %#v", resp.ActionEvents)
 	}
 }
+
+func TestMeshRunnerDelegatedTaskCarriesSourceTaskAndAgent(t *testing.T) {
+	ag := &meshTestAgent{reply: "ACTION:MESH_TASK to_role_id=role-clinical-bot intent=clinical.handoff title=\"Clinical handoff\"\nShare clinical follow-up context.\nEND_ACTION"}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
+		ID:     "task-3",
+		Intent: "coverage.transfer",
+		Title:  "Coverage transfer",
+	}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:        taskClient,
+		Agent:         ag,
+		DefaultChatID: "admin-chat",
+		SourceAgentID: "mesh-agent-nursecoord",
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if len(taskClient.created) != 1 {
+		t.Fatalf("created mesh tasks = %#v", taskClient.created)
+	}
+	data := taskClient.created[0].Context.Data
+	if got, _ := data["source_task_id"].(string); got != "task-3" {
+		t.Fatalf("source_task_id = %#v; data=%#v", data["source_task_id"], data)
+	}
+	if got, _ := data["source_agent_id"].(string); got != "mesh-agent-nursecoord" {
+		t.Fatalf("source_agent_id = %#v; data=%#v", data["source_agent_id"], data)
+	}
+	if got, _ := data["origin_chat_id"].(string); got != "admin-chat" {
+		t.Fatalf("origin_chat_id = %#v; data=%#v", data["origin_chat_id"], data)
+	}
+}
+
+func TestBuildMeshTaskPromptRequiresActionBlocksForExecutedWork(t *testing.T) {
+	got := buildMeshTaskPrompt(MeshRuntimeTask{ID: "task-1", Intent: "coverage.transfer"})
+	if !strings.Contains(got, "If you claim an SMS was sent") ||
+		!strings.Contains(got, "MUST include the matching ACTION block") ||
+		!strings.Contains(got, "record action_events") {
+		t.Fatalf("mesh task prompt missing execution/action_event guard: %s", got)
+	}
+}

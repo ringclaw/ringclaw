@@ -82,6 +82,7 @@ type MeshRunnerOptions struct {
 	Capabilities   []string
 	AllowedActions []string
 	RolePeers      map[string]RolePeer
+	SourceAgentID  string
 }
 
 type MeshRunner struct {
@@ -93,6 +94,7 @@ type MeshRunner struct {
 	capabilities   []string
 	allowedActions []string
 	rolePeers      map[string]RolePeer
+	sourceAgentID  string
 }
 
 func NewMeshRunner(opts MeshRunnerOptions) *MeshRunner {
@@ -105,6 +107,7 @@ func NewMeshRunner(opts MeshRunnerOptions) *MeshRunner {
 		capabilities:   append([]string(nil), opts.Capabilities...),
 		allowedActions: normalizeMeshAllowedActions(opts.AllowedActions),
 		rolePeers:      cloneRolePeers(opts.RolePeers),
+		sourceAgentID:  strings.TrimSpace(opts.SourceAgentID),
 	}
 }
 
@@ -166,6 +169,8 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 			OwnerID:         ownerID,
 			OwnerDMChat:     ownerDMChat,
 			Capabilities:    r.capabilities,
+			SourceTaskID:    task.ID,
+			SourceAgentID:   r.sourceAgentID,
 			MeshTaskCreator: r.client,
 			RolePeers:       cloneRolePeers(r.rolePeers),
 		})
@@ -223,6 +228,8 @@ func buildMeshTaskPrompt(task MeshRuntimeTask) string {
 		}
 	}
 	b.WriteString("Return useful text plus ACTION blocks when work must be executed. ")
+	b.WriteString("If you claim an SMS was sent, a task was created, a message was posted, or a card was created, you MUST include the matching ACTION block so the runtime can execute it and record action_events. ")
+	b.WriteString("If you cannot or should not execute the action yet, say it is prepared or waiting; do not say it has already been sent or created. ")
 	b.WriteString("Use `MESH_STATUS: waiting` only when the task is waiting for an external response or deadline.\n")
 	return b.String()
 }

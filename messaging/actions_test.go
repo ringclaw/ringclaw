@@ -2859,6 +2859,49 @@ func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_MeshTaskAddsStableSourceContext(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis 今日缺勤，需要 nursecoord-bot 接续任务。",
+		},
+		Body: "请处理 Alexis 今日缺勤交接。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), nil, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		RequesterID:     "alexis-user",
+		OriginalText:    "今天身体不舒服，缺勤，帮我处理交接",
+		SourcePostID:    "post-123",
+		SourceAgentID:   "mesh-agent-alexis",
+		MeshTaskCreator: creator,
+	})
+	if len(results) != 0 {
+		t.Fatalf("results = %#v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	data := creator.requests[0].Context.Data
+	want := map[string]string{
+		"origin_chat_id":  "origin-chat",
+		"source_post_id":  "post-123",
+		"source_agent_id": "mesh-agent-alexis",
+		"requester_id":    "alexis-user",
+		"to_role_id":      "role-nursecoord-bot",
+		"intent":          "coverage.transfer",
+	}
+	for key, value := range want {
+		if got, _ := data[key].(string); got != value {
+			t.Fatalf("context data[%s] = %#v, want %q; data=%#v", key, data[key], value, data)
+		}
+	}
+}
+
 func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithMention(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	var mu sync.Mutex
@@ -2920,6 +2963,50 @@ func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithMention(t *testing.T) {
 	}
 	if !strings.Contains(postedBody, "续剂队列") {
 		t.Fatalf("expected handoff details in notification, got %q", postedBody)
+	}
+}
+
+func TestExecuteAgentActions_MeshTaskNotifyFailureIsAuditOnly(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	var events []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		events = append(events, event)
+	})
+	defer restore()
+
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id": "role-nursecoord-bot",
+			"intent":     "coverage.transfer",
+		},
+		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+	}}
+	results := ExecuteAgentActions(context.Background(), ringcentral.NewBotClient("http://127.0.0.1", "bot-token"), nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		MeshTaskCreator: creator,
+		RolePeers: map[string]RolePeer{
+			"role-nursecoord-bot": {
+				RoleID:      "role-nursecoord-bot",
+				ExtensionID: "nursecoord-ext",
+			},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("mesh task notification failure should not be user-visible, got %v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	var sawNotifyFailure bool
+	for _, event := range events {
+		if event.Type == "MESSAGE" && event.Status == "failed" && event.Details["reason"] == "mesh_task_role_peer_notify_failed" {
+			sawNotifyFailure = true
+			break
+		}
+	}
+	if !sawNotifyFailure {
+		t.Fatalf("expected audit-only notify failure event, got %#v", events)
 	}
 }
 

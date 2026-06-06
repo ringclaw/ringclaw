@@ -216,6 +216,15 @@ type ActionContext struct {
 	// action execution enforce workflow-specific safety rails even when the
 	// model emits the wrong ACTION blocks.
 	OriginalText string
+	// SourcePostID identifies the RingCentral post that produced this action.
+	// Mesh task creation carries it into Control Plane so duplicate processing
+	// of the same post can be deduped across pods/restarts.
+	SourcePostID string
+	// SourceTaskID identifies the upstream mesh task when one agent delegates
+	// to another while processing Agent Mesh work.
+	SourceTaskID string
+	// SourceAgentID identifies the current runtime mesh agent when available.
+	SourceAgentID string
 	// MeshTaskCreator lets a source RingClaw runtime delegate work into
 	// AVA Control Plane Agent Mesh without carrying an admin token.
 	MeshTaskCreator MeshTaskCreator
@@ -269,7 +278,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, "Failed to create mesh task: Agent Mesh is not configured for this bot.")
 				continue
 			}
-			req, err := meshTaskRequestFromAction(a)
+			req, err := meshTaskRequestFromAction(a, opts, chatID)
 			if err != nil {
 				record("failed", "", false, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to create mesh task: %v", err))
@@ -293,7 +302,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 						"to_role_id": req.ToRoleID,
 					}),
 				})
-				results = append(results, fmt.Sprintf("Created mesh task but failed to notify %s: %v", req.ToRoleID, err))
+				slog.Warn("action: mesh task role peer notification failed", "taskID", task.ID, "toRoleID", req.ToRoleID, "error", err)
 			} else if notified {
 				slog.Info("action: notified role peer for mesh task", "taskID", task.ID, "toRoleID", req.ToRoleID)
 			}
@@ -1120,7 +1129,7 @@ func fallbackString(value, fallback string) string {
 	return value
 }
 
-func meshTaskRequestFromAction(a AgentAction) (MeshRuntimeTaskCreateRequest, error) {
+func meshTaskRequestFromAction(a AgentAction, opts ActionContext, originChatID string) (MeshRuntimeTaskCreateRequest, error) {
 	toRoleID := firstActionParam(a.Params, "to_role_id", "to_role", "role_id", "role")
 	intent := firstActionParam(a.Params, "intent", "task_intent")
 	title := strings.TrimSpace(a.Params["title"])
@@ -1144,6 +1153,13 @@ func meshTaskRequestFromAction(a AgentAction) (MeshRuntimeTaskCreateRequest, err
 		}
 		data[strings.TrimPrefix(key, "context_")] = value
 	}
+	putMeshContextData(data, "origin_chat_id", originChatID)
+	putMeshContextData(data, "source_post_id", opts.SourcePostID)
+	putMeshContextData(data, "source_task_id", opts.SourceTaskID)
+	putMeshContextData(data, "source_agent_id", opts.SourceAgentID)
+	putMeshContextData(data, "requester_id", opts.RequesterID)
+	putMeshContextData(data, "to_role_id", toRoleID)
+	putMeshContextData(data, "intent", intent)
 	if len(data) == 0 {
 		data = nil
 	}
@@ -1157,6 +1173,17 @@ func meshTaskRequestFromAction(a AgentAction) (MeshRuntimeTaskCreateRequest, err
 			Data:    data,
 		},
 	}, nil
+}
+
+func putMeshContextData(data map[string]interface{}, key, value string) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return
+	}
+	if _, exists := data[key]; !exists {
+		data[key] = value
+	}
 }
 
 func firstActionParam(params map[string]string, keys ...string) string {

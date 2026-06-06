@@ -1126,6 +1126,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			RelayCollaborator: relayCollaboratorMention(client, post),
 			Capabilities:      h.actionCapabilities(),
 			OriginalText:      originalText,
+			SourcePostID:      post.ID,
 			MeshTaskCreator:   h.MeshTaskCreator(),
 			RolePeers:         h.actionRolePeers(),
 		})

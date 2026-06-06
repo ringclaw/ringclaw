@@ -140,6 +140,7 @@ func runRuntimeMeshPoller(ctx context.Context, interval time.Duration, cfg *conf
 				Capabilities:   cfg.RC.Capabilities,
 				AllowedActions: cfg.Mesh.AllowedActions,
 				RolePeers:      meshRolePeersFromConfig(cfg.Mesh.RolePeers),
+				SourceAgentID:  cfg.Mesh.AgentID,
 			})
 			if err := runner.ProcessOnce(ctx); err != nil {
 				slog.Warn("runtime mesh poll failed", "component", "runtime_mesh", "error", err)
