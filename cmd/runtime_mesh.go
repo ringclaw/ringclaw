@@ -28,6 +28,20 @@ type runtimeMeshTasksResult struct {
 	Tasks []messaging.MeshRuntimeTask `json:"tasks"`
 }
 
+type runtimeMeshTaskCreateRequest struct {
+	BotID          string                              `json:"bot_id"`
+	BootstrapToken string                              `json:"bootstrap_token"`
+	ToRoleID       string                              `json:"to_role_id"`
+	Intent         string                              `json:"intent"`
+	Title          string                              `json:"title,omitempty"`
+	Instructions   string                              `json:"instructions,omitempty"`
+	Context        messaging.MeshRuntimeContextPackage `json:"context,omitempty"`
+}
+
+type runtimeMeshTaskCreateResult struct {
+	Task messaging.MeshRuntimeTask `json:"task"`
+}
+
 type runtimeMeshTaskRespondRequest struct {
 	BotID          string                                 `json:"bot_id"`
 	BootstrapToken string                                 `json:"bootstrap_token"`
@@ -45,6 +59,20 @@ func (c runtimeMeshTaskClient) PollMeshTasks(ctx context.Context, req messaging.
 		Limit:          req.Limit,
 	}, http.StatusOK, &result)
 	return result.Tasks, err
+}
+
+func (c runtimeMeshTaskClient) CreateMeshTask(ctx context.Context, req messaging.MeshRuntimeTaskCreateRequest) (messaging.MeshRuntimeTask, error) {
+	var result runtimeMeshTaskCreateResult
+	err := postJSON(ctx, c.controlPlaneURL, "/runtime/v1/mesh/tasks/create", runtimeMeshTaskCreateRequest{
+		BotID:          c.botID,
+		BootstrapToken: c.bootstrapToken,
+		ToRoleID:       req.ToRoleID,
+		Intent:         req.Intent,
+		Title:          req.Title,
+		Instructions:   req.Instructions,
+		Context:        req.Context,
+	}, http.StatusCreated, &result)
+	return result.Task, err
 }
 
 func (c runtimeMeshTaskClient) RespondMeshTask(ctx context.Context, taskID string, resp messaging.MeshRuntimeTaskResponse) error {
@@ -90,6 +118,7 @@ func startRuntimeMeshPoller(ctx context.Context, cfg *config.Config, c *clients,
 		botID:           botID,
 		bootstrapToken:  bootstrapToken,
 	}
+	handler.SetMeshTaskCreator(meshClient)
 	pollCtx, cancel := context.WithCancel(ctx)
 	go runRuntimeMeshPoller(pollCtx, interval, cfg, c, handler, meshClient)
 	return cancel

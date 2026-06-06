@@ -45,6 +45,14 @@ type MeshRuntimeTaskPollRequest struct {
 	Limit int `json:"limit,omitempty"`
 }
 
+type MeshRuntimeTaskCreateRequest struct {
+	ToRoleID     string                    `json:"to_role_id"`
+	Intent       string                    `json:"intent"`
+	Title        string                    `json:"title,omitempty"`
+	Instructions string                    `json:"instructions,omitempty"`
+	Context      MeshRuntimeContextPackage `json:"context,omitempty"`
+}
+
 type MeshRuntimeTaskActionEvent struct {
 	Type    string                 `json:"type"`
 	Status  string                 `json:"status"`
@@ -61,6 +69,7 @@ type MeshRuntimeTaskResponse struct {
 
 type MeshTaskClient interface {
 	PollMeshTasks(context.Context, MeshRuntimeTaskPollRequest) ([]MeshRuntimeTask, error)
+	CreateMeshTask(context.Context, MeshRuntimeTaskCreateRequest) (MeshRuntimeTask, error)
 	RespondMeshTask(context.Context, string, MeshRuntimeTaskResponse) error
 }
 
@@ -129,7 +138,7 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 	actions = r.filterAllowedActions(actions)
 	actionEvents := []MeshRuntimeTaskActionEvent{}
 	if len(actions) > 0 {
-		if r.replyClient == nil || r.actionClient == nil {
+		if (r.replyClient == nil || r.actionClient == nil) && hasNonMeshTaskAction(actions) {
 			return r.client.RespondMeshTask(ctx, task.ID, MeshRuntimeTaskResponse{
 				Status: MeshRuntimeTaskStatusFailed,
 				Result: "mesh task produced ACTION blocks but RingCentral clients are not ready",
@@ -142,12 +151,19 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 				Details: convertMeshActionDetails(event.Details),
 			})
 		})
+		ownerID := ""
+		ownerDMChat := ""
+		if r.replyClient != nil {
+			ownerID = r.replyClient.OwnerID()
+			ownerDMChat = r.replyClient.DMChatID()
+		}
 		actionResults := ExecuteAgentActions(ctx, r.replyClient, r.actionClient, r.defaultChatID, actions, ActionContext{
-			OriginIsOwner: true,
-			RequesterID:   "mesh-runtime",
-			OwnerID:       r.replyClient.OwnerID(),
-			OwnerDMChat:   r.replyClient.DMChatID(),
-			Capabilities:  r.capabilities,
+			OriginIsOwner:   true,
+			RequesterID:     "mesh-runtime",
+			OwnerID:         ownerID,
+			OwnerDMChat:     ownerDMChat,
+			Capabilities:    r.capabilities,
+			MeshTaskCreator: r.client,
 		})
 		restore()
 		if len(actionResults) > 0 {
@@ -159,6 +175,15 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 		Result:       strings.TrimSpace(result),
 		ActionEvents: actionEvents,
 	})
+}
+
+func hasNonMeshTaskAction(actions []AgentAction) bool {
+	for _, action := range actions {
+		if strings.ToUpper(strings.TrimSpace(action.Type)) != "MESH_TASK" {
+			return true
+		}
+	}
+	return false
 }
 
 func buildMeshTaskPrompt(task MeshRuntimeTask) string {

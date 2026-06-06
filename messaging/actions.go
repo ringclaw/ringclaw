@@ -28,6 +28,10 @@ type AgentAction struct {
 	Body   string
 }
 
+type MeshTaskCreator interface {
+	CreateMeshTask(context.Context, MeshRuntimeTaskCreateRequest) (MeshRuntimeTask, error)
+}
+
 // ParseAgentActions extracts ACTION blocks from the agent's response and returns
 // the clean reply text (without ACTION blocks) and the parsed actions.
 func ParseAgentActions(reply string) (string, []AgentAction) {
@@ -128,7 +132,7 @@ func parseActionHeader(header string) (string, string) {
 // parseActionParams parses "title=xxx start=2026-01-01T10:00:00Z end=2026-01-01T11:00:00Z"
 func parseActionParams(s string) []keyValue {
 	var result []keyValue
-	keys := []string{"title", "subject", "start", "end", "chatid", "assignee", "type", "from", "to", "callerid", "playprompt", "scope", "important", "limit", "missing", "summary", "next_actions", "direction", "result", "view", "days", "date_from", "date_to"}
+	keys := []string{"title", "subject", "start", "end", "chatid", "assignee", "type", "from", "to", "callerid", "playprompt", "scope", "important", "limit", "missing", "summary", "next_actions", "direction", "result", "view", "days", "date_from", "date_to", "to_role_id", "to_role", "role_id", "role", "intent", "task_intent", "instructions", "instruction", "context_summary"}
 	remaining := s
 	for len(remaining) > 0 {
 		remaining = strings.TrimSpace(remaining)
@@ -203,6 +207,9 @@ type ActionContext struct {
 	// action execution enforce workflow-specific safety rails even when the
 	// model emits the wrong ACTION blocks.
 	OriginalText string
+	// MeshTaskCreator lets a source RingClaw runtime delegate work into
+	// AVA Control Plane Agent Mesh without carrying an admin token.
+	MeshTaskCreator MeshTaskCreator
 }
 
 // ExecuteAgentActions executes parsed actions against the RC API.
@@ -236,6 +243,33 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		if capability := actionCapability(a.Type); capability != "" && !isActionCapabilityAllowed(opts.Capabilities, capability) {
 			record("blocked", "", false, map[string]any{"reason": "capability_disabled", "capability": capability})
 			results = append(results, capabilityDisabledMessage(capability))
+			continue
+		}
+		if a.Type == "MESH_TASK" {
+			if !opts.OriginIsOwner {
+				record("blocked", "", false, map[string]any{"reason": "owner_required"})
+				results = append(results, "Refused mesh task: only trusted senders can delegate agent tasks.")
+				continue
+			}
+			if opts.MeshTaskCreator == nil {
+				record("failed", "", false, map[string]any{"reason": "mesh_not_configured"})
+				results = append(results, "Failed to create mesh task: Agent Mesh is not configured for this bot.")
+				continue
+			}
+			req, err := meshTaskRequestFromAction(a)
+			if err != nil {
+				record("failed", "", false, map[string]any{"error": err.Error()})
+				results = append(results, fmt.Sprintf("Failed to create mesh task: %v", err))
+				continue
+			}
+			task, err := opts.MeshTaskCreator.CreateMeshTask(ctx, req)
+			if err != nil {
+				record("failed", "", false, map[string]any{"error": err.Error(), "to_role_id": req.ToRoleID, "intent": req.Intent})
+				results = append(results, fmt.Sprintf("Failed to create mesh task: %v", err))
+				continue
+			}
+			record("completed", "", false, map[string]any{"task_id": task.ID, "to_role_id": task.ToRoleID, "intent": task.Intent})
+			results = append(results, fmt.Sprintf("Created mesh task %s for %s (%s).", task.ID, task.ToRoleID, task.Intent))
 			continue
 		}
 		if a.Type == "PHONE_CALL" || a.Type == "RINGOUT" {
@@ -818,6 +852,54 @@ func fallbackString(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func meshTaskRequestFromAction(a AgentAction) (MeshRuntimeTaskCreateRequest, error) {
+	toRoleID := firstActionParam(a.Params, "to_role_id", "to_role", "role_id", "role")
+	intent := firstActionParam(a.Params, "intent", "task_intent")
+	title := strings.TrimSpace(a.Params["title"])
+	instructions := firstActionParam(a.Params, "instructions", "instruction")
+	if instructions == "" {
+		instructions = strings.TrimSpace(a.Body)
+	}
+	summary := firstActionParam(a.Params, "context_summary", "summary")
+	if toRoleID == "" {
+		return MeshRuntimeTaskCreateRequest{}, fmt.Errorf("to_role_id is required")
+	}
+	if intent == "" {
+		return MeshRuntimeTaskCreateRequest{}, fmt.Errorf("intent is required")
+	}
+	data := map[string]interface{}{}
+	for key, value := range a.Params {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if value == "" || !strings.HasPrefix(key, "context_") || key == "context_summary" {
+			continue
+		}
+		data[strings.TrimPrefix(key, "context_")] = value
+	}
+	if len(data) == 0 {
+		data = nil
+	}
+	return MeshRuntimeTaskCreateRequest{
+		ToRoleID:     toRoleID,
+		Intent:       intent,
+		Title:        title,
+		Instructions: instructions,
+		Context: MeshRuntimeContextPackage{
+			Summary: summary,
+			Data:    data,
+		},
+	}, nil
+}
+
+func firstActionParam(params map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(params[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func actionCapability(actionType string) string {

@@ -129,6 +129,11 @@ type Handler struct {
 	// long-lived bot pods can share an external AI gateway without colliding
 	// on the same RingCentral chat/user IDs.
 	conversationNamespace string
+
+	// meshTaskCreator creates Agent Mesh tasks on behalf of this runtime.
+	// It is authenticated by bot_id + bootstrap token and is only wired for
+	// Control Plane managed bot pods.
+	meshTaskCreator MeshTaskCreator
 }
 
 // NewHandler creates a new message handler.
@@ -407,6 +412,18 @@ func (h *Handler) SetCustomAliases(aliases map[string]string) {
 // SetCronStore sets the cron job store for /cron commands.
 func (h *Handler) SetCronStore(store *CronStore) {
 	h.cronStore = store
+}
+
+func (h *Handler) SetMeshTaskCreator(creator MeshTaskCreator) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.meshTaskCreator = creator
+}
+
+func (h *Handler) MeshTaskCreator() MeshTaskCreator {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.meshTaskCreator
 }
 
 // SetReloadAgents sets the callback for /reload to re-detect agents.
@@ -1068,6 +1085,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			RelayCollaborator: relayCollaboratorMention(client, post),
 			Capabilities:      h.actionCapabilities(),
 			OriginalText:      originalText,
+			MeshTaskCreator:   h.MeshTaskCreator(),
 		})
 		if len(results) > 0 {
 			defer func() {

@@ -2756,6 +2756,53 @@ func TestShouldForceClinicalRefillApproval_ReplacesCardWithoutSubmitActions(t *t
 	}
 }
 
+type meshTaskCreatorActionStub struct {
+	requests []MeshRuntimeTaskCreateRequest
+}
+
+func (s *meshTaskCreatorActionStub) CreateMeshTask(_ context.Context, req MeshRuntimeTaskCreateRequest) (MeshRuntimeTask, error) {
+	s.requests = append(s.requests, req)
+	return MeshRuntimeTask{
+		ID:       "mesh-task-1",
+		Intent:   req.Intent,
+		ToRoleID: req.ToRoleID,
+		Title:    req.Title,
+	}, nil
+}
+
+func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":       "role-nursecoord-bot",
+			"intent":           "coverage.transfer",
+			"title":            "Alexis absence coverage",
+			"context_summary":  "Alexis is absent today.",
+			"context_task_cnt": "7",
+		},
+		Body: "Transfer Alexis task queue and report completion.",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), nil, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		MeshTaskCreator: creator,
+	})
+	if len(results) != 1 || !strings.Contains(results[0], "mesh-task-1") {
+		t.Fatalf("results = %#v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	req := creator.requests[0]
+	if req.ToRoleID != "role-nursecoord-bot" || req.Intent != "coverage.transfer" || req.Title != "Alexis absence coverage" {
+		t.Fatalf("mesh task request = %#v", req)
+	}
+	if req.Instructions != "Transfer Alexis task queue and report completion." || req.Context.Summary != "Alexis is absent today." {
+		t.Fatalf("mesh task context = %#v", req)
+	}
+}
+
 func TestBestDirectoryMatch_ExactOverFuzzy(t *testing.T) {
 	records := []ringcentral.DirectoryEntry{
 		{ID: "1", FirstName: "John", LastName: "Linaza"},

@@ -31,6 +31,7 @@ func (a *meshTestAgent) Info() agent.AgentInfo {
 type meshTaskClientStub struct {
 	tasks     []MeshRuntimeTask
 	responses []MeshRuntimeTaskResponse
+	created   []MeshRuntimeTaskCreateRequest
 }
 
 func (c *meshTaskClientStub) PollMeshTasks(context.Context, MeshRuntimeTaskPollRequest) ([]MeshRuntimeTask, error) {
@@ -41,6 +42,11 @@ func (c *meshTaskClientStub) RespondMeshTask(_ context.Context, taskID string, r
 	resp.TaskID = taskID
 	c.responses = append(c.responses, resp)
 	return nil
+}
+
+func (c *meshTaskClientStub) CreateMeshTask(_ context.Context, req MeshRuntimeTaskCreateRequest) (MeshRuntimeTask, error) {
+	c.created = append(c.created, req)
+	return MeshRuntimeTask{ID: "delegated-task-1", Intent: req.Intent, ToRoleID: req.ToRoleID, Title: req.Title}, nil
 }
 
 func TestMeshRunnerExecutesAgentActionsAndCompletesTask(t *testing.T) {
@@ -127,5 +133,36 @@ func TestMeshRunnerSupportsWaitingStatus(t *testing.T) {
 	}
 	if strings.Contains(resp.Result, "MESH_STATUS") || !strings.Contains(resp.Result, "Waiting for Jennifer") {
 		t.Fatalf("response result = %q", resp.Result)
+	}
+}
+
+func TestMeshRunnerAllowsTargetAgentToDelegateMeshTask(t *testing.T) {
+	ag := &meshTestAgent{reply: "Clinical handoff is needed.\n\nACTION:MESH_TASK to_role_id=role-clinical-bot intent=clinical.handoff title=\"Clinical handoff\"\nShare coverage context with clinical team.\nEND_ACTION"}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
+		ID:     "task-3",
+		Intent: "coverage.transfer",
+		Title:  "Coverage transfer",
+		Context: MeshRuntimeContextPackage{
+			Summary: "Alexis is absent and clinical follow-up is needed.",
+		},
+	}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:        taskClient,
+		Agent:         ag,
+		DefaultChatID: "admin-chat",
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if len(taskClient.created) != 1 {
+		t.Fatalf("created mesh tasks = %#v", taskClient.created)
+	}
+	created := taskClient.created[0]
+	if created.ToRoleID != "role-clinical-bot" || created.Intent != "clinical.handoff" {
+		t.Fatalf("created mesh task = %#v", created)
+	}
+	if len(taskClient.responses) != 1 || !strings.Contains(taskClient.responses[0].Result, "delegated-task-1") {
+		t.Fatalf("responses = %#v", taskClient.responses)
 	}
 }
