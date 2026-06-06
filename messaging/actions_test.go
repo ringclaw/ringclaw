@@ -3408,12 +3408,15 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T)
 	if authHeader != "Bearer private-token" {
 		t.Fatalf("Authorization = %q, want private action client token", authHeader)
 	}
-	if !strings.HasPrefix(postedBody, "![:Person](87368646659) ") {
-		t.Fatalf("expected person_id mention prefix, got %q", postedBody)
+	if !strings.HasPrefix(postedBody, "![:Person](20762295004) ") {
+		t.Fatalf("expected extension_id mention prefix, got %q", postedBody)
 	}
 	var sawUserMessageEvent bool
 	for _, event := range events {
 		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["sender_identity"] == "action_client" {
+			if event.Details["target_mention_id"] != "20762295004" {
+				t.Fatalf("target_mention_id = %#v, want extension id", event.Details["target_mention_id"])
+			}
 			sawUserMessageEvent = true
 			break
 		}

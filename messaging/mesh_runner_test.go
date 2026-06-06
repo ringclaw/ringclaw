@@ -182,7 +182,7 @@ func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 	if !strings.Contains(sentPath, "/chats/clinical-shared-chat/") {
 		t.Fatalf("sent path = %q", sentPath)
 	}
-	if !strings.HasPrefix(sentText, "![:Person](clinical-person) ") {
+	if !strings.HasPrefix(sentText, "![:Person](clinical-ext) ") {
 		t.Fatalf("sent text = %q", sentText)
 	}
 	if len(taskClient.responses) != 1 {

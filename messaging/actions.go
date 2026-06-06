@@ -540,8 +540,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			}
 			rolePeerSenderIdentity := ""
 			if hasRolePeer {
-				body = ensurePersonMentionPrefix(body, mentionID)
 				messageClient, rolePeerSenderIdentity = selectRolePeerVisibleMessageClient(replyClient, actionClient)
+				mentionID, mentionSource = rolePeerVisibleMentionID(rolePeer, mentionID, mentionSource, rolePeerSenderIdentity)
+				body = ensurePersonMentionPrefix(body, mentionID)
 			} else if currentChatMention != nil {
 				relayBotID := ""
 				if replyClient != nil {
@@ -1366,6 +1367,7 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient, actionClient *r
 	mentionSource := delivery.MentionSource
 	targetChat := delivery.TargetChat
 	targetChatSource := delivery.TargetChatSource
+	mentionID, mentionSource = rolePeerVisibleMentionID(peer, mentionID, mentionSource, senderIdentity)
 	body := meshTaskRolePeerMessage(action, req, task)
 	if body == "" {
 		return false, fmt.Errorf("message body is empty")
@@ -1435,6 +1437,15 @@ func selectRolePeerVisibleMessageClient(replyClient, actionClient *ringcentral.C
 		return actionClient, "action_client"
 	}
 	return replyClient, "reply_client"
+}
+
+func rolePeerVisibleMentionID(peer RolePeer, resolvedMentionID, resolvedMentionSource, senderIdentity string) (string, string) {
+	if senderIdentity == "action_client" {
+		if extensionID := strings.TrimSpace(peer.ExtensionID); extensionID != "" {
+			return extensionID, "extension_id"
+		}
+	}
+	return resolvedMentionID, resolvedMentionSource
 }
 
 func sendRolePeerVisibleMessage(ctx context.Context, client *ringcentral.Client, chatID, body string, peer RolePeer, targetChatSource, senderIdentity string) (map[string]any, error) {
