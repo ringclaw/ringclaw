@@ -2667,6 +2667,79 @@ func TestExecuteAgentActions_UnknownTypeFallback(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) {
+	t.Setenv("RINGCLAW_BOT_ID", "personal-ava-test")
+	var taskCalls int
+	var cardCalls int
+	var postedCard map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/tasks"):
+			taskCalls++
+			t.Fatalf("unexpected task creation for initial refill request")
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/adaptive-cards"):
+			cardCalls++
+			if err := json.NewDecoder(r.Body).Decode(&postedCard); err != nil {
+				t.Fatalf("decode card: %v", err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"id": "card-1", "type": "AdaptiveCard"})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"id": "ok"})
+		}
+	}))
+	defer srv.Close()
+
+	botClient := ringcentral.NewBotClient(srv.URL, "bot-token")
+	privateClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
+	})
+	privateClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	actions := []AgentAction{
+		{Type: "TASK", Params: map[string]string{"subject": "Send refill to pharmacy"}},
+		{Type: "SMS", Params: map[string]string{"to": "+17205550102"}, Body: "approved"},
+	}
+	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "chat-1", actions, ActionContext{
+		OriginIsOwner: true,
+		RequesterID:   "20762292004",
+		OriginalText:  "refill AX-2847 Sertraline 100mg Andrew Wenner",
+	})
+
+	if len(results) != 0 {
+		t.Fatalf("expected no user-visible action errors, got %v", results)
+	}
+	if taskCalls != 0 {
+		t.Fatalf("expected no task calls, got %d", taskCalls)
+	}
+	if cardCalls != 1 {
+		t.Fatalf("expected one fallback card call, got %d", cardCalls)
+	}
+	actionsRaw, ok := postedCard["actions"].([]any)
+	if !ok || len(actionsRaw) != 3 {
+		t.Fatalf("expected three submit actions in card, got %#v", postedCard["actions"])
+	}
+	first, ok := actionsRaw[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected first action shape: %#v", actionsRaw[0])
+	}
+	data, ok := first["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected submit data, got %#v", first["data"])
+	}
+	if data["bot_id"] != "personal-ava-test" || data["patient_id"] != "AX-2847" || data["action"] != "approve" {
+		t.Fatalf("unexpected submit data: %#v", data)
+	}
+}
+
+func TestShouldForceClinicalRefillApproval_SkipsWhenCardPresent(t *testing.T) {
+	actions := []AgentAction{{Type: "CARD", Body: `{"type":"AdaptiveCard","version":"1.3"}`}}
+	if shouldForceClinicalRefillApproval("refill AX-2847 Sertraline 100mg Andrew Wenner", actions) {
+		t.Fatal("expected no fallback when agent already emitted ACTION:CARD")
+	}
+}
+
 func TestBestDirectoryMatch_ExactOverFuzzy(t *testing.T) {
 	records := []ringcentral.DirectoryEntry{
 		{ID: "1", FirstName: "John", LastName: "Linaza"},

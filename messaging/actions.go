@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -198,11 +199,19 @@ type ActionContext struct {
 	// Capabilities is the runtime capability set selected during onboarding.
 	// Empty means legacy behavior: allow all optional actions.
 	Capabilities []string
+	// OriginalText is the user message that produced the agent reply. It lets
+	// action execution enforce workflow-specific safety rails even when the
+	// model emits the wrong ACTION blocks.
+	OriginalText string
 }
 
 // ExecuteAgentActions executes parsed actions against the RC API.
 func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcentral.Client, chatID string, actions []AgentAction, opts ActionContext) []string {
 	var results []string
+	forceClinicalRefillApproval := shouldForceClinicalRefillApproval(opts.OriginalText, actions)
+	if forceClinicalRefillApproval {
+		actions = append([]AgentAction{buildClinicalRefillApprovalCardAction(opts.OriginalText, opts)}, actions...)
+	}
 	for _, a := range actions {
 		record := func(status string, targetChat string, crossChat bool, extra map[string]any) {
 			recordAgentActionEvent(ctx, ActionEvent{
@@ -210,6 +219,12 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				Status:  status,
 				Details: actionEventDetails(chatID, targetChat, crossChat, extra),
 			})
+		}
+		if forceClinicalRefillApproval && isClinicalRefillProhibitedAction(a.Type) {
+			record("blocked", chatID, false, map[string]any{"reason": "clinical_refill_requires_provider_card"})
+			slog.Warn("action: blocked premature clinical refill action",
+				"type", a.Type, "chatID", chatID, "requesterID", opts.RequesterID)
+			continue
 		}
 		if capability := actionCapability(a.Type); capability != "" && !isActionCapabilityAllowed(opts.Capabilities, capability) {
 			record("blocked", "", false, map[string]any{"reason": "capability_disabled", "capability": capability})
@@ -557,6 +572,200 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		}
 	}
 	return results
+}
+
+func shouldForceClinicalRefillApproval(originalText string, actions []AgentAction) bool {
+	if !isInitialClinicalRefillRequest(originalText) {
+		return false
+	}
+	for _, action := range actions {
+		if strings.EqualFold(action.Type, "CARD") {
+			return false
+		}
+	}
+	return true
+}
+
+func isInitialClinicalRefillRequest(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "approve ") ||
+		strings.Contains(normalized, "followup ") ||
+		strings.Contains(normalized, "deny ") {
+		return false
+	}
+	fields := strings.Fields(normalized)
+	hasRefill := false
+	hasPatientID := false
+	for _, field := range fields {
+		field = strings.Trim(field, ".,:;()[]{}")
+		if field == "refill" {
+			hasRefill = true
+		}
+		if strings.HasPrefix(field, "ax-") && len(field) > len("ax-") {
+			hasPatientID = true
+		}
+	}
+	return hasRefill && hasPatientID
+}
+
+func isClinicalRefillProhibitedAction(actionType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(actionType)) {
+	case "SMS", "TASK":
+		return true
+	default:
+		return false
+	}
+}
+
+func clinicalRefillGuardReply(originalText string) string {
+	req := parseClinicalRefillRequest(originalText)
+	if req.PatientID == "" {
+		return "已拦截提前执行的续剂动作，并改为发送 provider 审批卡。请等待 provider 在卡片上选择 approve / followup / deny。"
+	}
+	return fmt.Sprintf("已发送 %s 的续剂审批卡，等待 %s 操作 approve / followup / deny。未发送 SMS，未创建 Task。", req.PatientID, req.ProviderName)
+}
+
+func buildClinicalRefillApprovalCardAction(originalText string, opts ActionContext) AgentAction {
+	req := parseClinicalRefillRequest(originalText)
+	if req.PatientID == "" {
+		req.PatientID = "Unknown"
+	}
+	if req.ProviderName == "" {
+		req.ProviderName = "provider"
+	}
+	rxID := fmt.Sprintf("RX-%s-%s", time.Now().Format("20060102"), strings.ReplaceAll(req.PatientID, "-", ""))
+	card := map[string]any{
+		"$schema":      "http://adaptivecards.io/schemas/adaptive-card.json",
+		"type":         "AdaptiveCard",
+		"version":      "1.3",
+		"fallbackText": fmt.Sprintf("Refill approval requested: %s %s", req.PatientID, req.Medication),
+		"body": []map[string]any{
+			{
+				"type":   "TextBlock",
+				"text":   "Refill approval requested",
+				"size":   "Small",
+				"color":  "Attention",
+				"weight": "Bolder",
+			},
+			{
+				"type":   "TextBlock",
+				"text":   strings.TrimSpace(fmt.Sprintf("%s - %s %s", rxID, req.PatientID, req.Medication)),
+				"size":   "Large",
+				"color":  "Accent",
+				"weight": "Bolder",
+				"wrap":   true,
+			},
+			{
+				"type": "FactSet",
+				"facts": []map[string]string{
+					{"title": "Provider", "value": req.ProviderName},
+					{"title": "Patient", "value": req.PatientID},
+					{"title": "Medication", "value": fallbackString(req.Medication, "See request")},
+					{"title": "Status", "value": "Waiting for provider decision"},
+				},
+			},
+			{
+				"type":      "TextBlock",
+				"text":      fmt.Sprintf("@%s please review this refill request. Runtime blocked premature SMS/Task actions until provider approval.", req.ProviderName),
+				"wrap":      true,
+				"separator": true,
+			},
+		},
+		"actions": []map[string]any{
+			refillSubmitAction("Approve", "approve", rxID, req, opts),
+			refillSubmitAction("Need follow-up", "followup", rxID, req, opts),
+			refillSubmitAction("Deny", "deny", rxID, req, opts),
+		},
+	}
+	body, err := json.Marshal(card)
+	if err != nil {
+		body = []byte(`{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Refill approval requested"}]}`)
+	}
+	return AgentAction{Type: "CARD", Body: string(body)}
+}
+
+func refillSubmitAction(title, action, rxID string, req clinicalRefillRequest, opts ActionContext) map[string]any {
+	data := map[string]any{
+		"action":     action,
+		"rx_id":      rxID,
+		"patient_id": req.PatientID,
+		"medication": req.Medication,
+	}
+	if botID := strings.TrimSpace(os.Getenv("RINGCLAW_BOT_ID")); botID != "" {
+		data["bot_id"] = botID
+	}
+	if providerID := providerUserID(req.ProviderName, opts); providerID != "" {
+		data["provider_user_id"] = providerID
+	}
+	return map[string]any{
+		"type":  "Action.Submit",
+		"title": title,
+		"data":  data,
+	}
+}
+
+func providerUserID(providerName string, opts ActionContext) string {
+	providerName = strings.ToLower(strings.TrimSpace(providerName))
+	for _, mention := range opts.Mentions {
+		if strings.ToLower(strings.TrimSpace(mention.Name)) == providerName && mention.ID != "" {
+			return mention.ID
+		}
+	}
+	return ""
+}
+
+type clinicalRefillRequest struct {
+	PatientID    string
+	Medication   string
+	ProviderName string
+}
+
+func parseClinicalRefillRequest(text string) clinicalRefillRequest {
+	fields := strings.Fields(strings.TrimSpace(text))
+	for i, field := range fields {
+		if !strings.EqualFold(strings.Trim(field, ".,:;()[]{}"), "refill") {
+			continue
+		}
+		if i+1 >= len(fields) {
+			return clinicalRefillRequest{}
+		}
+		req := clinicalRefillRequest{PatientID: strings.Trim(fields[i+1], ".,:;()[]{}")}
+		rest := fields[i+2:]
+		providerStart := len(rest)
+		for j := 0; j+1 < len(rest); j++ {
+			if looksLikeNameToken(rest[j]) && looksLikeNameToken(rest[j+1]) {
+				providerStart = j
+				break
+			}
+		}
+		if providerStart < len(rest) {
+			req.ProviderName = strings.Join(rest[providerStart:], " ")
+			rest = rest[:providerStart]
+		}
+		req.Medication = strings.Join(rest, " ")
+		return req
+	}
+	return clinicalRefillRequest{}
+}
+
+func looksLikeNameToken(token string) bool {
+	token = strings.Trim(token, ".,:;()[]{}")
+	if token == "" {
+		return false
+	}
+	r := rune(token[0])
+	return r >= 'A' && r <= 'Z'
+}
+
+func fallbackString(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func actionCapability(actionType string) string {

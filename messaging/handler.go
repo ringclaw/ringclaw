@@ -628,7 +628,7 @@ func stripForwardedPrefix(text string) string {
 
 // HandleMessage processes a single incoming RingCentral post.
 func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
-	text := strings.TrimSpace(post.Text)
+	text := normalizedPostText(client, post)
 	if text == "" {
 		// Voice messages arrive as posts with empty text and an audio attachment.
 		// Proceed with dispatch; dispatchToAgent will pass the audio to the agent.
@@ -639,6 +639,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	}
 
 	// Strip bot mention prefix (e.g. "![:Person](12345) /help" -> "/help")
+	// normalizedPostText already handles this before the empty-message branch,
+	// but keep this block as a defensive no-op for callers/tests that mutate
+	// text before reaching here.
 	if botID := client.OwnerID(); botID != "" {
 		prefix := "![:Person](" + botID + ")"
 		if strings.HasPrefix(text, prefix) {
@@ -835,6 +838,20 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 	}
 }
 
+func normalizedPostText(client *ringcentral.Client, post ringcentral.Post) string {
+	text := strings.TrimSpace(post.Text)
+	if client != nil {
+		if botID := client.OwnerID(); botID != "" {
+			prefix := "![:Person](" + botID + ")"
+			if strings.HasPrefix(text, prefix) {
+				text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+				text = strings.TrimSpace(strings.TrimLeft(text, ",:"))
+			}
+		}
+	}
+	return stripForwardedPrefix(text)
+}
+
 // routeOOBApprovalReply is the Phase 2b hook that consumes `/approval`
 // replies in the owner's bot DM before they reach the agent. Returns
 // true when the message was handled (caller must short-circuit).
@@ -1029,7 +1046,12 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 	// cannot pivot the agent's reply into a different chat (Finding #5).
 	cleanReply, actions := ParseAgentActions(reply)
 	if len(actions) > 0 {
-		reply = cleanReply
+		originalText := normalizedPostText(client, post)
+		if shouldForceClinicalRefillApproval(originalText, actions) {
+			reply = clinicalRefillGuardReply(originalText)
+		} else {
+			reply = cleanReply
+		}
 		ownerID := ""
 		if actionClient != nil {
 			ownerID = actionClient.OwnerID()
@@ -1043,6 +1065,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			Mentions:          post.Mentions,
 			RelayCollaborator: relayCollaboratorMention(client, post),
 			Capabilities:      h.actionCapabilities(),
+			OriginalText:      originalText,
 		})
 		if len(results) > 0 {
 			defer func() {
