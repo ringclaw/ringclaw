@@ -55,14 +55,15 @@ type MeshRuntimeRoutePlan struct {
 }
 
 type MeshRuntimeVisibleDeliveryPlan struct {
-	Enabled         bool   `json:"enabled,omitempty"`
-	Transport       string `json:"transport,omitempty"`
-	ChatID          string `json:"chat_id,omitempty"`
-	MentionPersonID string `json:"mention_person_id,omitempty"`
-	MentionLabel    string `json:"mention_label,omitempty"`
-	TargetRoleID    string `json:"target_role_id,omitempty"`
-	TargetAgentID   string `json:"target_agent_id,omitempty"`
-	TargetBotID     string `json:"target_bot_id,omitempty"`
+	Enabled           bool   `json:"enabled,omitempty"`
+	Transport         string `json:"transport,omitempty"`
+	ChatID            string `json:"chat_id,omitempty"`
+	MentionPersonID   string `json:"mention_person_id,omitempty"`
+	MentionLabel      string `json:"mention_label,omitempty"`
+	TargetExtensionID string `json:"target_extension_id,omitempty"`
+	TargetRoleID      string `json:"target_role_id,omitempty"`
+	TargetAgentID     string `json:"target_agent_id,omitempty"`
+	TargetBotID       string `json:"target_bot_id,omitempty"`
 }
 
 type MeshRuntimeCallbackPolicy struct {
@@ -313,6 +314,7 @@ func buildMeshTaskPrompt(task MeshRuntimeTask) string {
 	b.WriteString("Return useful text plus ACTION blocks when work must be executed. ")
 	b.WriteString("If you claim an SMS was sent, a task was created, a message was posted, or a card was created, you MUST include the matching ACTION block so the runtime can execute it and record action_events. ")
 	b.WriteString("If you cannot or should not execute the action yet, say it is prepared or waiting; do not say it has already been sent or created. ")
+	b.WriteString("You are the target agent for this task. If the instructions or context say to contact, coordinate with, or notify your own role/name, treat it as your own assignment. Do not say you will contact yourself; say what you are doing directly. ")
 	b.WriteString("Use `MESH_STATUS: waiting` only when the task is waiting for an external response or deadline.\n")
 	b.WriteString(ActionPrompt())
 	return b.String()

@@ -389,6 +389,10 @@ func TestBuildMeshTaskPromptRequiresActionBlocksForExecutedWork(t *testing.T) {
 		!strings.Contains(got, "record action_events") {
 		t.Fatalf("mesh task prompt missing execution/action_event guard: %s", got)
 	}
+	if !strings.Contains(got, "Do not say you will contact yourself") ||
+		!strings.Contains(got, "treat it as your own assignment") {
+		t.Fatalf("mesh task prompt missing target-agent self-reference guard: %s", got)
+	}
 	if !strings.Contains(got, "ACTION:MESSAGE") ||
 		!strings.Contains(got, "ACTION:SMS") ||
 		!strings.Contains(got, "ACTION:MESH_TASK") {

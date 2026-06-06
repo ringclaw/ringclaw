@@ -39,7 +39,9 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 	}
 	if !strings.Contains(got, "ACTION:MESH_TASK") ||
 		!strings.Contains(got, "Use the role id provided by the user's role policy, SOUL, skill, or runtime context") ||
-		!strings.Contains(got, "Do not send an ACTION:MESSAGE to #admin") {
+		!strings.Contains(got, "Do not send an ACTION:MESSAGE to #admin") ||
+		!strings.Contains(got, "intent=coverage.transfer") ||
+		!strings.Contains(got, "absence_coverage_request") {
 		t.Error("ActionPromptTemplate should describe Agent Mesh delegation")
 	}
 	if strings.Contains(got, "role-nursecoord-bot") {

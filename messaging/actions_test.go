@@ -3473,14 +3473,15 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesControlPlaneRoutePlan(t *t
 			TargetBotID: "personal-ava-nursecoord",
 			Intent:      "coverage.transfer",
 			VisibleDelivery: MeshRuntimeVisibleDeliveryPlan{
-				Enabled:         true,
-				Transport:       "shared_chat",
-				ChatID:          "31462793222",
-				MentionPersonID: "87368646659",
-				MentionLabel:    "Nursecoord Department",
-				TargetRoleID:    "role-nursecoord-bot",
-				TargetAgentID:   "mesh-agent-nursecoord",
-				TargetBotID:     "personal-ava-nursecoord",
+				Enabled:           true,
+				Transport:         "shared_chat",
+				ChatID:            "31462793222",
+				MentionPersonID:   "87368646659",
+				MentionLabel:      "Nursecoord Department",
+				TargetRoleID:      "role-nursecoord-bot",
+				TargetAgentID:     "mesh-agent-nursecoord",
+				TargetBotID:       "personal-ava-nursecoord",
+				TargetExtensionID: "20762295004",
 			},
 		},
 	}
@@ -3634,7 +3635,7 @@ func TestExecuteAgentActions_MeshTaskRolePeerGroupMentionFallsBackToDirectChat(t
 	if groupAttempts != 1 {
 		t.Fatalf("group mention attempts = %d", groupAttempts)
 	}
-	if conversationMember != "87368646659" {
+	if conversationMember != "20762295004" {
 		t.Fatalf("conversation member = %q", conversationMember)
 	}
 	if !strings.Contains(postPath, "/chats/nursecoord-direct-chat/") {

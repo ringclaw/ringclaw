@@ -1437,12 +1437,13 @@ func rolePeerFromRoutePlan(plan MeshRuntimeRoutePlan) (RolePeer, bool) {
 		RoleID:      firstNonEmptyString(visible.TargetRoleID, plan.ToRoleID),
 		BotID:       firstNonEmptyString(visible.TargetBotID, plan.TargetBotID),
 		DisplayName: visible.MentionLabel,
+		ExtensionID: visible.TargetExtensionID,
 		PersonID:    visible.MentionPersonID,
 	}
 	if strings.EqualFold(strings.TrimSpace(visible.Transport), "shared_chat") && strings.TrimSpace(visible.ChatID) != "" {
 		peer.SharedChatIDs = []string{strings.TrimSpace(visible.ChatID)}
 	}
-	if peer.RoleID == "" && peer.BotID == "" && peer.DisplayName == "" && peer.PersonID == "" && len(peer.SharedChatIDs) == 0 {
+	if peer.RoleID == "" && peer.BotID == "" && peer.DisplayName == "" && peer.ExtensionID == "" && peer.PersonID == "" && len(peer.SharedChatIDs) == 0 {
 		return RolePeer{}, false
 	}
 	return peer, true
@@ -1575,7 +1576,7 @@ func sendRolePeerDirectFallback(ctx context.Context, client *ringcentral.Client,
 func rolePeerDirectMemberCandidates(peer RolePeer) []string {
 	seen := map[string]bool{}
 	var candidates []string
-	for _, value := range []string{peer.PersonID, peer.ExtensionID, peer.BotID} {
+	for _, value := range []string{peer.ExtensionID, peer.BotID, peer.PersonID} {
 		value = strings.TrimSpace(value)
 		if value == "" || seen[value] {
 			continue
@@ -1660,6 +1661,7 @@ func fallbackString(value, fallback string) string {
 func meshTaskRequestFromAction(a AgentAction, opts ActionContext, originChatID string) (MeshRuntimeTaskCreateRequest, error) {
 	toRoleID := firstActionParam(a.Params, "to_role_id", "to_role", "role_id", "role")
 	intent := firstActionParam(a.Params, "intent", "task_intent")
+	intent = canonicalMeshTaskIntent(intent)
 	title := strings.TrimSpace(a.Params["title"])
 	instructions := firstActionParam(a.Params, "instructions", "instruction")
 	if instructions == "" {
@@ -1701,6 +1703,26 @@ func meshTaskRequestFromAction(a AgentAction, opts ActionContext, originChatID s
 			Data:    data,
 		},
 	}, nil
+}
+
+func canonicalMeshTaskIntent(intent string) string {
+	intent = strings.TrimSpace(intent)
+	key := strings.ToLower(intent)
+	key = strings.NewReplacer("_", ".", "-", ".", " ", ".").Replace(key)
+	switch key {
+	case "coverage.transfer",
+		"coverage.handoff",
+		"coverage.request",
+		"coverage.transfer.request",
+		"absence.coverage",
+		"absence.coverage.request",
+		"absence.handoff",
+		"absence.handoff.request",
+		"handoff.coverage":
+		return "coverage.transfer"
+	default:
+		return intent
+	}
 }
 
 func putMeshContextData(data map[string]interface{}, key, value string) {
