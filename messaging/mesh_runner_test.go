@@ -227,7 +227,14 @@ func TestMeshRunnerAllowsTargetAgentToDelegateMeshTask(t *testing.T) {
 	if created.ToRoleID != "role-clinical-bot" || created.Intent != "clinical.handoff" {
 		t.Fatalf("created mesh task = %#v", created)
 	}
-	if len(taskClient.responses) != 1 || !strings.Contains(taskClient.responses[0].Result, "delegated-task-1") {
+	if len(taskClient.responses) != 1 {
 		t.Fatalf("responses = %#v", taskClient.responses)
+	}
+	resp := taskClient.responses[0]
+	if strings.Contains(resp.Result, "delegated-task-1") {
+		t.Fatalf("response leaked delegated task id: %#v", resp)
+	}
+	if len(resp.ActionEvents) != 1 || resp.ActionEvents[0].Type != "MESH_TASK" || resp.ActionEvents[0].Status != "completed" {
+		t.Fatalf("action events = %#v", resp.ActionEvents)
 	}
 }

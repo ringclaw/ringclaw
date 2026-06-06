@@ -282,7 +282,21 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			record("completed", "", false, map[string]any{"task_id": task.ID, "to_role_id": task.ToRoleID, "intent": task.Intent})
-			results = append(results, fmt.Sprintf("Created mesh task %s for %s (%s).", task.ID, task.ToRoleID, task.Intent))
+			if notified, err := notifyRolePeerForMeshTask(ctx, replyClient, chatID, a, req, task, opts.RolePeers); err != nil {
+				recordAgentActionEvent(ctx, ActionEvent{
+					Type:   "MESSAGE",
+					Status: "failed",
+					Details: actionEventDetails(chatID, "", false, map[string]any{
+						"error":      err.Error(),
+						"reason":     "mesh_task_role_peer_notify_failed",
+						"task_id":    task.ID,
+						"to_role_id": req.ToRoleID,
+					}),
+				})
+				results = append(results, fmt.Sprintf("Created mesh task but failed to notify %s: %v", req.ToRoleID, err))
+			} else if notified {
+				slog.Info("action: notified role peer for mesh task", "taskID", task.ID, "toRoleID", req.ToRoleID)
+			}
 			continue
 		}
 		if a.Type == "PHONE_CALL" || a.Type == "RINGOUT" {
@@ -1015,6 +1029,76 @@ func firstNonEmptyString(values ...string) string {
 		if value != "" {
 			return value
 		}
+	}
+	return ""
+}
+
+func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Client, originChat string, action AgentAction, req MeshRuntimeTaskCreateRequest, task MeshRuntimeTask, peers map[string]RolePeer) (bool, error) {
+	peer, ok := rolePeerForID(req.ToRoleID, peers)
+	if !ok {
+		return false, nil
+	}
+	if replyClient == nil {
+		return false, fmt.Errorf("reply client is not configured")
+	}
+	if strings.TrimSpace(peer.ExtensionID) == "" {
+		return false, fmt.Errorf("target bot extension ID is not configured")
+	}
+	targetChat := firstNonEmptyString(peer.SharedChatIDs...)
+	if targetChat == "" {
+		return false, fmt.Errorf("no shared chat is configured")
+	}
+	body := meshTaskRolePeerMessage(action, req, task)
+	if body == "" {
+		return false, fmt.Errorf("message body is empty")
+	}
+	body = ensurePersonMentionPrefix(body, peer.ExtensionID)
+	if err := SendTextReply(ctx, replyClient, targetChat, body); err != nil {
+		return false, err
+	}
+	recordAgentActionEvent(ctx, ActionEvent{
+		Type:   "MESSAGE",
+		Status: "completed",
+		Details: actionEventDetails(originChat, targetChat, targetChat != originChat, map[string]any{
+			"role_peer":           true,
+			"task_id":             task.ID,
+			"to_role_id":          peer.RoleID,
+			"target_extension_id": peer.ExtensionID,
+			"target_display_name": peer.DisplayName,
+		}),
+	})
+	return true, nil
+}
+
+func rolePeerForID(roleID string, peers map[string]RolePeer) (RolePeer, bool) {
+	roleID = strings.TrimSpace(roleID)
+	if roleID == "" || len(peers) == 0 {
+		return RolePeer{}, false
+	}
+	peer, ok := peers[roleID]
+	if !ok {
+		return RolePeer{}, false
+	}
+	if peer.RoleID == "" {
+		peer.RoleID = roleID
+	}
+	return peer, true
+}
+
+func meshTaskRolePeerMessage(action AgentAction, req MeshRuntimeTaskCreateRequest, task MeshRuntimeTask) string {
+	for _, value := range []string{
+		action.Body,
+		req.Instructions,
+		req.Context.Summary,
+		task.Title,
+		req.Title,
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	if req.Intent != "" {
+		return "Please handle " + req.Intent + "."
 	}
 	return ""
 }

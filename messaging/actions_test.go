@@ -2844,7 +2844,7 @@ func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 		OriginIsOwner:   true,
 		MeshTaskCreator: creator,
 	})
-	if len(results) != 1 || !strings.Contains(results[0], "mesh-task-1") {
+	if len(results) != 0 {
 		t.Fatalf("results = %#v", results)
 	}
 	if len(creator.requests) != 1 {
@@ -2856,6 +2856,70 @@ func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 	}
 	if req.Instructions != "Transfer Alexis task queue and report completion." || req.Context.Summary != "Alexis is absent today." {
 		t.Fatalf("mesh task context = %#v", req)
+	}
+}
+
+func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithMention(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	var mu sync.Mutex
+	var postPath string
+	var postedBody string
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == http.MethodPost {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody, _ = body["text"].(string)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+	}))
+	defer replySrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	replyClient.SetOwnerID("alexis-ext")
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis 今日缺勤，需要 nursecoord-bot 接手续剂队列。",
+		},
+		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		MeshTaskCreator: creator,
+		RolePeers: map[string]RolePeer{
+			"role-nursecoord-bot": {
+				RoleID:        "role-nursecoord-bot",
+				DisplayName:   "nursecoord-bot",
+				ExtensionID:   "nursecoord-ext",
+				SharedChatIDs: []string{"shared-admin-chat"},
+			},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no user-visible internal mesh task result, got %v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(postPath, "/chats/shared-admin-chat/") {
+		t.Fatalf("expected role peer notification in shared chat, got path %q", postPath)
+	}
+	if !strings.HasPrefix(postedBody, "![:Person](nursecoord-ext) ") {
+		t.Fatalf("expected role peer mention prefix, got %q", postedBody)
+	}
+	if !strings.Contains(postedBody, "续剂队列") {
+		t.Fatalf("expected handoff details in notification, got %q", postedBody)
 	}
 }
 
@@ -2875,7 +2939,7 @@ func TestExecuteAgentActions_LegacyAdminHandoffMessageCreatesMeshTask(t *testing
 		MeshTaskCreator: creator,
 	})
 
-	if len(results) != 1 || !strings.Contains(results[0], "mesh-task-1") {
+	if len(results) != 0 {
 		t.Fatalf("results = %#v", results)
 	}
 	if len(creator.requests) != 1 {
@@ -2907,7 +2971,7 @@ func TestExecuteAgentActions_LegacyAdminHandoffNoteCreatesMeshTask(t *testing.T)
 		MeshTaskCreator: creator,
 	})
 
-	if len(results) != 1 || !strings.Contains(results[0], "mesh-task-1") {
+	if len(results) != 0 {
 		t.Fatalf("results = %#v", results)
 	}
 	if len(creator.requests) != 1 {
