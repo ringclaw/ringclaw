@@ -208,6 +208,7 @@ type ActionContext struct {
 // ExecuteAgentActions executes parsed actions against the RC API.
 func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcentral.Client, chatID string, actions []AgentAction, opts ActionContext) []string {
 	var results []string
+	initialClinicalRefill := isInitialClinicalRefillRequest(opts.OriginalText)
 	forceClinicalRefillApproval := shouldForceClinicalRefillApproval(opts.OriginalText, actions)
 	if forceClinicalRefillApproval {
 		actions = append([]AgentAction{buildClinicalRefillApprovalCardAction(opts.OriginalText, opts)}, actions...)
@@ -220,10 +221,16 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				Details: actionEventDetails(chatID, targetChat, crossChat, extra),
 			})
 		}
-		if forceClinicalRefillApproval && isClinicalRefillProhibitedAction(a.Type) {
+		if initialClinicalRefill && isClinicalRefillProhibitedAction(a.Type) {
 			record("blocked", chatID, false, map[string]any{"reason": "clinical_refill_requires_provider_card"})
 			slog.Warn("action: blocked premature clinical refill action",
 				"type", a.Type, "chatID", chatID, "requesterID", opts.RequesterID)
+			continue
+		}
+		if forceClinicalRefillApproval && strings.EqualFold(a.Type, "CARD") && !cardHasClinicalRefillSubmitActions(a) {
+			record("blocked", chatID, false, map[string]any{"reason": "clinical_refill_card_missing_submit_actions"})
+			slog.Warn("action: replaced clinical refill card without submit actions",
+				"chatID", chatID, "requesterID", opts.RequesterID)
 			continue
 		}
 		if capability := actionCapability(a.Type); capability != "" && !isActionCapabilityAllowed(opts.Capabilities, capability) {
@@ -579,7 +586,43 @@ func shouldForceClinicalRefillApproval(originalText string, actions []AgentActio
 		return false
 	}
 	for _, action := range actions {
-		if strings.EqualFold(action.Type, "CARD") {
+		if cardHasClinicalRefillSubmitActions(action) {
+			return false
+		}
+	}
+	return true
+}
+
+func cardHasClinicalRefillSubmitActions(action AgentAction) bool {
+	if !strings.EqualFold(action.Type, "CARD") {
+		return false
+	}
+	var card struct {
+		Actions []struct {
+			Type string         `json:"type"`
+			Data map[string]any `json:"data"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal([]byte(action.Body), &card); err != nil {
+		return false
+	}
+	required := map[string]bool{
+		"approve":  false,
+		"followup": false,
+		"deny":     false,
+	}
+	for _, action := range card.Actions {
+		if !strings.EqualFold(strings.TrimSpace(action.Type), "Action.Submit") {
+			continue
+		}
+		value, _ := action.Data["action"].(string)
+		key := strings.ToLower(strings.TrimSpace(value))
+		if _, ok := required[key]; ok {
+			required[key] = true
+		}
+	}
+	for _, found := range required {
+		if !found {
 			return false
 		}
 	}
@@ -618,6 +661,15 @@ func isClinicalRefillProhibitedAction(actionType string) bool {
 	default:
 		return false
 	}
+}
+
+func containsClinicalRefillProhibitedAction(actions []AgentAction) bool {
+	for _, action := range actions {
+		if isClinicalRefillProhibitedAction(action.Type) {
+			return true
+		}
+	}
+	return false
 }
 
 func clinicalRefillGuardReply(originalText string) string {

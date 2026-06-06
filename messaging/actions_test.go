@@ -2698,6 +2698,7 @@ func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) 
 	privateClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
 
 	actions := []AgentAction{
+		{Type: "CARD", Body: `{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Refill Routed"}]}`},
 		{Type: "TASK", Params: map[string]string{"subject": "Send refill to pharmacy"}},
 		{Type: "SMS", Params: map[string]string{"to": "+17205550102"}, Body: "approved"},
 	}
@@ -2714,7 +2715,7 @@ func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) 
 		t.Fatalf("expected no task calls, got %d", taskCalls)
 	}
 	if cardCalls != 1 {
-		t.Fatalf("expected one fallback card call, got %d", cardCalls)
+		t.Fatalf("expected only one replacement card call, got %d", cardCalls)
 	}
 	actionsRaw, ok := postedCard["actions"].([]any)
 	if !ok || len(actionsRaw) != 3 {
@@ -2734,9 +2735,24 @@ func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) 
 }
 
 func TestShouldForceClinicalRefillApproval_SkipsWhenCardPresent(t *testing.T) {
-	actions := []AgentAction{{Type: "CARD", Body: `{"type":"AdaptiveCard","version":"1.3"}`}}
+	actions := []AgentAction{{Type: "CARD", Body: `{
+		"type":"AdaptiveCard",
+		"version":"1.3",
+		"actions":[
+			{"type":"Action.Submit","title":"Approve","data":{"action":"approve"}},
+			{"type":"Action.Submit","title":"Need follow-up","data":{"action":"followup"}},
+			{"type":"Action.Submit","title":"Deny","data":{"action":"deny"}}
+		]
+	}`}}
 	if shouldForceClinicalRefillApproval("refill AX-2847 Sertraline 100mg Andrew Wenner", actions) {
-		t.Fatal("expected no fallback when agent already emitted ACTION:CARD")
+		t.Fatal("expected no fallback when agent already emitted a submit approval card")
+	}
+}
+
+func TestShouldForceClinicalRefillApproval_ReplacesCardWithoutSubmitActions(t *testing.T) {
+	actions := []AgentAction{{Type: "CARD", Body: `{"type":"AdaptiveCard","version":"1.3","body":[]}`}}
+	if !shouldForceClinicalRefillApproval("refill AX-2847 Sertraline 100mg Andrew Wenner", actions) {
+		t.Fatal("expected fallback when agent card lacks approve/followup/deny submit actions")
 	}
 }
 

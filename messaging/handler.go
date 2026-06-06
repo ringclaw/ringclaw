@@ -1049,6 +1049,8 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		originalText := normalizedPostText(client, post)
 		if shouldForceClinicalRefillApproval(originalText, actions) {
 			reply = clinicalRefillGuardReply(originalText)
+		} else if isInitialClinicalRefillRequest(originalText) && containsClinicalRefillProhibitedAction(actions) {
+			reply = clinicalRefillGuardReply(originalText)
 		} else {
 			reply = cleanReply
 		}
