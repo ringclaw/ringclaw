@@ -89,6 +89,7 @@ type MeshRolePeerConfig struct {
 	BotID         string   `json:"bot_id,omitempty"`
 	DisplayName   string   `json:"display_name,omitempty"`
 	ExtensionID   string   `json:"extension_id,omitempty"`
+	PersonID      string   `json:"person_id,omitempty"`
 	SharedChatIDs []string `json:"shared_chat_ids,omitempty"`
 }
 

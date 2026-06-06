@@ -37,6 +37,7 @@ type RolePeer struct {
 	BotID         string
 	DisplayName   string
 	ExtensionID   string
+	PersonID      string
 	SharedChatIDs []string
 }
 
@@ -573,6 +574,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					"role_peer":           true,
 					"to_role_id":          rolePeer.RoleID,
 					"target_extension_id": rolePeer.ExtensionID,
+					"target_person_id":    rolePeer.PersonID,
 					"target_mention_id":   mentionID,
 					"mention_source":      mentionSource,
 					"target_chat_source":  targetChatSource,
@@ -1368,6 +1370,7 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Cli
 			"task_id":             task.ID,
 			"to_role_id":          peer.RoleID,
 			"target_extension_id": peer.ExtensionID,
+			"target_person_id":    peer.PersonID,
 			"target_mention_id":   mentionID,
 			"mention_source":      mentionSource,
 			"target_chat_source":  targetChatSource,

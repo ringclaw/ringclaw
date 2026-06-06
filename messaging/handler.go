@@ -293,6 +293,7 @@ func (h *Handler) SetRolePeers(peers map[string]config.MeshRolePeerConfig) {
 			BotID:         peer.BotID,
 			DisplayName:   peer.DisplayName,
 			ExtensionID:   peer.ExtensionID,
+			PersonID:      peer.PersonID,
 			SharedChatIDs: append([]string(nil), peer.SharedChatIDs...),
 		}
 	}

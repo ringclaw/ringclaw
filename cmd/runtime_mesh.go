@@ -181,6 +181,7 @@ func meshRolePeersFromConfig(peers map[string]config.MeshRolePeerConfig) map[str
 			BotID:         peer.BotID,
 			DisplayName:   peer.DisplayName,
 			ExtensionID:   peer.ExtensionID,
+			PersonID:      peer.PersonID,
 			SharedChatIDs: append([]string(nil), peer.SharedChatIDs...),
 		}
 		if rolePeer.RoleID == "" {

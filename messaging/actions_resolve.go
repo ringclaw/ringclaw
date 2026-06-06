@@ -93,7 +93,10 @@ func resolveRolePeerDelivery(ctx context.Context, client *ringcentral.Client, pe
 		return rolePeerDelivery{}, fmt.Errorf("reply client is not configured")
 	}
 	if chatID := firstNonEmptyString(peer.SharedChatIDs...); chatID != "" {
-		mentionID, mentionSource := resolveRolePeerMentionIDFromChat(ctx, client, chatID, peer)
+		mentionID, mentionSource := resolveRolePeerConfiguredPersonID(peer)
+		if mentionID == "" {
+			mentionID, mentionSource = resolveRolePeerMentionIDFromChat(ctx, client, chatID, peer)
+		}
 		if mentionID == "" {
 			mentionID, mentionSource = resolveRolePeerMentionID(ctx, client, peer)
 		}
@@ -108,7 +111,10 @@ func resolveRolePeerDelivery(ctx context.Context, client *ringcentral.Client, pe
 		}, nil
 	}
 
-	mentionID, mentionSource := resolveRolePeerMentionID(ctx, client, peer)
+	mentionID, mentionSource := resolveRolePeerConfiguredPersonID(peer)
+	if mentionID == "" {
+		mentionID, mentionSource = resolveRolePeerMentionID(ctx, client, peer)
+	}
 	if mentionID == "" {
 		return rolePeerDelivery{}, fmt.Errorf("target bot mention ID could not be resolved")
 	}
@@ -122,6 +128,13 @@ func resolveRolePeerDelivery(ctx context.Context, client *ringcentral.Client, pe
 		MentionID:        mentionID,
 		MentionSource:    mentionSource,
 	}, nil
+}
+
+func resolveRolePeerConfiguredPersonID(peer RolePeer) (string, string) {
+	if personID := strings.TrimSpace(peer.PersonID); personID != "" {
+		return personID, "person_id"
+	}
+	return "", ""
 }
 
 func resolveRolePeerMentionIDFromChat(ctx context.Context, client *ringcentral.Client, chatID string, peer RolePeer) (string, string) {
@@ -173,7 +186,7 @@ func bestChatMemberMatch(members []ringcentral.ChatMember, peer RolePeer) *ringc
 }
 
 func rolePeerMatchQueries(peer RolePeer) []string {
-	values := []string{peer.DisplayName, peer.RoleName, peer.BotID, peer.ExtensionID}
+	values := []string{peer.PersonID, peer.DisplayName, peer.RoleName, peer.BotID, peer.ExtensionID}
 	out := make([]string, 0, len(values))
 	seen := map[string]bool{}
 	for _, value := range values {

@@ -2715,6 +2715,65 @@ func TestExecuteAgentActions_MessageToRolePeerAddsMentionAndSharedChat(t *testin
 	}
 }
 
+func TestExecuteAgentActions_MessageToRolePeerUsesConfiguredPersonID(t *testing.T) {
+	var mu sync.Mutex
+	var postPath string
+	var postedBody string
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/directory/entries/search") ||
+			(strings.Contains(r.URL.Path, "/team-messaging/v1/chats/shared-admin-chat") && r.Method == http.MethodGet) {
+			t.Fatalf("person_id should avoid lookup, got %s %s", r.Method, r.URL.Path)
+		}
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == http.MethodPost {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody, _ = body["text"].(string)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer replySrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	actions := []AgentAction{{
+		Type: "MESSAGE",
+		Params: map[string]string{
+			"to_role_id": "role-clinical-bot",
+		},
+		Body: "Please review the clinical handoff.",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner: true,
+		RolePeers: map[string]RolePeer{
+			"role-clinical-bot": {
+				RoleID:        "role-clinical-bot",
+				DisplayName:   "clinical-bot",
+				ExtensionID:   "20762293004",
+				PersonID:      "87368474627",
+				SharedChatIDs: []string{"shared-admin-chat"},
+			},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(postPath, "/chats/shared-admin-chat/") {
+		t.Fatalf("expected post to shared chat, got %q", postPath)
+	}
+	if !strings.HasPrefix(postedBody, "![:Person](87368474627) ") {
+		t.Fatalf("expected configured person_id mention prefix, got %q", postedBody)
+	}
+}
+
 func TestExecuteAgentActions_NonOwnerForcesOriginChat(t *testing.T) {
 	var mu sync.Mutex
 	var postPaths []string
