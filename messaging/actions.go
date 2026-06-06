@@ -335,21 +335,26 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		crossChat := false
 		var currentChatMention *ringcentral.Mention
 		rolePeer, hasRolePeer := rolePeerForAction(a, opts.RolePeers)
+		mentionID := ""
+		mentionSource := ""
+		targetChatSource := ""
 		if hasRolePeer {
 			if !opts.OriginIsOwner {
 				record("blocked", "", false, map[string]any{"reason": "owner_required", "to_role_id": rolePeer.RoleID})
 				results = append(results, "Refused role message: only trusted senders can message another bot role.")
 				continue
 			}
-			if strings.TrimSpace(rolePeer.ExtensionID) == "" {
-				record("failed", "", false, map[string]any{"reason": "missing_extension_id", "to_role_id": rolePeer.RoleID})
-				results = append(results, fmt.Sprintf("Failed to message role %s: target bot extension ID is not configured.", rolePeer.RoleID))
+			mentionID, mentionSource = resolveRolePeerMentionID(ctx, replyClient, rolePeer)
+			if mentionID == "" {
+				record("failed", "", false, map[string]any{"reason": "missing_mention_id", "to_role_id": rolePeer.RoleID})
+				results = append(results, fmt.Sprintf("Failed to message role %s: target bot mention ID could not be resolved.", rolePeer.RoleID))
 				continue
 			}
-			targetChat = firstNonEmptyString(rolePeer.SharedChatIDs...)
-			if targetChat == "" {
-				record("failed", "", false, map[string]any{"reason": "missing_shared_chat", "to_role_id": rolePeer.RoleID})
-				results = append(results, fmt.Sprintf("Failed to message role %s: no shared chat is configured.", rolePeer.RoleID))
+			var err error
+			targetChat, targetChatSource, err = resolveRolePeerTargetChat(ctx, replyClient, rolePeer, mentionID)
+			if err != nil {
+				record("failed", "", false, map[string]any{"reason": "resolve_role_peer_chat_failed", "error": err.Error(), "to_role_id": rolePeer.RoleID})
+				results = append(results, fmt.Sprintf("Failed to message role %s: %v", rolePeer.RoleID, err))
 				continue
 			}
 			crossChat = targetChat != chatID
@@ -529,7 +534,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				currentBotID = strings.TrimSpace(replyClient.OwnerID())
 			}
 			if hasRolePeer {
-				body = ensurePersonMentionPrefix(body, rolePeer.ExtensionID)
+				body = ensurePersonMentionPrefix(body, mentionID)
 				messageClient = replyClient
 			} else if currentChatMention != nil {
 				relayBotID := ""
@@ -564,6 +569,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					"role_peer":           true,
 					"to_role_id":          rolePeer.RoleID,
 					"target_extension_id": rolePeer.ExtensionID,
+					"target_mention_id":   mentionID,
+					"mention_source":      mentionSource,
+					"target_chat_source":  targetChatSource,
 				}
 				if rolePeer.DisplayName != "" {
 					details["target_display_name"] = rolePeer.DisplayName
@@ -929,12 +937,27 @@ func normalizeLegacyMeshDelegationActions(actions []AgentAction, opts ActionCont
 	out := make([]AgentAction, 0, len(actions))
 	for _, action := range actions {
 		if converted, ok := legacyDelegationActionToMeshTask(action, opts.OriginalText); ok {
+			if strings.EqualFold(strings.TrimSpace(action.Type), "NOTE") {
+				out = append(out, legacyDelegationNoteForOriginChat(action))
+			}
 			out = append(out, converted)
 			continue
 		}
 		out = append(out, action)
 	}
 	return out
+}
+
+func legacyDelegationNoteForOriginChat(action AgentAction) AgentAction {
+	note := action
+	note.Params = make(map[string]string, len(action.Params))
+	for key, value := range action.Params {
+		if strings.EqualFold(strings.TrimSpace(key), "chatid") {
+			continue
+		}
+		note.Params[key] = value
+	}
+	return note
 }
 
 func legacyDelegationActionToMeshTask(action AgentAction, originalText string) (AgentAction, bool) {
@@ -1050,18 +1073,19 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Cli
 	if replyClient == nil {
 		return false, fmt.Errorf("reply client is not configured")
 	}
-	if strings.TrimSpace(peer.ExtensionID) == "" {
-		return false, fmt.Errorf("target bot extension ID is not configured")
+	mentionID, mentionSource := resolveRolePeerMentionID(ctx, replyClient, peer)
+	if mentionID == "" {
+		return false, fmt.Errorf("target bot mention ID could not be resolved")
 	}
-	targetChat := firstNonEmptyString(peer.SharedChatIDs...)
-	if targetChat == "" {
-		return false, fmt.Errorf("no shared chat is configured")
+	targetChat, targetChatSource, err := resolveRolePeerTargetChat(ctx, replyClient, peer, mentionID)
+	if err != nil {
+		return false, err
 	}
 	body := meshTaskRolePeerMessage(action, req, task)
 	if body == "" {
 		return false, fmt.Errorf("message body is empty")
 	}
-	body = ensurePersonMentionPrefix(body, peer.ExtensionID)
+	body = ensurePersonMentionPrefix(body, mentionID)
 	if err := SendTextReply(ctx, replyClient, targetChat, body); err != nil {
 		return false, err
 	}
@@ -1073,6 +1097,9 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Cli
 			"task_id":             task.ID,
 			"to_role_id":          peer.RoleID,
 			"target_extension_id": peer.ExtensionID,
+			"target_mention_id":   mentionID,
+			"mention_source":      mentionSource,
+			"target_chat_source":  targetChatSource,
 			"target_display_name": peer.DisplayName,
 		}),
 	})

@@ -16,7 +16,7 @@ func bestDirectoryMatch(records []ringcentral.DirectoryEntry, name string) *ring
 	for i := range records {
 		e := &records[i]
 		fullName := strings.TrimSpace(e.FirstName + " " + e.LastName)
-		if exactMatch(fullName, name) || exactMatch(e.Email, name) {
+		if exactMatch(fullName, name) || exactMatch(e.Email, name) || exactMatch(e.ID, name) || exactMatch(e.ExtensionNumber, name) {
 			return e
 		}
 	}
@@ -26,7 +26,7 @@ func bestDirectoryMatch(records []ringcentral.DirectoryEntry, name string) *ring
 	for i := range records {
 		e := &records[i]
 		fullName := strings.TrimSpace(e.FirstName + " " + e.LastName)
-		if fuzzyMatch(fullName, name) || fuzzyMatch(e.Email, name) {
+		if fuzzyMatch(fullName, name) || fuzzyMatch(e.Email, name) || fuzzyMatch(e.ID, name) || fuzzyMatch(e.ExtensionNumber, name) {
 			if len(fullName) < bestLen {
 				best = e
 				bestLen = len(fullName)
@@ -79,6 +79,52 @@ func resolveNameToPersonID(ctx context.Context, client *ringcentral.Client, name
 	fullName := strings.TrimSpace(best.FirstName + " " + best.LastName)
 	slog.Info("action: resolved assignee", "name", name, "match", fullName, "id", best.ID)
 	return best.ID, nil
+}
+
+func resolveRolePeerMentionID(ctx context.Context, client *ringcentral.Client, peer RolePeer) (string, string) {
+	for _, query := range []string{peer.DisplayName, peer.RoleName, peer.BotID, peer.ExtensionID} {
+		query = strings.TrimSpace(query)
+		if query == "" || client == nil {
+			continue
+		}
+		result, err := client.SearchDirectory(ctx, query)
+		if err != nil {
+			slog.Warn("action: failed to resolve role peer mention ID",
+				"roleID", peer.RoleID, "query", query, "error", err)
+			continue
+		}
+		if best := bestDirectoryMatch(result.Records, query); best != nil && strings.TrimSpace(best.ID) != "" {
+			fullName := strings.TrimSpace(best.FirstName + " " + best.LastName)
+			slog.Info("action: resolved role peer mention ID",
+				"roleID", peer.RoleID, "query", query, "match", fullName, "mentionID", best.ID)
+			return strings.TrimSpace(best.ID), "directory:" + query
+		}
+	}
+	// Backward-compatible fallback for old configs. This may render a visible
+	// mention in some environments, but Directory entry ID is preferred because
+	// Team Messaging @ targets are not guaranteed to equal RC extension IDs.
+	return strings.TrimSpace(peer.ExtensionID), "extension_id_fallback"
+}
+
+func resolveRolePeerTargetChat(ctx context.Context, client *ringcentral.Client, peer RolePeer, mentionID string) (string, string, error) {
+	if chatID := firstNonEmptyString(peer.SharedChatIDs...); chatID != "" {
+		return chatID, "shared_chat", nil
+	}
+	if client == nil {
+		return "", "", fmt.Errorf("reply client is not configured")
+	}
+	mentionID = strings.TrimSpace(mentionID)
+	if mentionID == "" {
+		return "", "", fmt.Errorf("target bot mention ID could not be resolved")
+	}
+	chat, err := client.CreateConversation(ctx, []string{mentionID})
+	if err != nil {
+		return "", "", fmt.Errorf("create direct bot chat: %w", err)
+	}
+	if strings.TrimSpace(chat.ID) == "" {
+		return "", "", fmt.Errorf("direct bot chat ID is empty")
+	}
+	return strings.TrimSpace(chat.ID), "direct_chat", nil
 }
 
 func resolveNameToPhoneNumber(ctx context.Context, client *ringcentral.Client, name string) (string, string, error) {

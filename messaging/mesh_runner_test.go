@@ -116,6 +116,13 @@ func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 	var sentPath string
 	var sentText string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/directory/entries/search") {
+			_ = json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{Records: []ringcentral.DirectoryEntry{{
+				ID:        "clinical-person",
+				FirstName: "clinical-bot",
+			}}})
+			return
+		}
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/posts") {
 			var body struct {
 				Text string `json:"text"`
@@ -165,7 +172,7 @@ func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 	if !strings.Contains(sentPath, "/chats/clinical-shared-chat/") {
 		t.Fatalf("sent path = %q", sentPath)
 	}
-	if !strings.HasPrefix(sentText, "![:Person](clinical-ext) ") {
+	if !strings.HasPrefix(sentText, "![:Person](clinical-person) ") {
 		t.Fatalf("sent text = %q", sentText)
 	}
 	if len(taskClient.responses) != 1 {
