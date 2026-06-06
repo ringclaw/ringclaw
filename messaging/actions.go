@@ -561,7 +561,8 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				record("skipped", targetChat, crossChat, map[string]any{"reason": "empty_message"})
 				continue
 			}
-			if err := sendRoleAwareMessage(ctx, messageClient, targetChat, body, hasRolePeer, rolePeer, targetChatSource); err != nil {
+			deliveryDetails, err := sendRoleAwareMessage(ctx, messageClient, targetChat, body, hasRolePeer, rolePeer, targetChatSource)
+			if err != nil {
 				slog.Error("action: send message failed", "error", err, "chatID", targetChat)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to send message: %v", err))
@@ -581,6 +582,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				}
 				if rolePeer.DisplayName != "" {
 					details["target_display_name"] = rolePeer.DisplayName
+				}
+				for key, value := range deliveryDetails {
+					details[key] = value
 				}
 			}
 			record("completed", targetChat, crossChat, details)
@@ -1359,46 +1363,117 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Cli
 		return false, fmt.Errorf("message body is empty")
 	}
 	body = ensurePersonMentionPrefix(body, mentionID)
-	if err := sendRoleAwareMessage(ctx, replyClient, targetChat, body, true, peer, targetChatSource); err != nil {
+	deliveryDetails, err := sendRoleAwareMessage(ctx, replyClient, targetChat, body, true, peer, targetChatSource)
+	if err != nil {
 		return false, err
 	}
+	extra := map[string]any{
+		"role_peer":           true,
+		"task_id":             task.ID,
+		"to_role_id":          peer.RoleID,
+		"target_extension_id": peer.ExtensionID,
+		"target_person_id":    peer.PersonID,
+		"target_mention_id":   mentionID,
+		"mention_source":      mentionSource,
+		"target_chat_source":  targetChatSource,
+		"target_display_name": peer.DisplayName,
+	}
+	for key, value := range deliveryDetails {
+		extra[key] = value
+	}
 	recordAgentActionEvent(ctx, ActionEvent{
-		Type:   "MESSAGE",
-		Status: "completed",
-		Details: actionEventDetails(originChat, targetChat, targetChat != originChat, map[string]any{
-			"role_peer":           true,
-			"task_id":             task.ID,
-			"to_role_id":          peer.RoleID,
-			"target_extension_id": peer.ExtensionID,
-			"target_person_id":    peer.PersonID,
-			"target_mention_id":   mentionID,
-			"mention_source":      mentionSource,
-			"target_chat_source":  targetChatSource,
-			"target_display_name": peer.DisplayName,
-		}),
+		Type:    "MESSAGE",
+		Status:  "completed",
+		Details: actionEventDetails(originChat, targetChat, targetChat != originChat, extra),
 	})
 	return true, nil
 }
 
-func sendRoleAwareMessage(ctx context.Context, client *ringcentral.Client, chatID, body string, hasRolePeer bool, peer RolePeer, targetChatSource string) error {
+func sendRoleAwareMessage(ctx context.Context, client *ringcentral.Client, chatID, body string, hasRolePeer bool, peer RolePeer, targetChatSource string) (map[string]any, error) {
 	if hasRolePeer &&
 		targetChatSource == "shared_chat" &&
 		isNumericID(chatID) &&
 		isNumericID(peer.PersonID) {
-		body = stripPersonMentionPrefix(body, peer.PersonID)
-		_, err := client.SendGroupMentionPost(ctx, chatID, peer.PersonID, rolePeerDisplayLabel(peer), body)
+		groupBody := stripPersonMentionPrefix(body, peer.PersonID)
+		_, err := client.SendGroupMentionPost(ctx, chatID, peer.PersonID, rolePeerDisplayLabel(peer), groupBody)
 		if err != nil {
-			return fmt.Errorf("send group mention message: %w", err)
+			details, fallbackErr := sendRolePeerDirectFallback(ctx, client, groupBody, peer, err)
+			if fallbackErr == nil {
+				return details, nil
+			}
+			return nil, fallbackErr
 		}
 		slog.Info("sent role peer group mention",
 			"component", "sender",
 			"chatID", chatID,
 			"roleID", peer.RoleID,
 			"personID", peer.PersonID,
-			"text", util.Truncate(body, 50))
-		return nil
+			"text", util.Truncate(groupBody, 50))
+		return map[string]any{
+			"role_peer_delivery":        "group_mention",
+			"actual_target_chat":        chatID,
+			"actual_target_chat_source": "shared_chat",
+			"mention_transport":         "group_post",
+		}, nil
 	}
-	return SendTextReply(ctx, client, chatID, body)
+	if err := SendTextReply(ctx, client, chatID, body); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func sendRolePeerDirectFallback(ctx context.Context, client *ringcentral.Client, body string, peer RolePeer, groupErr error) (map[string]any, error) {
+	if client == nil {
+		return nil, fmt.Errorf("send group mention message: %w; fallback direct chat: reply client is not configured", groupErr)
+	}
+	var lastErr error
+	for _, memberID := range rolePeerDirectMemberCandidates(peer) {
+		chat, err := client.CreateConversation(ctx, []string{memberID})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		directChatID := strings.TrimSpace(chat.ID)
+		if directChatID == "" {
+			lastErr = fmt.Errorf("direct bot chat ID is empty")
+			continue
+		}
+		if err := SendTextReply(ctx, client, directChatID, body); err != nil {
+			lastErr = err
+			continue
+		}
+		slog.Warn("role peer group mention failed; sent direct fallback",
+			"component", "sender",
+			"roleID", peer.RoleID,
+			"memberID", memberID,
+			"directChatID", directChatID,
+			"groupError", groupErr)
+		return map[string]any{
+			"role_peer_delivery":        "direct_chat_fallback",
+			"actual_target_chat":        directChatID,
+			"actual_target_chat_source": "direct_chat_fallback",
+			"direct_member_id":          memberID,
+			"group_notify_error":        groupErr.Error(),
+		}, nil
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("send group mention message: %w; fallback direct chat: %w", groupErr, lastErr)
+	}
+	return nil, fmt.Errorf("send group mention message: %w; fallback direct chat: target bot member ID is empty", groupErr)
+}
+
+func rolePeerDirectMemberCandidates(peer RolePeer) []string {
+	seen := map[string]bool{}
+	var candidates []string
+	for _, value := range []string{peer.PersonID, peer.ExtensionID, peer.BotID} {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		candidates = append(candidates, value)
+	}
+	return candidates
 }
 
 func stripPersonMentionPrefix(body, personID string) string {

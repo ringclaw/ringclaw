@@ -3329,6 +3329,112 @@ func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithSharedChatMemberMention
 	}
 }
 
+func TestExecuteAgentActions_MeshTaskRolePeerGroupMentionFallsBackToDirectChat(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	var events []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		events = append(events, event)
+	})
+	defer restore()
+
+	var mu sync.Mutex
+	var groupAttempts int
+	var conversationMember string
+	var postPath string
+	var postedBody string
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/group/31462793222/post" && r.Method == http.MethodPost:
+			mu.Lock()
+			groupAttempts++
+			mu.Unlock()
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"group endpoint unavailable"}`))
+			return
+		case strings.Contains(r.URL.Path, "/team-messaging/v1/conversations") && r.Method == http.MethodPost:
+			var body ringcentral.CreateChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			if len(body.Members) > 0 {
+				conversationMember = body.Members[0].ID
+			}
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(ringcentral.Chat{ID: "nursecoord-direct-chat", Type: "Direct"})
+			return
+		case strings.Contains(r.URL.Path, "/team-messaging/v1/chats/nursecoord-direct-chat/posts") && r.Method == http.MethodPost:
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody, _ = body["text"].(string)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+			return
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer replySrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis 今日缺勤，需要 nursecoord-bot 接手续剂队列。",
+		},
+		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		MeshTaskCreator: creator,
+		RolePeers: map[string]RolePeer{
+			"role-nursecoord-bot": {
+				RoleID:        "role-nursecoord-bot",
+				DisplayName:   "Nursecoord Department",
+				ExtensionID:   "20762295004",
+				PersonID:      "87368646659",
+				SharedChatIDs: []string{"31462793222"},
+			},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no user-visible internal mesh task result, got %v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if groupAttempts != 1 {
+		t.Fatalf("group mention attempts = %d", groupAttempts)
+	}
+	if conversationMember != "87368646659" {
+		t.Fatalf("conversation member = %q", conversationMember)
+	}
+	if !strings.Contains(postPath, "/chats/nursecoord-direct-chat/") {
+		t.Fatalf("expected direct chat fallback notification, got path %q", postPath)
+	}
+	if !strings.Contains(postedBody, "续剂队列") {
+		t.Fatalf("expected handoff details in fallback notification, got %q", postedBody)
+	}
+	var sawFallbackEvent bool
+	for _, event := range events {
+		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["role_peer_delivery"] == "direct_chat_fallback" {
+			sawFallbackEvent = true
+			break
+		}
+	}
+	if !sawFallbackEvent {
+		t.Fatalf("expected completed fallback audit event, got %#v", events)
+	}
+}
+
 func TestExecuteAgentActions_MeshTaskNotifiesRolePeerByDirectChatWhenNoSharedChat(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	var mu sync.Mutex
