@@ -11,7 +11,8 @@ import (
 //
 // Precedence:
 // 1. RINGCLAW_HOME
-// 2. $HOME/.ringclaw
+// 2. $HOME when it already points at a .ringclaw state root
+// 3. $HOME/.ringclaw
 func AppHome() (string, error) {
 	if dir := strings.TrimSpace(os.Getenv("RINGCLAW_HOME")); dir != "" {
 		return dir, nil
@@ -19,6 +20,9 @@ func AppHome() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
+	}
+	if filepath.Base(filepath.Clean(home)) == ".ringclaw" {
+		return home, nil
 	}
 	return filepath.Join(home, ".ringclaw"), nil
 }

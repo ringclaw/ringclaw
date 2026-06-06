@@ -14,6 +14,7 @@ import (
 
 	"github.com/ringclaw/ringclaw/internal/util"
 	"github.com/ringclaw/ringclaw/messaging/oob"
+	"github.com/ringclaw/ringclaw/paths"
 	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
@@ -815,14 +816,11 @@ func loadClinicalPatientEntityMemory(patientID string) (clinicalPatientEntityMem
 }
 
 func clinicalRefillMemoryDir() string {
-	if value := strings.TrimSpace(os.Getenv("RINGCLAW_MEMORY_DIR")); value != "" {
-		return value
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
+	dir, err := paths.ResolveEnvOrDefault("RINGCLAW_MEMORY_DIR", "workspace", "memory")
+	if err != nil || strings.TrimSpace(dir) == "" {
 		return ""
 	}
-	return filepath.Join(home, ".ringclaw", "workspace", "memory")
+	return dir
 }
 
 func splitMemoryField(line string) (string, string, bool) {
