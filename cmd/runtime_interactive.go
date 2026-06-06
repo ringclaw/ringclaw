@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -33,6 +34,8 @@ type runtimeInteractiveEventAckRequest struct {
 type runtimeInteractiveEvent struct {
 	ID             string         `json:"id"`
 	UserID         string         `json:"user_id"`
+	UserFirstName  string         `json:"user_first_name,omitempty"`
+	UserLastName   string         `json:"user_last_name,omitempty"`
 	ConversationID string         `json:"conversation_id"`
 	PostID         string         `json:"post_id,omitempty"`
 	CardID         string         `json:"card_id,omitempty"`
@@ -97,9 +100,25 @@ func processRuntimeInteractiveEvent(ctx context.Context, controlPlaneURL, botID,
 		CreationTime: firstNonEmptyString(event.EventTimestamp, time.Now().UTC().Format(time.RFC3339Nano)),
 		EventType:    "PostAdded",
 	}
+	updateRuntimeInteractiveDecisionCard(ctx, c.bot, event)
 	slog.Info("dispatching runtime interactive event", "component", "runtime_interactive", "eventID", event.ID, "creatorID", event.UserID, "chatID", event.ConversationID, "text", text)
 	handler.HandleMessage(ctx, c.bot, c.lookupClient(), post)
 	ackRuntimeInteractiveEvent(ctx, controlPlaneURL, botID, bootstrapToken, event.ID, "acknowledged", "")
+}
+
+func updateRuntimeInteractiveDecisionCard(ctx context.Context, client *ringcentral.Client, event runtimeInteractiveEvent) {
+	if client == nil || strings.TrimSpace(event.CardID) == "" {
+		return
+	}
+	card := runtimeInteractiveDecisionCard(event)
+	if len(card) == 0 {
+		return
+	}
+	if _, err := client.UpdateAdaptiveCard(ctx, event.CardID, card); err != nil {
+		slog.Warn("runtime interactive card update failed", "component", "runtime_interactive", "eventID", event.ID, "cardID", event.CardID, "error", err)
+		return
+	}
+	slog.Info("runtime interactive card updated", "component", "runtime_interactive", "eventID", event.ID, "cardID", event.CardID, "action", runtimeInteractiveAction(event))
 }
 
 func ackRuntimeInteractiveEvent(ctx context.Context, controlPlaneURL, botID, bootstrapToken, eventID, status, reason string) {
@@ -144,6 +163,103 @@ func runtimeInteractiveEventText(event runtimeInteractiveEvent) string {
 		}
 		return action
 	}
+}
+
+func runtimeInteractiveDecisionCard(event runtimeInteractiveEvent) json.RawMessage {
+	action := runtimeInteractiveAction(event)
+	if action == "" {
+		return nil
+	}
+	rxID := firstNonEmptyString(interactiveString(event.Data, "rx_id"), interactiveString(event.Data, "rxId"), "Refill request")
+	patientID := firstNonEmptyString(interactiveString(event.Data, "patient_id"), interactiveString(event.Data, "patientId"), "Unknown")
+	medication := firstNonEmptyString(interactiveString(event.Data, "medication"), "See request")
+	provider := firstNonEmptyString(interactiveString(event.Data, "provider_name"), interactiveString(event.Data, "providerName"), "provider")
+	submitter := runtimeInteractiveSubmitter(event)
+
+	header := "Refill decision recorded"
+	status := "Submitted by " + submitter
+	color := "Accent"
+	message := "Decision recorded. Runtime will continue the refill workflow."
+	switch action {
+	case "approve", "approved":
+		header = "Refill approved"
+		status = "Approved by " + submitter
+		color = "Good"
+		message = "Provider approval has been recorded. Runtime will continue the refill workflow."
+	case "followup", "follow-up", "follow_up":
+		header = "Follow-up requested"
+		status = "Follow-up requested by " + submitter
+		color = "Warning"
+		message = "Follow-up is required before this refill can continue."
+	case "deny", "denied", "reject", "rejected":
+		header = "Refill denied"
+		status = "Denied by " + submitter
+		color = "Attention"
+		message = "Provider denial has been recorded. Runtime will stop the refill workflow."
+	}
+
+	facts := []map[string]string{
+		{"title": "Provider", "value": provider},
+		{"title": "Patient", "value": patientID},
+		{"title": "Medication", "value": medication},
+		{"title": "Status", "value": status},
+	}
+	if event.EventTimestamp != "" {
+		facts = append(facts, map[string]string{"title": "Submitted", "value": event.EventTimestamp})
+	}
+	card := map[string]any{
+		"$schema":      "http://adaptivecards.io/schemas/adaptive-card.json",
+		"type":         "AdaptiveCard",
+		"version":      "1.3",
+		"fallbackText": fmt.Sprintf("%s: %s", header, rxID),
+		"body": []map[string]any{
+			{
+				"type":   "TextBlock",
+				"text":   header,
+				"size":   "Small",
+				"color":  color,
+				"weight": "Bolder",
+			},
+			{
+				"type":   "TextBlock",
+				"text":   strings.TrimSpace(fmt.Sprintf("%s - %s %s", rxID, patientID, medication)),
+				"size":   "Large",
+				"color":  "Accent",
+				"weight": "Bolder",
+				"wrap":   true,
+			},
+			{
+				"type":  "FactSet",
+				"facts": facts,
+			},
+			{
+				"type":      "TextBlock",
+				"text":      message,
+				"wrap":      true,
+				"separator": true,
+			},
+		},
+	}
+	body, err := json.Marshal(card)
+	if err != nil {
+		return nil
+	}
+	return body
+}
+
+func runtimeInteractiveAction(event runtimeInteractiveEvent) string {
+	return strings.ToLower(strings.TrimSpace(interactiveString(event.Data, "action")))
+}
+
+func runtimeInteractiveSubmitter(event runtimeInteractiveEvent) string {
+	name := strings.TrimSpace(strings.Join([]string{event.UserFirstName, event.UserLastName}, " "))
+	if name != "" {
+		return name
+	}
+	if event.UserID != "" {
+		return event.UserID
+	}
+	return "submitter"
 }
 
 func interactiveString(data map[string]any, key string) string {

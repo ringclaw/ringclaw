@@ -780,6 +780,9 @@ func refillSubmitAction(title, action, rxID string, req clinicalRefillRequest, o
 		"patient_id": req.PatientID,
 		"medication": req.Medication,
 	}
+	if req.ProviderName != "" {
+		data["provider_name"] = req.ProviderName
+	}
 	if botID := refillApprovalBotID(); botID != "" {
 		data["bot_id"] = botID
 	}
