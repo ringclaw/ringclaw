@@ -87,7 +87,7 @@ func resolveNameToPhoneNumber(ctx context.Context, client *ringcentral.Client, n
 		return "", "", fmt.Errorf("directory search: %w", err)
 	}
 	if best := bestDirectoryMatch(result.Records, name); best != nil {
-		if number := bestContactPhoneNumber(best.PhoneNumbers, best.ExtensionNumber); number != "" {
+		if number := bestContactPhoneNumber(best.PhoneNumbers); number != "" {
 			fullName := strings.TrimSpace(best.FirstName + " " + best.LastName)
 			slog.Info("action: resolved phone contact from directory", "name", name, "match", fullName, "id", best.ID)
 			return number, fullName, nil
@@ -159,26 +159,45 @@ func bestContactPhoneNumber(phoneNumbers []ringcentral.ContactPhoneNumber, fallb
 	preferred := []string{"direct", "mobile", "business", "work", "company", "phone"}
 	for _, want := range preferred {
 		for _, phone := range phoneNumbers {
-			if phone.PhoneNumber == "" {
+			number := strings.TrimSpace(phone.PhoneNumber)
+			if number == "" || !looksLikeReachablePhoneNumber(number) {
 				continue
 			}
 			label := strings.ToLower(phone.Type + " " + phone.UsageType)
 			if strings.Contains(label, want) {
-				return strings.TrimSpace(phone.PhoneNumber)
+				return number
 			}
 		}
 	}
 	for _, phone := range phoneNumbers {
-		if strings.TrimSpace(phone.PhoneNumber) != "" {
-			return strings.TrimSpace(phone.PhoneNumber)
+		number := strings.TrimSpace(phone.PhoneNumber)
+		if number != "" && looksLikeReachablePhoneNumber(number) {
+			return number
 		}
 	}
 	for _, fallback := range fallbacks {
-		if strings.TrimSpace(fallback) != "" {
-			return strings.TrimSpace(fallback)
+		number := strings.TrimSpace(fallback)
+		if number != "" && looksLikeReachablePhoneNumber(number) {
+			return number
 		}
 	}
 	return ""
+}
+
+func looksLikeReachablePhoneNumber(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || !looksLikePhoneNumber(value) {
+		return false
+	}
+	digits := 0
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			digits++
+		}
+	}
+	// Directory extension numbers such as "704" are not valid SMS/call
+	// destinations. Keep local-length and E.164-style numbers.
+	return digits >= 7
 }
 
 func isNumericID(s string) bool {

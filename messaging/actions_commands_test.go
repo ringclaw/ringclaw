@@ -542,7 +542,12 @@ func TestHandleActionCommand_SMSSendResolvesContactName(t *testing.T) {
 				t.Fatalf("unexpected directory search body: %+v", body)
 			}
 			json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{
-				Records: []ringcentral.DirectoryEntry{{ID: "person-grace", FirstName: "Grace", LastName: "He"}},
+				Records: []ringcentral.DirectoryEntry{{
+					ID:              "person-grace",
+					FirstName:       "Grace",
+					LastName:        "He",
+					ExtensionNumber: "704",
+				}},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/address-book/contact":
 			if r.URL.Query().Get("searchString") != "Grace He" {

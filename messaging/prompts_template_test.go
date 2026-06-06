@@ -56,7 +56,7 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 	if !strings.Contains(got, "ACTION:VIDEO_LIST [scope=today|upcoming|recent]") {
 		t.Error("ActionPromptTemplate should advertise VIDEO_LIST upcoming scope")
 	}
-	if !strings.Contains(got, "ACTION:SMS to=<target phone> [from=<owned phone>]") {
+	if !strings.Contains(got, "ACTION:SMS to=<target phone or person/contact name> [from=<owned phone>]") {
 		t.Error("ActionPromptTemplate should advertise ACTION:SMS")
 	}
 	if !strings.Contains(got, "ACTION:VIDEO title=<meeting title> [type=Instant|Scheduled|PMI] [start=<ISO8601> end=<ISO8601>]") {
@@ -70,6 +70,12 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 	}
 	if !strings.Contains(got, "SMS/text-message requests") {
 		t.Error("ActionPromptTemplate should direct explicit SMS requests to ACTION:SMS")
+	}
+	if !strings.Contains(got, "there is no separate CONTACT action") {
+		t.Error("ActionPromptTemplate should explain contact lookup through SMS/phone actions")
+	}
+	if !strings.Contains(got, "card-like notifications") || !strings.Contains(got, "not ACTION:TASK") {
+		t.Error("ActionPromptTemplate should prevent card-like notifications from becoming tasks")
 	}
 }
 
