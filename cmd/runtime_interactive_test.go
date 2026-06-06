@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/ringclaw/ringclaw/ringcentral"
 )
 
 func TestRuntimeInteractiveDecisionCard_ApproveRemovesActions(t *testing.T) {
@@ -46,5 +48,34 @@ func TestRuntimeInteractiveDecisionCard_UnknownActionSkipped(t *testing.T) {
 	})
 	if len(card) != 0 {
 		t.Fatalf("expected no card for empty action, got %s", string(card))
+	}
+}
+
+func TestRuntimeInteractiveExecutorID_PrefersPrivateOwner(t *testing.T) {
+	bot := ringcentral.NewBotClient("", "bot-token")
+	bot.SetOwnerID("bot-owner")
+	private := ringcentral.NewClient(&ringcentral.Credentials{})
+	private.SetOwnerID("private-owner")
+
+	got := runtimeInteractiveExecutorID(&clients{bot: bot, private: private}, runtimeInteractiveEvent{UserID: "submitter"})
+	if got != "private-owner" {
+		t.Fatalf("executor ID = %q, want private owner", got)
+	}
+}
+
+func TestRuntimeInteractiveExecutorID_FallsBackToBotOwner(t *testing.T) {
+	bot := ringcentral.NewBotClient("", "bot-token")
+	bot.SetOwnerID("bot-owner")
+
+	got := runtimeInteractiveExecutorID(&clients{bot: bot}, runtimeInteractiveEvent{UserID: "submitter"})
+	if got != "bot-owner" {
+		t.Fatalf("executor ID = %q, want bot owner", got)
+	}
+}
+
+func TestRuntimeInteractiveExecutorID_FallsBackToSubmitter(t *testing.T) {
+	got := runtimeInteractiveExecutorID(nil, runtimeInteractiveEvent{UserID: "submitter"})
+	if got != "submitter" {
+		t.Fatalf("executor ID = %q, want submitter", got)
 	}
 }

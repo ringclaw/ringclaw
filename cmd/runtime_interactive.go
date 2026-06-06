@@ -91,19 +91,36 @@ func processRuntimeInteractiveEvent(ctx context.Context, controlPlaneURL, botID,
 		ackRuntimeInteractiveEvent(ctx, controlPlaneURL, botID, bootstrapToken, event.ID, "failed", "interactive event did not contain an action or command")
 		return
 	}
+	executorID := runtimeInteractiveExecutorID(c, event)
 	post := ringcentral.Post{
 		ID:           "interactive-" + event.ID,
 		GroupID:      event.ConversationID,
 		Type:         "TextMessage",
 		Text:         text,
-		CreatorID:    event.UserID,
+		CreatorID:    executorID,
 		CreationTime: firstNonEmptyString(event.EventTimestamp, time.Now().UTC().Format(time.RFC3339Nano)),
 		EventType:    "PostAdded",
 	}
 	updateRuntimeInteractiveDecisionCard(ctx, c.bot, event)
-	slog.Info("dispatching runtime interactive event", "component", "runtime_interactive", "eventID", event.ID, "creatorID", event.UserID, "chatID", event.ConversationID, "text", text)
+	slog.Info("dispatching runtime interactive event", "component", "runtime_interactive", "eventID", event.ID, "creatorID", executorID, "submitterID", event.UserID, "submitter", runtimeInteractiveSubmitter(event), "chatID", event.ConversationID, "text", text)
 	handler.HandleMessage(ctx, c.bot, c.lookupClient(), post)
 	ackRuntimeInteractiveEvent(ctx, controlPlaneURL, botID, bootstrapToken, event.ID, "acknowledged", "")
+}
+
+func runtimeInteractiveExecutorID(c *clients, event runtimeInteractiveEvent) string {
+	if c != nil {
+		if lookup := c.lookupClient(); lookup != nil {
+			if ownerID := strings.TrimSpace(lookup.OwnerID()); ownerID != "" {
+				return ownerID
+			}
+		}
+		if c.bot != nil {
+			if ownerID := strings.TrimSpace(c.bot.OwnerID()); ownerID != "" {
+				return ownerID
+			}
+		}
+	}
+	return strings.TrimSpace(event.UserID)
 }
 
 func updateRuntimeInteractiveDecisionCard(ctx context.Context, client *ringcentral.Client, event runtimeInteractiveEvent) {
