@@ -109,6 +109,17 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{
+			"trace_id": "trace-post-123",
+			"route_plan": map[string]any{
+				"trace_id":   "trace-post-123",
+				"to_role_id": req.ToRoleID,
+				"visible_delivery": map[string]any{
+					"enabled":           true,
+					"transport":         "shared_chat",
+					"chat_id":           "chat-admin",
+					"mention_person_id": "person-nursecoord",
+				},
+			},
 			"task": map[string]any{
 				"id":         "task-1",
 				"intent":     req.Intent,
@@ -138,6 +149,9 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 	}
 	if task.ID != "task-1" || task.Intent != "coverage.transfer" {
 		t.Fatalf("created task = %#v", task)
+	}
+	if task.TraceID != "trace-post-123" || task.RoutePlan.VisibleDelivery.ChatID != "chat-admin" {
+		t.Fatalf("created task route plan = %#v", task)
 	}
 	if !sawCreate {
 		t.Fatal("create endpoint was not called")

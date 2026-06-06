@@ -68,7 +68,7 @@ END_ACTION
 - assignee: person name or ![:Person](ID).
 - The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
 - When the work should be handled by another Personal AVA / AgentsMesh role, use ACTION:MESH_TASK. Do not send an ACTION:MESSAGE to #admin, admin, or a channel as a substitute for agent-to-agent delegation.
-- For absence coverage, handoff, or task-transfer collaboration with nursecoord-bot, use ACTION:MESH_TASK to_role_id=role-nursecoord-bot intent=coverage.transfer title="Coverage handoff". Put the handoff details in the action body and a one-line context_summary.
+- Use the role id provided by the user's role policy, SOUL, skill, or runtime context when generating ACTION:MESH_TASK. Put the handoff details in the action body and a one-line context_summary. Do not invent a fixed target role.
 - When you need a visible RingCentral bot-to-bot message instead of a Mesh task, use ACTION:MESSAGE to_role_id=<role id>. RingClaw will choose the configured shared chat and prepend the target bot mention.
 - For SMS and phone calls, there is no separate CONTACT action. Put the person's name in to=; RingClaw resolves it through directory/address-book contacts and uses a reachable phone number.
 - To ask another bot/agent in the current group chat, omit chatid and start the ACTION:MESSAGE body with that bot's existing mention, e.g. ![:Person](20894271004) question. Do not use the mentioned bot/person ID as chatid.

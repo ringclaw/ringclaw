@@ -38,9 +38,12 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 		t.Error("ActionPromptTemplate should describe visible role-targeted bot-to-bot messages")
 	}
 	if !strings.Contains(got, "ACTION:MESH_TASK") ||
-		!strings.Contains(got, "role-nursecoord-bot") ||
+		!strings.Contains(got, "Use the role id provided by the user's role policy, SOUL, skill, or runtime context") ||
 		!strings.Contains(got, "Do not send an ACTION:MESSAGE to #admin") {
 		t.Error("ActionPromptTemplate should describe Agent Mesh delegation")
+	}
+	if strings.Contains(got, "role-nursecoord-bot") {
+		t.Error("ActionPromptTemplate should not hardcode a specific AgentsMesh role")
 	}
 	if !strings.Contains(got, "To ask another bot/agent in the current group chat") {
 		t.Error("ActionPromptTemplate should describe current-chat agent-to-agent mention messaging")

@@ -39,7 +39,9 @@ type runtimeMeshTaskCreateRequest struct {
 }
 
 type runtimeMeshTaskCreateResult struct {
-	Task messaging.MeshRuntimeTask `json:"task"`
+	Task      messaging.MeshRuntimeTask      `json:"task"`
+	TraceID   string                         `json:"trace_id,omitempty"`
+	RoutePlan messaging.MeshRuntimeRoutePlan `json:"route_plan,omitempty"`
 }
 
 type runtimeMeshTaskRespondRequest struct {
@@ -72,6 +74,12 @@ func (c runtimeMeshTaskClient) CreateMeshTask(ctx context.Context, req messaging
 		Instructions:   req.Instructions,
 		Context:        req.Context,
 	}, http.StatusCreated, &result)
+	if result.Task.TraceID == "" {
+		result.Task.TraceID = result.TraceID
+	}
+	if result.Task.RoutePlan.TraceID == "" {
+		result.Task.RoutePlan = result.RoutePlan
+	}
 	return result.Task, err
 }
 

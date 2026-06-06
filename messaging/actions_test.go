@@ -3088,16 +3088,20 @@ func TestShouldForceClinicalRefillApproval_ReplacesCardWithoutSubmitActions(t *t
 }
 
 type meshTaskCreatorActionStub struct {
-	requests []MeshRuntimeTaskCreateRequest
+	requests  []MeshRuntimeTaskCreateRequest
+	traceID   string
+	routePlan MeshRuntimeRoutePlan
 }
 
 func (s *meshTaskCreatorActionStub) CreateMeshTask(_ context.Context, req MeshRuntimeTaskCreateRequest) (MeshRuntimeTask, error) {
 	s.requests = append(s.requests, req)
 	return MeshRuntimeTask{
-		ID:       "mesh-task-1",
-		Intent:   req.Intent,
-		ToRoleID: req.ToRoleID,
-		Title:    req.Title,
+		ID:        "mesh-task-1",
+		TraceID:   s.traceID,
+		Intent:    req.Intent,
+		ToRoleID:  req.ToRoleID,
+		Title:     req.Title,
+		RoutePlan: s.routePlan,
 	}, nil
 }
 
@@ -3459,6 +3463,92 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesReplyClient(t *testing.T) 
 	}
 }
 
+func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesControlPlaneRoutePlan(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{
+		traceID: "trace-post-106362159108",
+		routePlan: MeshRuntimeRoutePlan{
+			TraceID:     "trace-post-106362159108",
+			ToRoleID:    "role-nursecoord-bot",
+			ToAgentID:   "mesh-agent-nursecoord",
+			TargetBotID: "personal-ava-nursecoord",
+			Intent:      "coverage.transfer",
+			VisibleDelivery: MeshRuntimeVisibleDeliveryPlan{
+				Enabled:         true,
+				Transport:       "shared_chat",
+				ChatID:          "31462793222",
+				MentionPersonID: "87368646659",
+				MentionLabel:    "Nursecoord Department",
+				TargetRoleID:    "role-nursecoord-bot",
+				TargetAgentID:   "mesh-agent-nursecoord",
+				TargetBotID:     "personal-ava-nursecoord",
+			},
+		},
+	}
+	var events []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		events = append(events, event)
+	})
+	defer restore()
+
+	var postedBody string
+	var mentionIDs []int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/api/group/31462793222/post" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			Text           string  `json:"text"`
+			MentionItemIDs []int64 `json:"mention_item_ids"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		postedBody = body.Text
+		mentionIDs = append(mentionIDs, body.MentionItemIDs...)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "p-route"})
+	}))
+	defer srv.Close()
+
+	replyClient := ringcentral.NewBotClient(srv.URL, "bot-token")
+	results := ExecuteAgentActions(context.Background(), replyClient, nil, "origin-chat", []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis 今日缺勤，需要 nursecoord-bot 接手续剂队列。",
+		},
+		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+	}}, ActionContext{
+		OriginIsOwner:   true,
+		MeshTaskCreator: creator,
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no user-visible internal mesh task result, got %v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	if len(mentionIDs) != 1 || mentionIDs[0] != 87368646659 {
+		t.Fatalf("mention_item_ids = %#v, want [87368646659]", mentionIDs)
+	}
+	if !strings.Contains(postedBody, `rel='{"id":87368646659}'`) || !strings.Contains(postedBody, "Coverage handoff") {
+		t.Fatalf("expected route-plan person mention notification, got %q", postedBody)
+	}
+	var sawRouteEvent bool
+	for _, event := range events {
+		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["trace_id"] == "trace-post-106362159108" {
+			if event.Details["target_chat_source"] != "shared_chat" || event.Details["target_mention_id"] != "87368646659" {
+				t.Fatalf("unexpected route-plan event details: %#v", event.Details)
+			}
+			sawRouteEvent = true
+			break
+		}
+	}
+	if !sawRouteEvent {
+		t.Fatalf("expected completed route-plan audit event, got %#v", events)
+	}
+}
+
 func TestExecuteAgentActions_MeshTaskRolePeerGroupMentionFallsBackToDirectChat(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	var events []ActionEvent
@@ -3700,13 +3790,21 @@ func TestExecuteAgentActions_LegacyAdminHandoffMessageCreatesMeshTask(t *testing
 		Params: map[string]string{
 			"chatid": "#admin",
 		},
-		Body: "TASK_HANDOFF_REQUEST\n来源：alexis-bot\n任务摘要：Alexis 今日缺勤，需要 nursecoord-bot 协调覆盖。",
+		Body: "TASK_HANDOFF_REQUEST\n来源：alexis-bot\n任务摘要：Alexis 今日缺勤，需要 care-ops-bot 协调覆盖。",
 	}}
 
 	results := ExecuteAgentActions(context.Background(), nil, nil, "origin-chat", actions, ActionContext{
 		OriginIsOwner:   true,
 		OriginalText:    "今天身体不舒服，缺勤，帮我处理交接",
 		MeshTaskCreator: creator,
+		RolePeers: map[string]RolePeer{
+			"role-care-ops-bot": {
+				RoleID:      "role-care-ops-bot",
+				RoleName:    "Care Operations",
+				DisplayName: "care-ops-bot",
+				BotID:       "care-ops-bot",
+			},
+		},
 	})
 
 	if len(results) != 0 {
@@ -3716,7 +3814,7 @@ func TestExecuteAgentActions_LegacyAdminHandoffMessageCreatesMeshTask(t *testing
 		t.Fatalf("mesh task requests = %#v", creator.requests)
 	}
 	req := creator.requests[0]
-	if req.ToRoleID != "role-nursecoord-bot" || req.Intent != "coverage.transfer" {
+	if req.ToRoleID != "role-care-ops-bot" || req.Intent != "coverage.transfer" {
 		t.Fatalf("mesh task request = %#v", req)
 	}
 	if !strings.Contains(req.Instructions, "TASK_HANDOFF_REQUEST") || req.Context.Summary != "TASK_HANDOFF_REQUEST" {
@@ -3726,6 +3824,9 @@ func TestExecuteAgentActions_LegacyAdminHandoffMessageCreatesMeshTask(t *testing
 
 func TestExecuteAgentActions_LegacyAdminHandoffNoteCreatesMeshTask(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
+	var mu sync.Mutex
+	var groupMentionBody string
+	var groupMentionIDs []any
 	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/notes") && r.Method == http.MethodPost {
@@ -3734,6 +3835,18 @@ func TestExecuteAgentActions_LegacyAdminHandoffNoteCreatesMeshTask(t *testing.T)
 		}
 		if strings.Contains(r.URL.Path, "/notes/handoff-note/publish") && r.Method == http.MethodPost {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/group/31462793222/post" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			groupMentionBody, _ = body["text"].(string)
+			if ids, ok := body["mention_item_ids"].([]any); ok {
+				groupMentionIDs = ids
+			}
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "visible-post-1"})
 			return
 		}
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -3746,13 +3859,23 @@ func TestExecuteAgentActions_LegacyAdminHandoffNoteCreatesMeshTask(t *testing.T)
 			"chatid": "admin",
 			"title":  "Alexis absence handoff",
 		},
-		Body: "今日缺勤交接文档：续剂队列和跟进项需要 nursecoord-bot 协调覆盖。",
+		Body: "今日缺勤交接文档：续剂队列和跟进项需要 care-ops-bot 协调覆盖。",
 	}}
 
 	results := ExecuteAgentActions(context.Background(), actionClient, actionClient, "origin-chat", actions, ActionContext{
 		OriginIsOwner:   true,
 		OriginalText:    "今天身体不舒服，缺勤，帮我处理交接",
 		MeshTaskCreator: creator,
+		RolePeers: map[string]RolePeer{
+			"role-care-ops-bot": {
+				RoleID:        "role-care-ops-bot",
+				RoleName:      "Care Operations",
+				DisplayName:   "care-ops-bot",
+				BotID:         "care-ops-bot",
+				PersonID:      "87368646659",
+				SharedChatIDs: []string{"31462793222"},
+			},
+		},
 	})
 
 	if len(results) != 0 {
@@ -3762,11 +3885,22 @@ func TestExecuteAgentActions_LegacyAdminHandoffNoteCreatesMeshTask(t *testing.T)
 		t.Fatalf("mesh task requests = %#v", creator.requests)
 	}
 	req := creator.requests[0]
-	if req.ToRoleID != "role-nursecoord-bot" || req.Intent != "coverage.transfer" {
+	if req.ToRoleID != "role-care-ops-bot" || req.Intent != "coverage.transfer" {
 		t.Fatalf("mesh task request = %#v", req)
 	}
 	if !strings.Contains(req.Instructions, "缺勤交接文档") {
 		t.Fatalf("mesh task instructions = %q", req.Instructions)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if groupMentionBody == "" || !strings.Contains(groupMentionBody, "87368646659") || !strings.Contains(groupMentionBody, "New mesh task") {
+		t.Fatalf("group mention body = %q", groupMentionBody)
+	}
+	if len(groupMentionIDs) != 1 {
+		t.Fatalf("mention_item_ids = %#v", groupMentionIDs)
+	}
+	if id, ok := groupMentionIDs[0].(float64); !ok || int64(id) != 87368646659 {
+		t.Fatalf("mention_item_ids = %#v", groupMentionIDs)
 	}
 }
 
@@ -3775,6 +3909,7 @@ func TestExecuteAgentActions_LegacyAdminHandoffNotePreservesCurrentChatDocument(
 	var mu sync.Mutex
 	var notePath string
 	var noteBody ringcentral.CreateNoteRequest
+	var groupMentionBody string
 	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/notes") && !strings.Contains(r.URL.Path, "/publish") && r.Method == http.MethodPost {
@@ -3787,6 +3922,15 @@ func TestExecuteAgentActions_LegacyAdminHandoffNotePreservesCurrentChatDocument(
 		}
 		if strings.Contains(r.URL.Path, "/notes/handoff-note/publish") && r.Method == http.MethodPost {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/group/31462793222/post" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			groupMentionBody, _ = body["text"].(string)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "visible-post-1"})
 			return
 		}
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -3807,6 +3951,15 @@ func TestExecuteAgentActions_LegacyAdminHandoffNotePreservesCurrentChatDocument(
 		OriginIsOwner:   true,
 		OriginalText:    "今天身体不舒服，缺勤，帮我处理交接",
 		MeshTaskCreator: creator,
+		RolePeers: map[string]RolePeer{
+			"role-nursecoord-bot": {
+				RoleID:        "role-nursecoord-bot",
+				DisplayName:   "nursecoord-bot",
+				BotID:         "nursecoord-bot",
+				PersonID:      "87368646659",
+				SharedChatIDs: []string{"31462793222"},
+			},
+		},
 	})
 
 	if len(results) != 0 {
@@ -3822,6 +3975,9 @@ func TestExecuteAgentActions_LegacyAdminHandoffNotePreservesCurrentChatDocument(
 	}
 	if noteBody.Title != "Alexis 缺勤交接文档 - 2026-06-06" || !strings.Contains(noteBody.Body, "续剂队列") {
 		t.Fatalf("note body = %#v", noteBody)
+	}
+	if groupMentionBody == "" || !strings.Contains(groupMentionBody, "87368646659") {
+		t.Fatalf("group mention body = %q", groupMentionBody)
 	}
 }
 

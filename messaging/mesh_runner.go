@@ -34,11 +34,40 @@ type MeshRuntimeTask struct {
 	FromAgentID  string                    `json:"from_agent_id,omitempty"`
 	ToAgentID    string                    `json:"to_agent_id,omitempty"`
 	ToRoleID     string                    `json:"to_role_id,omitempty"`
+	TraceID      string                    `json:"trace_id,omitempty"`
 	Intent       string                    `json:"intent"`
 	Title        string                    `json:"title,omitempty"`
 	Instructions string                    `json:"instructions,omitempty"`
 	Status       string                    `json:"status,omitempty"`
 	Context      MeshRuntimeContextPackage `json:"context,omitempty"`
+	RoutePlan    MeshRuntimeRoutePlan      `json:"route_plan,omitempty"`
+}
+
+type MeshRuntimeRoutePlan struct {
+	TraceID         string                         `json:"trace_id,omitempty"`
+	FromAgentID     string                         `json:"from_agent_id,omitempty"`
+	ToAgentID       string                         `json:"to_agent_id,omitempty"`
+	ToRoleID        string                         `json:"to_role_id,omitempty"`
+	TargetBotID     string                         `json:"target_bot_id,omitempty"`
+	Intent          string                         `json:"intent,omitempty"`
+	VisibleDelivery MeshRuntimeVisibleDeliveryPlan `json:"visible_delivery,omitempty"`
+	CallbackPolicy  MeshRuntimeCallbackPolicy      `json:"callback_policy,omitempty"`
+}
+
+type MeshRuntimeVisibleDeliveryPlan struct {
+	Enabled         bool   `json:"enabled,omitempty"`
+	Transport       string `json:"transport,omitempty"`
+	ChatID          string `json:"chat_id,omitempty"`
+	MentionPersonID string `json:"mention_person_id,omitempty"`
+	MentionLabel    string `json:"mention_label,omitempty"`
+	TargetRoleID    string `json:"target_role_id,omitempty"`
+	TargetAgentID   string `json:"target_agent_id,omitempty"`
+	TargetBotID     string `json:"target_bot_id,omitempty"`
+}
+
+type MeshRuntimeCallbackPolicy struct {
+	NotifyOwnerDM    bool `json:"notify_owner_dm,omitempty"`
+	NotifyOriginChat bool `json:"notify_origin_chat,omitempty"`
 }
 
 type MeshRuntimeTaskPollRequest struct {

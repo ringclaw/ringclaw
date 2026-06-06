@@ -1127,7 +1127,7 @@ func normalizeLegacyMeshDelegationActions(actions []AgentAction, opts ActionCont
 	}
 	out := make([]AgentAction, 0, len(actions))
 	for _, action := range actions {
-		if converted, ok := legacyDelegationActionToMeshTask(action, opts.OriginalText); ok {
+		if converted, ok := legacyDelegationActionToMeshTask(action, opts); ok {
 			if strings.EqualFold(strings.TrimSpace(action.Type), "NOTE") {
 				out = append(out, legacyDelegationNoteForOriginChat(action))
 			}
@@ -1245,12 +1245,13 @@ func legacyDelegationNoteForOriginChat(action AgentAction) AgentAction {
 	return note
 }
 
-func legacyDelegationActionToMeshTask(action AgentAction, originalText string) (AgentAction, bool) {
+func legacyDelegationActionToMeshTask(action AgentAction, opts ActionContext) (AgentAction, bool) {
 	switch strings.ToUpper(strings.TrimSpace(action.Type)) {
 	case "MESSAGE", "NOTE", "TASK", "CARD":
 	default:
 		return AgentAction{}, false
 	}
+	originalText := opts.OriginalText
 	chatID := strings.ToLower(strings.TrimSpace(action.Params["chatid"]))
 	body := fallbackString(strings.TrimSpace(action.Body), firstActionParam(action.Params, "title", "subject"))
 	actionText := strings.TrimSpace(strings.Join([]string{
@@ -1260,7 +1261,14 @@ func legacyDelegationActionToMeshTask(action AgentAction, originalText string) (
 	}, "\n"))
 	lowerBody := strings.ToLower(actionText)
 	lowerOriginal := strings.ToLower(strings.TrimSpace(originalText))
-	if !looksLikeLegacyDelegationTarget(chatID) && !strings.Contains(lowerBody, "task_handoff_request") && !strings.Contains(lowerBody, "nursecoord-bot") {
+	toRoleID := firstActionParam(action.Params, "to_role_id", "to_role", "role_id", "role")
+	if toRoleID == "" {
+		toRoleID = inferDelegationRoleID(lowerBody, opts.RolePeers)
+	}
+	if toRoleID == "" && looksLikeLegacyDelegationTarget(chatID) && len(opts.RolePeers) == 1 {
+		toRoleID = onlyRolePeerID(opts.RolePeers)
+	}
+	if !looksLikeLegacyDelegationTarget(chatID) && !strings.Contains(lowerBody, "task_handoff_request") && toRoleID == "" {
 		return AgentAction{}, false
 	}
 	if !strings.Contains(lowerBody, "task_handoff_request") &&
@@ -1273,9 +1281,8 @@ func legacyDelegationActionToMeshTask(action AgentAction, originalText string) (
 		!strings.Contains(lowerOriginal, "handoff") {
 		return AgentAction{}, false
 	}
-	toRoleID := inferDelegationRoleID(lowerBody)
 	if toRoleID == "" {
-		toRoleID = "role-nursecoord-bot"
+		return AgentAction{}, false
 	}
 	summary := firstNonEmptyLine(body)
 	if summary == "" {
@@ -1303,11 +1310,29 @@ func looksLikeLegacyDelegationTarget(chatID string) bool {
 	}
 }
 
-func inferDelegationRoleID(lowerBody string) string {
-	for _, role := range []string{"nursecoord-bot", "clinical-bot", "andrew-bot", "alexis-bot"} {
-		if strings.Contains(lowerBody, role) {
-			return "role-" + role
+func inferDelegationRoleID(lowerBody string, peers map[string]RolePeer) string {
+	lowerBody = strings.ToLower(strings.TrimSpace(lowerBody))
+	if lowerBody == "" || len(peers) == 0 {
+		return ""
+	}
+	for roleID, peer := range peers {
+		roleID = strings.TrimSpace(firstNonEmptyString(peer.RoleID, roleID))
+		if roleID == "" {
+			continue
 		}
+		for _, query := range []string{roleID, peer.RoleName, peer.DisplayName, peer.BotID, peer.ExtensionID} {
+			query = strings.ToLower(strings.TrimSpace(query))
+			if query != "" && strings.Contains(lowerBody, query) {
+				return roleID
+			}
+		}
+	}
+	return ""
+}
+
+func onlyRolePeerID(peers map[string]RolePeer) string {
+	for roleID, peer := range peers {
+		return strings.TrimSpace(firstNonEmptyString(peer.RoleID, roleID))
 	}
 	return ""
 }
@@ -1351,7 +1376,10 @@ func firstNonEmptyString(values ...string) string {
 }
 
 func notifyRolePeerForMeshTask(ctx context.Context, replyClient, actionClient *ringcentral.Client, originChat string, action AgentAction, req MeshRuntimeTaskCreateRequest, task MeshRuntimeTask, peers map[string]RolePeer) (bool, error) {
-	peer, ok := rolePeerForID(req.ToRoleID, peers)
+	peer, ok := rolePeerFromRoutePlan(task.RoutePlan)
+	if !ok {
+		peer, ok = rolePeerForID(req.ToRoleID, peers)
+	}
 	if !ok {
 		return false, nil
 	}
@@ -1379,6 +1407,7 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient, actionClient *r
 	}
 	extra := map[string]any{
 		"role_peer":           true,
+		"trace_id":            firstNonEmptyString(task.TraceID, task.RoutePlan.TraceID),
 		"task_id":             task.ID,
 		"to_role_id":          peer.RoleID,
 		"target_extension_id": peer.ExtensionID,
@@ -1397,6 +1426,26 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient, actionClient *r
 		Details: actionEventDetails(originChat, targetChat, targetChat != originChat, extra),
 	})
 	return true, nil
+}
+
+func rolePeerFromRoutePlan(plan MeshRuntimeRoutePlan) (RolePeer, bool) {
+	visible := plan.VisibleDelivery
+	if !visible.Enabled {
+		return RolePeer{}, false
+	}
+	peer := RolePeer{
+		RoleID:      firstNonEmptyString(visible.TargetRoleID, plan.ToRoleID),
+		BotID:       firstNonEmptyString(visible.TargetBotID, plan.TargetBotID),
+		DisplayName: visible.MentionLabel,
+		PersonID:    visible.MentionPersonID,
+	}
+	if strings.EqualFold(strings.TrimSpace(visible.Transport), "shared_chat") && strings.TrimSpace(visible.ChatID) != "" {
+		peer.SharedChatIDs = []string{strings.TrimSpace(visible.ChatID)}
+	}
+	if peer.RoleID == "" && peer.BotID == "" && peer.DisplayName == "" && peer.PersonID == "" && len(peer.SharedChatIDs) == 0 {
+		return RolePeer{}, false
+	}
+	return peer, true
 }
 
 func sendRoleAwareMessage(ctx context.Context, client *ringcentral.Client, chatID, body string, hasRolePeer bool, peer RolePeer, targetChatSource string) (map[string]any, error) {
