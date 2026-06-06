@@ -3329,6 +3329,100 @@ func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithSharedChatMemberMention
 	}
 }
 
+func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	var events []ActionEvent
+	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
+		events = append(events, event)
+	})
+	defer restore()
+
+	var mu sync.Mutex
+	var postPath string
+	var postedBody string
+	var authHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/group/31462793222/post":
+			t.Fatalf("visible mesh notification should use normal message post, got %s %s", r.Method, r.URL.Path)
+		case r.URL.Path == "/team-messaging/v1/chats/origin-chat/notes" && r.Method == http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "note-1"})
+			return
+		case r.URL.Path == "/team-messaging/v1/notes/note-1/publish" && r.Method == http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "note-1"})
+			return
+		case r.URL.Path == "/team-messaging/v1/chats/31462793222/posts" && r.Method == http.MethodPost:
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody, _ = body["text"].(string)
+			authHeader = r.Header.Get("Authorization")
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+			return
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	replyClient, actionClient := newNamedTestClients(srv.URL)
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis 今日缺勤，需要 nursecoord-bot 接手续剂队列。",
+		},
+		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, actionClient, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		MeshTaskCreator: creator,
+		RolePeers: map[string]RolePeer{
+			"role-nursecoord-bot": {
+				RoleID:        "role-nursecoord-bot",
+				DisplayName:   "Nursecoord Department",
+				ExtensionID:   "20762295004",
+				PersonID:      "87368646659",
+				SharedChatIDs: []string{"31462793222"},
+			},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no user-visible internal mesh task result, got %v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if postPath != "/team-messaging/v1/chats/31462793222/posts" {
+		t.Fatalf("post path = %q", postPath)
+	}
+	if authHeader != "Bearer private-token" {
+		t.Fatalf("Authorization = %q, want private action client token", authHeader)
+	}
+	if !strings.HasPrefix(postedBody, "![:Person](87368646659) ") {
+		t.Fatalf("expected person_id mention prefix, got %q", postedBody)
+	}
+	var sawUserMessageEvent bool
+	for _, event := range events {
+		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["sender_identity"] == "action_client" {
+			sawUserMessageEvent = true
+			break
+		}
+	}
+	if !sawUserMessageEvent {
+		t.Fatalf("expected completed action-client audit event, got %#v", events)
+	}
+}
+
 func TestExecuteAgentActions_MeshTaskRolePeerGroupMentionFallsBackToDirectChat(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	var events []ActionEvent

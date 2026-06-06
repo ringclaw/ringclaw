@@ -298,7 +298,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			record("completed", "", false, map[string]any{"task_id": task.ID, "to_role_id": task.ToRoleID, "intent": task.Intent})
-			if notified, err := notifyRolePeerForMeshTask(ctx, replyClient, chatID, a, req, task, opts.RolePeers); err != nil {
+			if notified, err := notifyRolePeerForMeshTask(ctx, replyClient, actionClient, chatID, a, req, task, opts.RolePeers); err != nil {
 				recordAgentActionEvent(ctx, ActionEvent{
 					Type:   "MESSAGE",
 					Status: "failed",
@@ -538,9 +538,10 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			if replyClient != nil {
 				currentBotID = strings.TrimSpace(replyClient.OwnerID())
 			}
+			rolePeerSenderIdentity := ""
 			if hasRolePeer {
 				body = ensurePersonMentionPrefix(body, mentionID)
-				messageClient = replyClient
+				messageClient, rolePeerSenderIdentity = selectRolePeerVisibleMessageClient(replyClient, actionClient)
 			} else if currentChatMention != nil {
 				relayBotID := ""
 				if replyClient != nil {
@@ -561,7 +562,13 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				record("skipped", targetChat, crossChat, map[string]any{"reason": "empty_message"})
 				continue
 			}
-			deliveryDetails, err := sendRoleAwareMessage(ctx, messageClient, targetChat, body, hasRolePeer, rolePeer, targetChatSource)
+			var deliveryDetails map[string]any
+			var err error
+			if hasRolePeer {
+				deliveryDetails, err = sendRolePeerVisibleMessage(ctx, messageClient, targetChat, body, rolePeer, targetChatSource, rolePeerSenderIdentity)
+			} else {
+				deliveryDetails, err = sendRoleAwareMessage(ctx, messageClient, targetChat, body, false, rolePeer, targetChatSource)
+			}
 			if err != nil {
 				slog.Error("action: send message failed", "error", err, "chatID", targetChat)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
@@ -1342,15 +1349,16 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Client, originChat string, action AgentAction, req MeshRuntimeTaskCreateRequest, task MeshRuntimeTask, peers map[string]RolePeer) (bool, error) {
+func notifyRolePeerForMeshTask(ctx context.Context, replyClient, actionClient *ringcentral.Client, originChat string, action AgentAction, req MeshRuntimeTaskCreateRequest, task MeshRuntimeTask, peers map[string]RolePeer) (bool, error) {
 	peer, ok := rolePeerForID(req.ToRoleID, peers)
 	if !ok {
 		return false, nil
 	}
-	if replyClient == nil {
-		return false, fmt.Errorf("reply client is not configured")
+	messageClient, senderIdentity := selectRolePeerVisibleMessageClient(replyClient, actionClient)
+	if messageClient == nil {
+		return false, fmt.Errorf("message client is not configured")
 	}
-	delivery, err := resolveRolePeerDelivery(ctx, replyClient, peer)
+	delivery, err := resolveRolePeerDelivery(ctx, messageClient, peer)
 	if err != nil {
 		return false, err
 	}
@@ -1363,7 +1371,7 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Cli
 		return false, fmt.Errorf("message body is empty")
 	}
 	body = ensurePersonMentionPrefix(body, mentionID)
-	deliveryDetails, err := sendRoleAwareMessage(ctx, replyClient, targetChat, body, true, peer, targetChatSource)
+	deliveryDetails, err := sendRolePeerVisibleMessage(ctx, messageClient, targetChat, body, peer, targetChatSource, senderIdentity)
 	if err != nil {
 		return false, err
 	}
@@ -1420,6 +1428,37 @@ func sendRoleAwareMessage(ctx context.Context, client *ringcentral.Client, chatI
 		return nil, err
 	}
 	return nil, nil
+}
+
+func selectRolePeerVisibleMessageClient(replyClient, actionClient *ringcentral.Client) (*ringcentral.Client, string) {
+	if actionClient != nil {
+		return actionClient, "action_client"
+	}
+	return replyClient, "reply_client"
+}
+
+func sendRolePeerVisibleMessage(ctx context.Context, client *ringcentral.Client, chatID, body string, peer RolePeer, targetChatSource, senderIdentity string) (map[string]any, error) {
+	if senderIdentity == "action_client" {
+		if err := SendTextReply(ctx, client, chatID, body); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"role_peer_delivery":        "user_message",
+			"actual_target_chat":        chatID,
+			"actual_target_chat_source": targetChatSource,
+			"mention_transport":         "team_messaging_post",
+			"sender_identity":           senderIdentity,
+		}, nil
+	}
+	details, err := sendRoleAwareMessage(ctx, client, chatID, body, true, peer, targetChatSource)
+	if err != nil {
+		return nil, err
+	}
+	if details == nil {
+		details = map[string]any{}
+	}
+	details["sender_identity"] = senderIdentity
+	return details, nil
 }
 
 func sendRolePeerDirectFallback(ctx context.Context, client *ringcentral.Client, body string, peer RolePeer, groupErr error) (map[string]any, error) {
