@@ -242,6 +242,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		actions = append([]AgentAction{buildClinicalRefillApprovalCardAction(opts.OriginalText, opts)}, actions...)
 	}
 	actions = normalizeLegacyMeshDelegationActions(actions, opts)
+	if actionClient != nil {
+		actions = ensureCoverageHandoffNoteActions(actions, opts)
+	}
 	for _, a := range actions {
 		record := func(status string, targetChat string, crossChat bool, extra map[string]any) {
 			recordAgentActionEvent(ctx, ActionEvent{
@@ -344,19 +347,16 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, "Refused role message: only trusted senders can message another bot role.")
 				continue
 			}
-			mentionID, mentionSource = resolveRolePeerMentionID(ctx, replyClient, rolePeer)
-			if mentionID == "" {
-				record("failed", "", false, map[string]any{"reason": "missing_mention_id", "to_role_id": rolePeer.RoleID})
-				results = append(results, fmt.Sprintf("Failed to message role %s: target bot mention ID could not be resolved.", rolePeer.RoleID))
-				continue
-			}
-			var err error
-			targetChat, targetChatSource, err = resolveRolePeerTargetChat(ctx, replyClient, rolePeer, mentionID)
+			delivery, err := resolveRolePeerDelivery(ctx, replyClient, rolePeer)
 			if err != nil {
 				record("failed", "", false, map[string]any{"reason": "resolve_role_peer_chat_failed", "error": err.Error(), "to_role_id": rolePeer.RoleID})
 				results = append(results, fmt.Sprintf("Failed to message role %s: %v", rolePeer.RoleID, err))
 				continue
 			}
+			mentionID = delivery.MentionID
+			mentionSource = delivery.MentionSource
+			targetChat = delivery.TargetChat
+			targetChatSource = delivery.TargetChatSource
 			crossChat = targetChat != chatID
 		} else if cid := a.Params["chatid"]; cid != "" {
 			if a.Type == "MESSAGE" {
@@ -948,6 +948,100 @@ func normalizeLegacyMeshDelegationActions(actions []AgentAction, opts ActionCont
 	return out
 }
 
+func ensureCoverageHandoffNoteActions(actions []AgentAction, opts ActionContext) []AgentAction {
+	if opts.MeshTaskCreator == nil || !opts.OriginIsOwner || len(actions) == 0 || hasActionType(actions, "NOTE") {
+		return actions
+	}
+	insertAt := -1
+	var source AgentAction
+	for i, action := range actions {
+		if isCoverageHandoffMeshTask(action, opts.OriginalText) {
+			insertAt = i
+			source = action
+			break
+		}
+	}
+	if insertAt < 0 {
+		return actions
+	}
+	note := coverageHandoffNoteAction(source, opts.OriginalText)
+	out := make([]AgentAction, 0, len(actions)+1)
+	out = append(out, actions[:insertAt]...)
+	out = append(out, note)
+	out = append(out, actions[insertAt:]...)
+	return out
+}
+
+func hasActionType(actions []AgentAction, actionType string) bool {
+	actionType = strings.ToUpper(strings.TrimSpace(actionType))
+	for _, action := range actions {
+		if strings.ToUpper(strings.TrimSpace(action.Type)) == actionType {
+			return true
+		}
+	}
+	return false
+}
+
+func isCoverageHandoffMeshTask(action AgentAction, originalText string) bool {
+	if strings.ToUpper(strings.TrimSpace(action.Type)) != "MESH_TASK" {
+		return false
+	}
+	actionText := strings.ToLower(strings.Join([]string{
+		action.Params["intent"],
+		action.Params["title"],
+		action.Params["context_summary"],
+		action.Body,
+		originalText,
+	}, "\n"))
+	if !strings.Contains(actionText, "coverage.transfer") &&
+		!strings.Contains(actionText, "coverage") &&
+		!strings.Contains(actionText, "handoff") &&
+		!strings.Contains(actionText, "交接") {
+		return false
+	}
+	return strings.Contains(actionText, "缺勤") ||
+		strings.Contains(actionText, "absence") ||
+		strings.Contains(actionText, "sick") ||
+		strings.Contains(actionText, "coverage") ||
+		strings.Contains(actionText, "handoff") ||
+		strings.Contains(actionText, "交接")
+}
+
+func coverageHandoffNoteAction(action AgentAction, originalText string) AgentAction {
+	summary := firstNonEmptyLine(firstActionParam(action.Params, "context_summary", "title"))
+	if summary == "" {
+		summary = strings.TrimSpace(originalText)
+	}
+	if summary == "" {
+		summary = "Coverage handoff requested."
+	}
+	details := strings.TrimSpace(action.Body)
+	if details == "" || strings.EqualFold(details, summary) {
+		details = summary
+	}
+	body := strings.TrimSpace(strings.Join([]string{
+		"**缺勤交接摘要**",
+		"",
+		summary,
+		"",
+		"**待移交工作**",
+		details,
+		"",
+		"**跟进要求**",
+		"- 需要下游协调 Bot 确认覆盖并回写进展",
+		"",
+		"**来源请求**",
+		strings.TrimSpace(originalText),
+	}, "\n"))
+	return AgentAction{
+		Type: "NOTE",
+		Params: map[string]string{
+			"title": "缺勤交接文档 - " + time.Now().Format("2006-01-02"),
+		},
+		Body: body,
+	}
+}
+
 func legacyDelegationNoteForOriginChat(action AgentAction) AgentAction {
 	note := action
 	note.Params = make(map[string]string, len(action.Params))
@@ -1073,14 +1167,14 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Cli
 	if replyClient == nil {
 		return false, fmt.Errorf("reply client is not configured")
 	}
-	mentionID, mentionSource := resolveRolePeerMentionID(ctx, replyClient, peer)
-	if mentionID == "" {
-		return false, fmt.Errorf("target bot mention ID could not be resolved")
-	}
-	targetChat, targetChatSource, err := resolveRolePeerTargetChat(ctx, replyClient, peer, mentionID)
+	delivery, err := resolveRolePeerDelivery(ctx, replyClient, peer)
 	if err != nil {
 		return false, err
 	}
+	mentionID := delivery.MentionID
+	mentionSource := delivery.MentionSource
+	targetChat := delivery.TargetChat
+	targetChatSource := delivery.TargetChatSource
 	body := meshTaskRolePeerMessage(action, req, task)
 	if body == "" {
 		return false, fmt.Errorf("message body is empty")

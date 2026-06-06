@@ -2984,6 +2984,85 @@ func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithMention(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithSharedChatMemberMention(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	var mu sync.Mutex
+	var postPath string
+	var postedBody string
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/team-messaging/v1/chats/shared-admin-chat") && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(ringcentral.Chat{
+				ID: "shared-admin-chat", Type: "Team",
+				Members: []ringcentral.ChatMember{
+					{ID: "person-alexis", FirstName: "Alexis", LastName: "Gonzalez"},
+					{ID: "person-86468591619", Name: "Nursecoord Department", ExtensionID: "20762295004"},
+				},
+			})
+			return
+		case strings.Contains(r.URL.Path, "/directory/entries/search") && r.Method == http.MethodPost:
+			_ = json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{})
+			return
+		case strings.Contains(r.URL.Path, "/posts") && r.Method == http.MethodPost:
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody, _ = body["text"].(string)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+			return
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer replySrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis 今日缺勤，需要 nursecoord-bot 接手续剂队列。",
+		},
+		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		MeshTaskCreator: creator,
+		RolePeers: map[string]RolePeer{
+			"role-nursecoord-bot": {
+				RoleID:        "role-nursecoord-bot",
+				DisplayName:   "nursecoord-bot",
+				ExtensionID:   "20762295004",
+				SharedChatIDs: []string{"shared-admin-chat"},
+			},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no user-visible internal mesh task result, got %v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(postPath, "/chats/shared-admin-chat/") {
+		t.Fatalf("expected role peer notification in shared chat, got path %q", postPath)
+	}
+	if !strings.HasPrefix(postedBody, "![:Person](person-86468591619) ") {
+		t.Fatalf("expected chat member mention prefix, got %q", postedBody)
+	}
+	if strings.Contains(postedBody, "![:Person](20762295004)") {
+		t.Fatalf("extension ID fallback should not be used as mention, got %q", postedBody)
+	}
+}
+
 func TestExecuteAgentActions_MeshTaskNotifiesRolePeerByDirectChatWhenNoSharedChat(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	var mu sync.Mutex
@@ -3240,6 +3319,62 @@ func TestExecuteAgentActions_LegacyAdminHandoffNotePreservesCurrentChatDocument(
 		t.Fatalf("expected handoff note in origin chat, got path %q", notePath)
 	}
 	if noteBody.Title != "Alexis 缺勤交接文档 - 2026-06-06" || !strings.Contains(noteBody.Body, "续剂队列") {
+		t.Fatalf("note body = %#v", noteBody)
+	}
+}
+
+func TestExecuteAgentActions_CoverageMeshTaskCreatesHandoffNoteWhenMissing(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	var mu sync.Mutex
+	var notePath string
+	var noteBody ringcentral.CreateNoteRequest
+	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/notes") && !strings.Contains(r.URL.Path, "/publish") && r.Method == http.MethodPost:
+			_ = json.NewDecoder(r.Body).Decode(&noteBody)
+			mu.Lock()
+			notePath = r.URL.Path
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(ringcentral.Note{ID: "handoff-note", Title: noteBody.Title})
+		case strings.Contains(r.URL.Path, "/notes/handoff-note/publish") && r.Method == http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer actionSrv.Close()
+
+	actionClient := ringcentral.NewBotClient(actionSrv.URL, "bot-token")
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis 今日缺勤，需要 nursecoord-bot 接续任务。",
+		},
+		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), actionClient, actionClient, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		OriginalText:    "今天身体不舒服，缺勤，帮我处理交接",
+		MeshTaskCreator: creator,
+	})
+	if len(results) != 0 {
+		t.Fatalf("results = %#v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(notePath, "/chats/origin-chat/notes") {
+		t.Fatalf("expected handoff note in origin chat, got path %q", notePath)
+	}
+	if !strings.Contains(noteBody.Title, "缺勤交接文档") || !strings.Contains(noteBody.Body, "续剂队列") {
 		t.Fatalf("note body = %#v", noteBody)
 	}
 }

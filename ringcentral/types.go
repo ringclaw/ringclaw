@@ -166,7 +166,14 @@ type WSEvent struct {
 
 // ChatMember represents a member in a chat.
 type ChatMember struct {
-	ID string `json:"id"`
+	ID              string `json:"id"`
+	Name            string `json:"name,omitempty"`
+	FirstName       string `json:"firstName,omitempty"`
+	LastName        string `json:"lastName,omitempty"`
+	Email           string `json:"email,omitempty"`
+	ExtensionID     string `json:"extensionId,omitempty"`
+	ExtensionNumber string `json:"extensionNumber,omitempty"`
+	Type            string `json:"type,omitempty"`
 }
 
 // Chat represents a Team Messaging chat.

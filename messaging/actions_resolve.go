@@ -81,6 +81,150 @@ func resolveNameToPersonID(ctx context.Context, client *ringcentral.Client, name
 	return best.ID, nil
 }
 
+type rolePeerDelivery struct {
+	TargetChat       string
+	TargetChatSource string
+	MentionID        string
+	MentionSource    string
+}
+
+func resolveRolePeerDelivery(ctx context.Context, client *ringcentral.Client, peer RolePeer) (rolePeerDelivery, error) {
+	if client == nil {
+		return rolePeerDelivery{}, fmt.Errorf("reply client is not configured")
+	}
+	if chatID := firstNonEmptyString(peer.SharedChatIDs...); chatID != "" {
+		mentionID, mentionSource := resolveRolePeerMentionIDFromChat(ctx, client, chatID, peer)
+		if mentionID == "" {
+			mentionID, mentionSource = resolveRolePeerMentionID(ctx, client, peer)
+		}
+		if mentionID == "" {
+			return rolePeerDelivery{}, fmt.Errorf("target bot mention ID could not be resolved for shared chat %s", chatID)
+		}
+		return rolePeerDelivery{
+			TargetChat:       chatID,
+			TargetChatSource: "shared_chat",
+			MentionID:        mentionID,
+			MentionSource:    mentionSource,
+		}, nil
+	}
+
+	mentionID, mentionSource := resolveRolePeerMentionID(ctx, client, peer)
+	if mentionID == "" {
+		return rolePeerDelivery{}, fmt.Errorf("target bot mention ID could not be resolved")
+	}
+	targetChat, targetChatSource, err := resolveRolePeerTargetChat(ctx, client, mentionID)
+	if err != nil {
+		return rolePeerDelivery{}, err
+	}
+	return rolePeerDelivery{
+		TargetChat:       targetChat,
+		TargetChatSource: targetChatSource,
+		MentionID:        mentionID,
+		MentionSource:    mentionSource,
+	}, nil
+}
+
+func resolveRolePeerMentionIDFromChat(ctx context.Context, client *ringcentral.Client, chatID string, peer RolePeer) (string, string) {
+	if client == nil || strings.TrimSpace(chatID) == "" {
+		return "", ""
+	}
+	chat, err := client.GetChat(ctx, chatID)
+	if err != nil {
+		slog.Warn("action: failed to inspect shared chat members for role peer mention",
+			"roleID", peer.RoleID, "chatID", chatID, "error", err)
+		return "", ""
+	}
+	if best := bestChatMemberMatch(chat.Members, peer); best != nil && strings.TrimSpace(best.ID) != "" {
+		slog.Info("action: resolved role peer mention ID from shared chat",
+			"roleID", peer.RoleID, "chatID", chatID, "memberID", best.ID, "memberName", chatMemberDisplayName(*best))
+		return strings.TrimSpace(best.ID), "chat_member:" + chatID
+	}
+	return "", ""
+}
+
+func bestChatMemberMatch(members []ringcentral.ChatMember, peer RolePeer) *ringcentral.ChatMember {
+	queries := rolePeerMatchQueries(peer)
+	for i := range members {
+		member := &members[i]
+		for _, query := range queries {
+			if chatMemberExactMatch(*member, query) {
+				return member
+			}
+		}
+	}
+	var best *ringcentral.ChatMember
+	bestLen := int(^uint(0) >> 1)
+	for i := range members {
+		member := &members[i]
+		for _, query := range queries {
+			if chatMemberFuzzyMatch(*member, query) {
+				display := chatMemberDisplayName(*member)
+				if display == "" {
+					display = member.ID
+				}
+				if len(display) < bestLen {
+					best = member
+					bestLen = len(display)
+				}
+			}
+		}
+	}
+	return best
+}
+
+func rolePeerMatchQueries(peer RolePeer) []string {
+	values := []string{peer.DisplayName, peer.RoleName, peer.BotID, peer.ExtensionID}
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		key := strings.ToLower(value)
+		if value == "" || seen[key] {
+			continue
+		}
+		out = append(out, value)
+		seen[key] = true
+	}
+	return out
+}
+
+func chatMemberExactMatch(member ringcentral.ChatMember, query string) bool {
+	for _, value := range chatMemberMatchValues(member) {
+		if exactMatch(value, query) {
+			return true
+		}
+	}
+	return false
+}
+
+func chatMemberFuzzyMatch(member ringcentral.ChatMember, query string) bool {
+	for _, value := range chatMemberMatchValues(member) {
+		if fuzzyMatch(value, query) {
+			return true
+		}
+	}
+	return false
+}
+
+func chatMemberMatchValues(member ringcentral.ChatMember) []string {
+	fullName := strings.TrimSpace(member.FirstName + " " + member.LastName)
+	return []string{
+		member.ID,
+		member.Name,
+		fullName,
+		member.Email,
+		member.ExtensionID,
+		member.ExtensionNumber,
+	}
+}
+
+func chatMemberDisplayName(member ringcentral.ChatMember) string {
+	if name := strings.TrimSpace(member.Name); name != "" {
+		return name
+	}
+	return strings.TrimSpace(member.FirstName + " " + member.LastName)
+}
+
 func resolveRolePeerMentionID(ctx context.Context, client *ringcentral.Client, peer RolePeer) (string, string) {
 	for _, query := range []string{peer.DisplayName, peer.RoleName, peer.BotID, peer.ExtensionID} {
 		query = strings.TrimSpace(query)
@@ -100,16 +244,10 @@ func resolveRolePeerMentionID(ctx context.Context, client *ringcentral.Client, p
 			return strings.TrimSpace(best.ID), "directory:" + query
 		}
 	}
-	// Backward-compatible fallback for old configs. This may render a visible
-	// mention in some environments, but Directory entry ID is preferred because
-	// Team Messaging @ targets are not guaranteed to equal RC extension IDs.
-	return strings.TrimSpace(peer.ExtensionID), "extension_id_fallback"
+	return "", ""
 }
 
-func resolveRolePeerTargetChat(ctx context.Context, client *ringcentral.Client, peer RolePeer, mentionID string) (string, string, error) {
-	if chatID := firstNonEmptyString(peer.SharedChatIDs...); chatID != "" {
-		return chatID, "shared_chat", nil
-	}
+func resolveRolePeerTargetChat(ctx context.Context, client *ringcentral.Client, mentionID string) (string, string, error) {
 	if client == nil {
 		return "", "", fmt.Errorf("reply client is not configured")
 	}

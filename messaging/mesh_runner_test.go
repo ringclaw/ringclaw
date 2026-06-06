@@ -116,6 +116,16 @@ func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 	var sentPath string
 	var sentText string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats/clinical-shared-chat" {
+			_ = json.NewEncoder(w).Encode(ringcentral.Chat{
+				ID: "clinical-shared-chat", Type: "Team",
+				Members: []ringcentral.ChatMember{{
+					ID:        "clinical-person",
+					FirstName: "clinical-bot",
+				}},
+			})
+			return
+		}
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/directory/entries/search") {
 			_ = json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{Records: []ringcentral.DirectoryEntry{{
 				ID:        "clinical-person",
