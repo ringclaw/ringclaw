@@ -1140,7 +1140,7 @@ func normalizeLegacyMeshDelegationActions(actions []AgentAction, opts ActionCont
 }
 
 func ensureCoverageHandoffNoteActions(actions []AgentAction, opts ActionContext) []AgentAction {
-	if opts.MeshTaskCreator == nil || !opts.OriginIsOwner || len(actions) == 0 || hasActionType(actions, "NOTE") {
+	if opts.MeshTaskCreator == nil || !opts.OriginIsOwner || opts.SourceTaskID != "" || len(actions) == 0 || hasActionType(actions, "NOTE") {
 		return actions
 	}
 	insertAt := -1

@@ -3881,6 +3881,39 @@ func TestExecuteAgentActions_CoverageMeshTaskCreatesHandoffNoteWhenMissing(t *te
 	}
 }
 
+func TestExecuteAgentActions_CoverageMeshTaskDoesNotCreateHandoffNoteForMeshRuntime(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("mesh runtime should not create an automatic handoff note, got %s %s", r.Method, r.URL.Path)
+	}))
+	defer actionSrv.Close()
+
+	actionClient := ringcentral.NewBotClient(actionSrv.URL, "bot-token")
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-clinical-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Nursecoord 正在处理 Alexis 缺勤覆盖，需要 clinical-bot 协助。",
+		},
+		Body: "Nursecoord 已接手覆盖，请 clinical-bot 协助患者跟进。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), actionClient, actionClient, "shared-admin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		OriginalText:    "mesh runtime coverage handoff",
+		SourceTaskID:    "mesh-task-upstream",
+		MeshTaskCreator: creator,
+	})
+	if len(results) != 0 {
+		t.Fatalf("results = %#v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+}
+
 func TestExecuteAgentActions_LegacyAdminMessageWithoutMeshStillResolvesNormally(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	actions := []AgentAction{{

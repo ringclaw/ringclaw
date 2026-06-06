@@ -199,6 +199,27 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 				})),
 			})
 		}
+		ownerDMChat := strings.TrimSpace(r.replyClient.DMChatID())
+		if ownerDMChat != "" && ownerDMChat != strings.TrimSpace(r.defaultChatID) {
+			if err := SendTextReply(ctx, r.replyClient, ownerDMChat, cleanResult); err != nil {
+				actionEvents = append(actionEvents, MeshRuntimeTaskActionEvent{
+					Type:   "MESSAGE",
+					Status: "failed",
+					Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, ownerDMChat, true, map[string]any{
+						"mesh_owner_dm_update": true,
+						"error":                err.Error(),
+					})),
+				})
+			} else {
+				actionEvents = append(actionEvents, MeshRuntimeTaskActionEvent{
+					Type:   "MESSAGE",
+					Status: "completed",
+					Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, ownerDMChat, true, map[string]any{
+						"mesh_owner_dm_update": true,
+					})),
+				})
+			}
+		}
 	}
 	return r.client.RespondMeshTask(ctx, task.ID, MeshRuntimeTaskResponse{
 		Status:       status,

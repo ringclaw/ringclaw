@@ -113,21 +113,21 @@ func TestMeshRunnerExecutesAgentActionsAndCompletesTask(t *testing.T) {
 }
 
 func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
-	var sent []string
+	sentByPath := map[string]string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/directory/entries/search"):
 			_ = json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{})
 			return
-		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/admin-chat/posts":
+		case r.Method == http.MethodPost && (r.URL.Path == "/team-messaging/v1/chats/admin-chat/posts" || r.URL.Path == "/team-messaging/v1/chats/owner-dm/posts"):
 			var body struct {
 				Text string `json:"text"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode post: %v", err)
 			}
-			sent = append(sent, body.Text)
+			sentByPath[r.URL.Path] = body.Text
 			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "post-1", Text: body.Text})
 			return
 		default:
@@ -137,6 +137,7 @@ func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
 	defer server.Close()
 
 	botClient := ringcentral.NewBotClient(server.URL, "bot-token")
+	botClient.SetDMChatID("owner-dm")
 	visibleReply := "Hi Jennifer, 今天 Alexis 请病假，需要你帮忙覆盖一部分病人事务。"
 	ag := &meshTestAgent{reply: visibleReply + "\n\nACTION:MESSAGE chatid=Jennifer\n" + visibleReply + "\nEND_ACTION"}
 	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
@@ -157,8 +158,11 @@ func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
 	if err := runner.ProcessOnce(context.Background()); err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if len(sent) != 1 || sent[0] != visibleReply {
-		t.Fatalf("sent messages = %#v, want clean reply fallback", sent)
+	if sentByPath["/team-messaging/v1/chats/admin-chat/posts"] != visibleReply {
+		t.Fatalf("shared chat message = %q, want clean reply fallback; all=%#v", sentByPath["/team-messaging/v1/chats/admin-chat/posts"], sentByPath)
+	}
+	if sentByPath["/team-messaging/v1/chats/owner-dm/posts"] != visibleReply {
+		t.Fatalf("owner DM message = %q, want clean reply fallback; all=%#v", sentByPath["/team-messaging/v1/chats/owner-dm/posts"], sentByPath)
 	}
 	if len(taskClient.responses) != 1 {
 		t.Fatalf("responses = %#v", taskClient.responses)
@@ -166,6 +170,7 @@ func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
 	events := taskClient.responses[0].ActionEvents
 	var sawFailedAction bool
 	var sawCleanFallback bool
+	var sawDMUpdate bool
 	for _, event := range events {
 		if event.Type == "MESSAGE" && event.Status == "failed" {
 			sawFailedAction = true
@@ -173,8 +178,11 @@ func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
 		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["mesh_clean_reply_fallback"] == true {
 			sawCleanFallback = true
 		}
+		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["mesh_owner_dm_update"] == true {
+			sawDMUpdate = true
+		}
 	}
-	if !sawFailedAction || !sawCleanFallback {
+	if !sawFailedAction || !sawCleanFallback || !sawDMUpdate {
 		t.Fatalf("action events = %#v", events)
 	}
 }
