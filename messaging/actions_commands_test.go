@@ -734,6 +734,50 @@ func TestExecuteAgentActions_TaskSuccess(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_TaskInOriginChatUsesBotClient(t *testing.T) {
+	var botTaskCalls int
+	var privateTaskCalls int
+
+	botSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/origin-chat/tasks":
+			botTaskCalls++
+			json.NewEncoder(w).Encode(ringcentral.Task{ID: "task-bot-1", Subject: "Follow up"})
+		default:
+			t.Fatalf("unexpected bot request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer botSrv.Close()
+
+	privateSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/tasks") {
+			privateTaskCalls++
+			t.Fatalf("origin-chat task should be created by the bot client, not the private app client")
+		}
+		t.Fatalf("unexpected private request %s %s", r.Method, r.URL.Path)
+	}))
+	defer privateSrv.Close()
+
+	botClient := ringcentral.NewBotClient(botSrv.URL, "bot-token")
+	privateClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: privateSrv.URL,
+	})
+	privateClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "origin-chat", []AgentAction{{
+		Type:   "TASK",
+		Params: map[string]string{"subject": "Follow up"},
+	}}, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if botTaskCalls != 1 || privateTaskCalls != 0 {
+		t.Fatalf("bot task calls = %d, private task calls = %d", botTaskCalls, privateTaskCalls)
+	}
+}
+
 func TestExecuteAgentActions_TaskSkippedNoSubject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not make any request for task with no subject")

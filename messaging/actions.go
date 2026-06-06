@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -454,6 +456,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				record("skipped", targetChat, crossChat, map[string]any{"reason": "missing_subject"})
 				continue
 			}
+			taskClient := selectCurrentChatPostClient(replyClient, actionClient, targetChat, chatID)
 			req := &ringcentral.CreateTaskRequest{Subject: subject}
 			if aid := a.Params["assignee"]; aid != "" {
 				resolvedID, err := resolveAssigneeParam(ctx, actionClient, aid)
@@ -465,7 +468,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				}
 				req.Assignees = []ringcentral.TaskAssignee{{ID: resolvedID}}
 			}
-			task, err := actionClient.CreateTask(ctx, targetChat, req)
+			task, err := taskClient.CreateTask(ctx, targetChat, req)
 			if err != nil {
 				slog.Error("action: create task failed", "error", err)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
@@ -665,6 +668,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				params[k] = v
 			}
 			params["text"] = strings.TrimSpace(a.Body)
+			resolveClinicalRefillSMSTargetFromMemory(params, opts)
 			result := smsSend(ctx, actionClient, params)
 			if strings.HasPrefix(result, "Error: ") || strings.HasPrefix(result, "Usage: ") {
 				record("failed", targetChat, crossChat, map[string]any{"error": result})
@@ -694,6 +698,174 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		}
 	}
 	return results
+}
+
+var (
+	clinicalPatientIDPattern = regexp.MustCompile(`(?i)\bAX-?(\d{3,})\b`)
+	clinicalPhonePattern     = regexp.MustCompile(`\+?\d[\d .()/-]{6,}\d`)
+)
+
+type clinicalPatientEntityMemory struct {
+	PatientID string
+	Name      string
+	Phone     string
+}
+
+func resolveClinicalRefillSMSTargetFromMemory(params map[string]string, opts ActionContext) {
+	if params == nil {
+		return
+	}
+	target := strings.TrimSpace(params["to"])
+	if target == "" || looksLikePhoneNumber(target) {
+		return
+	}
+	patientID := clinicalRefillDecisionPatientID(opts.OriginalText)
+	if patientID == "" {
+		return
+	}
+	entity, err := loadClinicalPatientEntityMemory(patientID)
+	if err != nil {
+		slog.Warn("action: clinical refill sms memory lookup failed", "patientID", patientID, "target", target, "error", err)
+		return
+	}
+	if entity.Phone == "" || !targetMatchesClinicalPatient(target, entity) {
+		return
+	}
+	params["to"] = entity.Phone
+	if entity.Name != "" {
+		params["_target_label"] = entity.Name
+	}
+	slog.Info("action: resolved clinical refill sms target from memory",
+		"patientID", patientID, "target", target, "patient", entity.Name, "phone", entity.Phone)
+}
+
+func clinicalRefillDecisionPatientID(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 || !isClinicalRefillDecisionVerb(fields[0]) {
+		return ""
+	}
+	return normalizeClinicalPatientID(text)
+}
+
+func isClinicalRefillDecisionVerb(value string) bool {
+	value = strings.ToLower(strings.Trim(strings.TrimSpace(value), ".,:;()[]{}"))
+	switch value {
+	case "approve", "approved", "followup", "follow-up", "follow_up", "deny", "denied", "reject", "rejected":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeClinicalPatientID(value string) string {
+	match := clinicalPatientIDPattern.FindStringSubmatch(value)
+	if len(match) != 2 {
+		return ""
+	}
+	return "AX-" + match[1]
+}
+
+func loadClinicalPatientEntityMemory(patientID string) (clinicalPatientEntityMemory, error) {
+	patientID = normalizeClinicalPatientID(patientID)
+	if patientID == "" {
+		return clinicalPatientEntityMemory{}, fmt.Errorf("patient id is required")
+	}
+	memoryDir := clinicalRefillMemoryDir()
+	if memoryDir == "" {
+		return clinicalPatientEntityMemory{}, fmt.Errorf("memory dir is not configured")
+	}
+	path := filepath.Join(memoryDir, "entities", patientID+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return clinicalPatientEntityMemory{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	entity := clinicalPatientEntityMemory{PatientID: patientID}
+	for _, line := range strings.Split(string(data), "\n") {
+		label, value, ok := splitMemoryField(line)
+		if !ok {
+			continue
+		}
+		normalizedLabel := strings.ToLower(strings.TrimSpace(label))
+		switch {
+		case entity.Name == "" && (strings.Contains(normalizedLabel, "患者姓名") ||
+			strings.Contains(normalizedLabel, "patient name") ||
+			normalizedLabel == "name" || normalizedLabel == "姓名"):
+			entity.Name = strings.TrimSpace(value)
+		case entity.Phone == "" && (strings.Contains(normalizedLabel, "手机号") ||
+			strings.Contains(normalizedLabel, "phone") ||
+			strings.Contains(normalizedLabel, "mobile")):
+			entity.Phone = extractClinicalPhoneNumber(value)
+		}
+	}
+	if entity.Phone == "" {
+		return entity, fmt.Errorf("patient %s memory does not contain a phone number", patientID)
+	}
+	return entity, nil
+}
+
+func clinicalRefillMemoryDir() string {
+	if value := strings.TrimSpace(os.Getenv("RINGCLAW_MEMORY_DIR")); value != "" {
+		return value
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+	return filepath.Join(home, ".ringclaw", "workspace", "memory")
+}
+
+func splitMemoryField(line string) (string, string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", "", false
+	}
+	if label, value, ok := strings.Cut(line, "："); ok {
+		return strings.TrimSpace(label), strings.TrimSpace(value), true
+	}
+	if label, value, ok := strings.Cut(line, ":"); ok {
+		return strings.TrimSpace(label), strings.TrimSpace(value), true
+	}
+	return "", "", false
+}
+
+func extractClinicalPhoneNumber(value string) string {
+	match := clinicalPhonePattern.FindString(value)
+	if match == "" {
+		return ""
+	}
+	var b strings.Builder
+	for i, r := range match {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			continue
+		}
+		if r == '+' && i == 0 {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func targetMatchesClinicalPatient(target string, entity clinicalPatientEntityMemory) bool {
+	if normalizeClinicalPatientID(target) == entity.PatientID {
+		return true
+	}
+	targetKey := normalizeClinicalTarget(target)
+	if targetKey == "patient" || targetKey == "thepatient" || targetKey == "患者" {
+		return true
+	}
+	nameKey := normalizeClinicalTarget(entity.Name)
+	return nameKey != "" && targetKey == nameKey
+}
+
+func normalizeClinicalTarget(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	replacer := strings.NewReplacer(" ", "", "\t", "", "\n", "", "-", "", "_", "", ".", "", ",", "", "(", "", ")", "", "[", "", "]", "", "{", "", "}", "")
+	return replacer.Replace(value)
 }
 
 func shouldForceClinicalRefillApproval(originalText string, actions []AgentAction) bool {

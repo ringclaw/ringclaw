@@ -870,7 +870,10 @@ func smsSend(ctx context.Context, client *ringcentral.Client, params map[string]
 	if to == "" || text == "" {
 		return "Usage: /sms send <toPhone> <message> [from=<phone>] or /sms send to=<name|phone> text=<message> [from=<phone>]"
 	}
-	targetLabel := to
+	targetLabel := strings.TrimSpace(params["_target_label"])
+	if targetLabel == "" {
+		targetLabel = to
+	}
 	if !looksLikePhoneNumber(to) {
 		number, label, err := resolveNameToPhoneNumber(ctx, client, to)
 		if err != nil {
