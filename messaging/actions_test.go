@@ -3392,7 +3392,7 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesReplyClient(t *testing.T) 
 			"title":           "Coverage handoff",
 			"context_summary": "Alexis 今日缺勤，需要 nursecoord-bot 接手续剂队列。",
 		},
-		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+		Body: "⏳ 收到，你安心休息\n正在通过 nursecoord-bot 协调今日覆盖，确认后我会 DM 你。",
 	}}
 
 	results := ExecuteAgentActions(context.Background(), replyClient, actionClient, "origin-chat", actions, ActionContext{
@@ -3428,6 +3428,15 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesReplyClient(t *testing.T) 
 	}
 	if !strings.Contains(postedBody, `rel='{"id":87368646659}'`) {
 		t.Fatalf("expected person_id group mention anchor, got %q", postedBody)
+	}
+	if !strings.Contains(postedBody, "New mesh task") || !strings.Contains(postedBody, "coverage.transfer") || !strings.Contains(postedBody, "Coverage handoff") {
+		t.Fatalf("expected fixed mesh task audit notification, got %q", postedBody)
+	}
+	if !strings.Contains(postedBody, "Alexis 今日缺勤，需要 nursecoord-bot 接手续剂队列。") {
+		t.Fatalf("expected context summary in notification, got %q", postedBody)
+	}
+	if strings.Contains(postedBody, "安心休息") || strings.Contains(postedBody, "DM 你") {
+		t.Fatalf("role peer notification should not reuse user confirmation reply, got %q", postedBody)
 	}
 	if strings.Contains(postedBody, "![:Person](20762295004)") {
 		t.Fatalf("extension ID markdown mention should not be used in shared chat group payload, got %q", postedBody)

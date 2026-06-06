@@ -1569,22 +1569,26 @@ func rolePeerForID(roleID string, peers map[string]RolePeer) (RolePeer, bool) {
 	return peer, true
 }
 
-func meshTaskRolePeerMessage(action AgentAction, req MeshRuntimeTaskCreateRequest, task MeshRuntimeTask) string {
-	for _, value := range []string{
-		action.Body,
-		req.Instructions,
-		req.Context.Summary,
-		task.Title,
-		req.Title,
-	} {
-		if value = strings.TrimSpace(value); value != "" {
-			return value
-		}
+func meshTaskRolePeerMessage(_ AgentAction, req MeshRuntimeTaskCreateRequest, task MeshRuntimeTask) string {
+	intent := firstNonEmptyString(task.Intent, req.Intent)
+	title := firstNonEmptyString(task.Title, req.Title, "Mesh task")
+	var lines []string
+	if intent != "" {
+		lines = append(lines, "New mesh task: "+intent)
+	} else {
+		lines = append(lines, "New mesh task")
 	}
-	if req.Intent != "" {
-		return "Please handle " + req.Intent + "."
+	lines = append(lines, "Title: "+title)
+	if task.ID != "" {
+		lines = append(lines, "Task ID: "+task.ID)
 	}
-	return ""
+	if toRoleID := firstNonEmptyString(task.ToRoleID, req.ToRoleID); toRoleID != "" {
+		lines = append(lines, "To role: "+toRoleID)
+	}
+	if summary := strings.TrimSpace(req.Context.Summary); summary != "" {
+		lines = append(lines, "Summary: "+summary)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func looksLikeNameToken(token string) bool {

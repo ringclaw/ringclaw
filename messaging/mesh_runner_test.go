@@ -112,6 +112,73 @@ func TestMeshRunnerExecutesAgentActionsAndCompletesTask(t *testing.T) {
 	}
 }
 
+func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
+	var sent []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/directory/entries/search"):
+			_ = json.NewEncoder(w).Encode(ringcentral.DirectorySearchResult{})
+			return
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/admin-chat/posts":
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post: %v", err)
+			}
+			sent = append(sent, body.Text)
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "post-1", Text: body.Text})
+			return
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	botClient := ringcentral.NewBotClient(server.URL, "bot-token")
+	visibleReply := "Hi Jennifer, 今天 Alexis 请病假，需要你帮忙覆盖一部分病人事务。"
+	ag := &meshTestAgent{reply: visibleReply + "\n\nACTION:MESSAGE chatid=Jennifer\n" + visibleReply + "\nEND_ACTION"}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
+		ID:           "task-clean-fallback",
+		Intent:       "coverage.transfer",
+		Title:        "Alexis absence coverage",
+		Instructions: "Coordinate Jennifer/Karen coverage.",
+	}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:        taskClient,
+		Agent:         ag,
+		ReplyClient:   botClient,
+		ActionClient:  botClient,
+		DefaultChatID: "admin-chat",
+		Capabilities:  []string{"message", "summary"},
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if len(sent) != 1 || sent[0] != visibleReply {
+		t.Fatalf("sent messages = %#v, want clean reply fallback", sent)
+	}
+	if len(taskClient.responses) != 1 {
+		t.Fatalf("responses = %#v", taskClient.responses)
+	}
+	events := taskClient.responses[0].ActionEvents
+	var sawFailedAction bool
+	var sawCleanFallback bool
+	for _, event := range events {
+		if event.Type == "MESSAGE" && event.Status == "failed" {
+			sawFailedAction = true
+		}
+		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["mesh_clean_reply_fallback"] == true {
+			sawCleanFallback = true
+		}
+	}
+	if !sawFailedAction || !sawCleanFallback {
+		t.Fatalf("action events = %#v", events)
+	}
+}
+
 func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 	var sentPath string
 	var sentText string

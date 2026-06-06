@@ -141,6 +141,7 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 	}
 	cleanReply, actions := ParseAgentActions(reply)
 	status, result := parseMeshRuntimeStatus(cleanReply)
+	cleanResult := strings.TrimSpace(result)
 	actions = r.filterAllowedActions(actions)
 	actionEvents := []MeshRuntimeTaskActionEvent{}
 	if len(actions) > 0 {
@@ -179,6 +180,26 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 			result = strings.TrimSpace(result + "\n" + strings.Join(actionResults, "\n"))
 		}
 	}
+	if shouldPostMeshCleanReplyFallback(cleanResult, actionEvents) && r.replyClient != nil && strings.TrimSpace(r.defaultChatID) != "" {
+		if err := SendTextReply(ctx, r.replyClient, r.defaultChatID, cleanResult); err != nil {
+			actionEvents = append(actionEvents, MeshRuntimeTaskActionEvent{
+				Type:   "MESSAGE",
+				Status: "failed",
+				Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, r.defaultChatID, false, map[string]any{
+					"mesh_clean_reply_fallback": true,
+					"error":                     err.Error(),
+				})),
+			})
+		} else {
+			actionEvents = append(actionEvents, MeshRuntimeTaskActionEvent{
+				Type:   "MESSAGE",
+				Status: "completed",
+				Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, r.defaultChatID, false, map[string]any{
+					"mesh_clean_reply_fallback": true,
+				})),
+			})
+		}
+	}
 	return r.client.RespondMeshTask(ctx, task.ID, MeshRuntimeTaskResponse{
 		Status:       status,
 		Result:       strings.TrimSpace(result),
@@ -205,6 +226,18 @@ func hasNonMeshTaskAction(actions []AgentAction) bool {
 		}
 	}
 	return false
+}
+
+func shouldPostMeshCleanReplyFallback(cleanReply string, events []MeshRuntimeTaskActionEvent) bool {
+	if strings.TrimSpace(cleanReply) == "" {
+		return false
+	}
+	for _, event := range events {
+		if strings.EqualFold(strings.TrimSpace(event.Type), "MESSAGE") && strings.EqualFold(strings.TrimSpace(event.Status), "completed") {
+			return false
+		}
+	}
+	return true
 }
 
 func buildMeshTaskPrompt(task MeshRuntimeTask) string {
