@@ -66,6 +66,37 @@ func TestLoadFromFile(t *testing.T) {
 	}
 }
 
+func TestConfigParsesMeshRuntimeConfig(t *testing.T) {
+	payload := `{
+		"mesh": {
+			"enabled": true,
+			"control_plane_url": "http://ava-control-plane",
+			"agent_id": "agent-alexis",
+			"role_id": "alexis-assistant",
+			"role_name": "Alexis Assistant",
+			"poll_interval": "5s",
+			"allowed_actions": ["MESSAGE", "SMS"]
+		}
+	}`
+
+	var loaded Config
+	if err := json.Unmarshal([]byte(payload), &loaded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !loaded.Mesh.Enabled {
+		t.Fatal("mesh should be enabled")
+	}
+	if loaded.Mesh.ControlPlaneURL != "http://ava-control-plane" {
+		t.Fatalf("control plane URL = %q", loaded.Mesh.ControlPlaneURL)
+	}
+	if loaded.Mesh.AgentID != "agent-alexis" || loaded.Mesh.RoleID != "alexis-assistant" {
+		t.Fatalf("mesh identity = %#v", loaded.Mesh)
+	}
+	if got := strings.Join(loaded.Mesh.AllowedActions, ","); got != "MESSAGE,SMS" {
+		t.Fatalf("allowed actions = %q", got)
+	}
+}
+
 // TestLoadIgnoresEnv verifies that all previously supported env vars
 // are silently ignored by Load(); config.json is the sole source.
 func TestLoadIgnoresEnv(t *testing.T) {

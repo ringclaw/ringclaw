@@ -160,6 +160,58 @@ Example supported prompts:
 
 Video and Phone are default Personal AVA Pro capabilities in the action layer. Operators still need the matching Private JWT App scopes; missing scopes return actionable permission guidance instead of silently disabling the feature.
 
+## Agent Mesh Runtime Flow
+
+Agent Mesh turns RingClaw from a single conversation runtime into an execution
+node inside an enterprise task orchestration graph. The product control plane
+decides which role can delegate to which role; RingClaw only runs the assigned
+task for the Bot it hosts.
+
+```mermaid
+flowchart LR
+  CP["AVA Control Plane<br/>role policy + task registry"] --> Poll["RingClaw Runtime<br/>mesh poller"]
+  Poll --> Agent["Default Agent<br/>Codex / Claude / HTTP"]
+  Agent --> Parser["ACTION parser<br/>existing RingClaw format"]
+  Parser --> Gate["allowed_actions gate<br/>role-scoped"]
+  Gate --> RC["RingCentral action clients"]
+  Gate --> Result["task result<br/>waiting / completed / failed"]
+  Result --> CP
+```
+
+Runtime responsibilities:
+
+| Responsibility | RingClaw implementation |
+| --- | --- |
+| Claim assigned tasks | `POST /runtime/v1/mesh/tasks` using `bot_id` + bootstrap token |
+| Preserve role context | Inject role, intent, instructions, summary, structured data, and memory refs into the agent prompt |
+| Reuse existing ACTION model | Parse the same `ACTION:MESSAGE`, `ACTION:SMS`, `ACTION:TASK`, `ACTION:CARD` blocks used by chat flows |
+| Enforce role action limits | Drop ACTION blocks not present in `mesh.allowed_actions` |
+| Report audit evidence | Send task status and action execution events to `POST /runtime/v1/mesh/tasks/{taskId}/respond` |
+
+Recommended MVP action allowlist:
+
+```text
+MESSAGE, SMS, TASK, CARD
+```
+
+`VIDEO` and `PHONE_CALL` should stay behind explicit role allowlists or approval
+policies, because they create external collaboration side effects. Heartbeat and
+cron can use the same action execution substrate, but Agent Mesh keeps the human
+ownership chain explicit through the source role, target role, task ID, and audit
+event sequence.
+
+Example: Alexis absence handoff
+
+```text
+alexis-bot receives "I am out today"
+  -> creates a mesh task for nursecoord role
+  -> nursecoord-bot runtime polls the task
+  -> default agent reads the handoff context
+  -> emits ACTION:MESSAGE / ACTION:SMS within allowed_actions
+  -> RingClaw executes the actions
+  -> Control Plane records completed / waiting / failed with action events
+```
+
 ## Bot Types
 
 Personal Bot is the flagship Bot type, but the platform should support other Bot scenarios through templates.

@@ -41,6 +41,16 @@ additional `Video`, `RingOut`, and `ReadCallLog` scopes.
     "group_summary_message_limit": 200
   },
 
+  "mesh": {
+    "enabled": true,
+    "control_plane_url": "https://ava-control-plane.example.com",
+    "agent_id": "agent_alexis_bot",
+    "role_id": "alexis-assistant",
+    "role_name": "Alexis Assistant",
+    "poll_interval": "10s",
+    "allowed_actions": ["MESSAGE", "SMS", "TASK", "CARD"]
+  },
+
   "heartbeat": {
     "enabled": true,
     "interval": "30m",
@@ -107,6 +117,7 @@ additional `Video`, `RingOut`, and `ReadCallLog` scopes.
 | `full_access_ack` | bool (nullable) | omitted | `true` to allow ACP agents with `full_access: true`; `false` to explicitly refuse even if `full_access: true` is set. When omitted, treated as `false`. |
 | `agents` | object | — | See [Agents](#agents). At least one agent is required to start. |
 | `ringcentral` | object | — | See [`ringcentral`](#ringcentral). |
+| `mesh` | object | — | See [`mesh`](#mesh). Enabled by AVA Control Plane managed runtimes when the Bot participates in Agent-to-Agent task orchestration. |
 | `heartbeat` | object | — | See [`heartbeat`](#heartbeat). |
 | `cron` | object | — | See [`cron`](#cron). |
 | `openclaw_gateway` | object | — | See [`openclaw_gateway`](#openclaw_gateway). |
@@ -131,6 +142,47 @@ additional `Video`, `RingOut`, and `ReadCallLog` scopes.
 | `jwt_token` | string | — | **Required.** Owner-scoped Private JWT App token. Redacted in logs. |
 | `group_summary_group_id` | string | — | Group chat ID allowed to use current-group summarize. Empty disables the feature. |
 | `group_summary_message_limit` | int | `200` | Messages fetched per group-summarize call. `<= 0` falls back to default. |
+
+## `mesh`
+
+Optional. AVA Control Plane managed runtimes use this block to let a RingClaw Pod
+participate in Agent-to-Agent task orchestration. Local single-bot setups can
+leave it disabled.
+
+When enabled, RingClaw periodically calls the Control Plane runtime mesh API,
+claims tasks assigned to this Bot, asks the configured default agent to process
+the task, executes allowed RC `ACTION` blocks, and reports the task result plus
+action events back to the Control Plane.
+
+The runtime still authenticates with the same bootstrap token used by
+`runtime claim`; do not put RC tokens or agent API keys in `mesh`.
+
+| Field | Type | Default | Allowed values / Notes |
+|-------|------|---------|------------------------|
+| `enabled` | bool | `false` | Enables runtime mesh polling. |
+| `control_plane_url` | string | `AVA_CONTROL_PLANE_URL` / `CONTROL_PLANE_URL` | AVA Control Plane base URL. |
+| `agent_id` | string | value from runtime claim | Mesh agent identity assigned by Control Plane. |
+| `role_id` | string | value from runtime claim | Role identity used for policy/audit. |
+| `role_name` | string | value from runtime claim | Human-readable role label. |
+| `poll_interval` | string | `10s` | Go duration. Controls how often the Pod polls for assigned mesh tasks. |
+| `allowed_actions` | string[] | `[]` | ACTION allowlist enforced before executing agent output. Typical MVP values: `MESSAGE`, `SMS`, `TASK`, `CARD`. |
+
+Agent Mesh task flow:
+
+```mermaid
+sequenceDiagram
+  participant CP as AVA Control Plane
+  participant R as RingClaw Runtime
+  participant A as Default Agent
+  participant RC as RingCentral
+
+  R->>CP: POST /runtime/v1/mesh/tasks
+  CP-->>R: pending task + context package
+  R->>A: task prompt with role/context/memory refs
+  A-->>R: text + allowed ACTION blocks
+  R->>RC: execute allowed ACTIONs
+  R->>CP: POST /runtime/v1/mesh/tasks/{id}/respond
+```
 
 ## `heartbeat`
 

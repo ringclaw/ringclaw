@@ -51,6 +51,7 @@ type Config struct {
 	LogFormat               string                 `json:"log_format,omitempty"` // "text" (default), "json", "color"
 	Agents                  map[string]AgentConfig `json:"agents"`
 	RC                      RCConfig               `json:"ringcentral,omitempty"`
+	Mesh                    MeshConfig             `json:"mesh,omitempty"`
 	Heartbeat               HeartbeatConfig        `json:"heartbeat,omitempty"`
 	Cron                    CronConfig             `json:"cron,omitempty"`
 	OpenclawGateway         OpenclawGatewayConfig  `json:"openclaw_gateway,omitempty"`
@@ -67,6 +68,18 @@ type Config struct {
 	// BotContent carries runtime-provisioned bot brain artifacts that
 	// should be materialized locally before the bot starts.
 	BotContent BotContentConfig `json:"bot_content,omitempty"`
+}
+
+// MeshConfig enables AVA Control Plane Agent Mesh task polling for managed
+// runtimes. The runtime identity comes from the Control Plane claim config.
+type MeshConfig struct {
+	Enabled         bool     `json:"enabled,omitempty"`
+	ControlPlaneURL string   `json:"control_plane_url,omitempty"`
+	AgentID         string   `json:"agent_id,omitempty"`
+	RoleID          string   `json:"role_id,omitempty"`
+	RoleName        string   `json:"role_name,omitempty"`
+	PollInterval    string   `json:"poll_interval,omitempty"`
+	AllowedActions  []string `json:"allowed_actions,omitempty"`
 }
 
 type BotContentConfig struct {

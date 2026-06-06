@@ -1,0 +1,131 @@
+package messaging
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/ringclaw/ringclaw/agent"
+	"github.com/ringclaw/ringclaw/ringcentral"
+)
+
+type meshTestAgent struct {
+	reply      string
+	lastPrompt string
+}
+
+func (a *meshTestAgent) Chat(_ context.Context, _ string, message string) (string, error) {
+	a.lastPrompt = message
+	return a.reply, nil
+}
+
+func (a *meshTestAgent) ResetSession(context.Context, string) (string, error) { return "", nil }
+func (a *meshTestAgent) SetCwd(string)                                        {}
+func (a *meshTestAgent) Info() agent.AgentInfo {
+	return agent.AgentInfo{Name: "mesh-test", Type: "test"}
+}
+
+type meshTaskClientStub struct {
+	tasks     []MeshRuntimeTask
+	responses []MeshRuntimeTaskResponse
+}
+
+func (c *meshTaskClientStub) PollMeshTasks(context.Context, MeshRuntimeTaskPollRequest) ([]MeshRuntimeTask, error) {
+	return c.tasks, nil
+}
+
+func (c *meshTaskClientStub) RespondMeshTask(_ context.Context, taskID string, resp MeshRuntimeTaskResponse) error {
+	resp.TaskID = taskID
+	c.responses = append(c.responses, resp)
+	return nil
+}
+
+func TestMeshRunnerExecutesAgentActionsAndCompletesTask(t *testing.T) {
+	var sent []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/admin-chat/posts" {
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post: %v", err)
+			}
+			sent = append(sent, body.Text)
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "post-1", Text: body.Text})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	botClient := ringcentral.NewBotClient(server.URL, "bot-token")
+	botClient.SetOwnerID("bot-1")
+	ag := &meshTestAgent{reply: "I will notify the admin channel.\n\nACTION:MESSAGE\nCoverage transfer accepted.\nEND_ACTION"}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
+		ID:           "task-1",
+		Intent:       "coverage.transfer",
+		Title:        "Alexis absence coverage",
+		Instructions: "Transfer Alexis task queue.",
+		Context: MeshRuntimeContextPackage{
+			Summary: "Alexis is absent today and task coverage is required.",
+		},
+	}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:        taskClient,
+		Agent:         ag,
+		ReplyClient:   botClient,
+		ActionClient:  botClient,
+		DefaultChatID: "admin-chat",
+		Capabilities:  []string{"message", "summary", "phone", "video"},
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if !strings.Contains(ag.lastPrompt, "coverage.transfer") || !strings.Contains(ag.lastPrompt, "Alexis is absent today") {
+		t.Fatalf("prompt did not include task context: %s", ag.lastPrompt)
+	}
+	if len(sent) != 1 || sent[0] != "Coverage transfer accepted." {
+		t.Fatalf("sent messages = %#v", sent)
+	}
+	if len(taskClient.responses) != 1 {
+		t.Fatalf("responses = %#v", taskClient.responses)
+	}
+	resp := taskClient.responses[0]
+	if resp.Status != MeshRuntimeTaskStatusCompleted {
+		t.Fatalf("response status = %q", resp.Status)
+	}
+	if !strings.Contains(resp.Result, "I will notify") {
+		t.Fatalf("response result = %q", resp.Result)
+	}
+	if len(resp.ActionEvents) != 1 || resp.ActionEvents[0].Type != "MESSAGE" {
+		t.Fatalf("action events = %#v", resp.ActionEvents)
+	}
+}
+
+func TestMeshRunnerSupportsWaitingStatus(t *testing.T) {
+	ag := &meshTestAgent{reply: "MESH_STATUS: waiting\nWaiting for Jennifer to reply YES within 15 minutes."}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{ID: "task-2", Intent: "coverage.transfer", Title: "Wait for backup"}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:        taskClient,
+		Agent:         ag,
+		DefaultChatID: "admin-chat",
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if len(taskClient.responses) != 1 {
+		t.Fatalf("responses = %#v", taskClient.responses)
+	}
+	resp := taskClient.responses[0]
+	if resp.Status != MeshRuntimeTaskStatusWaiting {
+		t.Fatalf("response status = %q", resp.Status)
+	}
+	if strings.Contains(resp.Result, "MESH_STATUS") || !strings.Contains(resp.Result, "Waiting for Jennifer") {
+		t.Fatalf("response result = %q", resp.Result)
+	}
+}

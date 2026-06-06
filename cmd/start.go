@@ -158,6 +158,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 	initServices(ctx, cfg, c, handler, oobMgr)
 	stopInteractivePoller := startRuntimeInteractiveEventPoller(ctx, c, handler)
 	defer stopInteractivePoller()
+	stopMeshPoller := startRuntimeMeshPoller(ctx, cfg, c, handler)
+	defer stopMeshPoller()
 
 	// Start WebSocket monitor
 	slog.Info("starting message bridge", "chatIDs", cfg.RC.ChatIDs)

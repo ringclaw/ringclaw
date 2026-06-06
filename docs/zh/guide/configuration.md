@@ -40,6 +40,16 @@ JWT App 至少需要 `ReadAccounts`；Video/Phone 能力还需要额外的 `Vide
     "group_summary_message_limit": 200
   },
 
+  "mesh": {
+    "enabled": true,
+    "control_plane_url": "https://ava-control-plane.example.com",
+    "agent_id": "agent_alexis_bot",
+    "role_id": "alexis-assistant",
+    "role_name": "Alexis Assistant",
+    "poll_interval": "10s",
+    "allowed_actions": ["MESSAGE", "SMS", "TASK", "CARD"]
+  },
+
   "heartbeat": {
     "enabled": true,
     "interval": "30m",
@@ -106,6 +116,7 @@ JWT App 至少需要 `ReadAccounts`；Video/Phone 能力还需要额外的 `Vide
 | `full_access_ack` | bool（可空） | 未设置 | `true` 允许 ACP agent 启用 `full_access: true`；`false` 明确拒绝；未设置按 `false` 处理。 |
 | `agents` | object | — | 见 [Agents](#agents)。至少需要 1 个 agent。 |
 | `ringcentral` | object | — | 见 [`ringcentral`](#ringcentral)。 |
+| `mesh` | object | — | 见 [`mesh`](#mesh)。AVA Control Plane 托管 runtime 参与 Agent-to-Agent 编排时启用。 |
 | `heartbeat` | object | — | 见 [`heartbeat`](#heartbeat)。 |
 | `cron` | object | — | 见 [`cron`](#cron)。 |
 | `openclaw_gateway` | object | — | 见 [`openclaw_gateway`](#openclaw_gateway)。 |
@@ -130,6 +141,45 @@ JWT App 至少需要 `ReadAccounts`；Video/Phone 能力还需要额外的 `Vide
 | `jwt_token` | string | — | **必填。** Owner-scoped Private JWT App token。日志中会脱敏。 |
 | `group_summary_group_id` | string | — | 允许使用"当前群总结"功能的群 ID。留空即禁用。 |
 | `group_summary_message_limit` | int | `200` | 每次群总结拉取的消息条数。`<= 0` 回退默认值。 |
+
+## `mesh`
+
+可选。AVA Control Plane 托管的 RingClaw runtime 通过这个配置参与
+Agent-to-Agent 任务编排。本地单 Bot 使用场景可以保持关闭。
+
+开启后，RingClaw 会定期调用 Control Plane runtime mesh API，领取分配给当前
+Bot 的任务，把任务上下文交给默认 Agent 处理，执行 role 允许的 RC `ACTION`
+块，并把任务结果和 action events 回写给 Control Plane。
+
+`mesh` 中不要放 RC token 或 agent API key。Runtime 仍然使用 K8S bootstrap
+token 访问 Control Plane；真实密钥继续通过 runtime claim / Secret 管理。
+
+| 字段 | 类型 | 默认值 | 可选值 / 说明 |
+|------|------|--------|---------------|
+| `enabled` | bool | `false` | 是否开启 runtime mesh polling。 |
+| `control_plane_url` | string | `AVA_CONTROL_PLANE_URL` / `CONTROL_PLANE_URL` | AVA Control Plane 地址。 |
+| `agent_id` | string | runtime claim 下发值 | Control Plane 分配的 mesh agent 身份。 |
+| `role_id` | string | runtime claim 下发值 | 用于策略和审计的 role 身份。 |
+| `role_name` | string | runtime claim 下发值 | role 展示名。 |
+| `poll_interval` | string | `10s` | Go duration，控制 Pod 轮询 mesh task 的间隔。 |
+| `allowed_actions` | string[] | `[]` | 执行 Agent 输出前的 ACTION 白名单。MVP 常用：`MESSAGE`、`SMS`、`TASK`、`CARD`。 |
+
+Agent Mesh 任务流：
+
+```mermaid
+sequenceDiagram
+  participant CP as AVA Control Plane
+  participant R as RingClaw Runtime
+  participant A as Default Agent
+  participant RC as RingCentral
+
+  R->>CP: POST /runtime/v1/mesh/tasks
+  CP-->>R: pending task + context package
+  R->>A: role/context/memory refs task prompt
+  A-->>R: text + allowed ACTION blocks
+  R->>RC: execute allowed ACTIONs
+  R->>CP: POST /runtime/v1/mesh/tasks/{id}/respond
+```
 
 ## `heartbeat`
 
