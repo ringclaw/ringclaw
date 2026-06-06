@@ -1433,10 +1433,10 @@ func sendRoleAwareMessage(ctx context.Context, client *ringcentral.Client, chatI
 }
 
 func selectRolePeerVisibleMessageClient(replyClient, actionClient *ringcentral.Client) (*ringcentral.Client, string) {
-	if actionClient != nil {
-		return actionClient, "action_client"
+	if replyClient != nil {
+		return replyClient, "reply_client"
 	}
-	return replyClient, "reply_client"
+	return actionClient, "action_client"
 }
 
 func rolePeerVisibleMentionID(peer RolePeer, resolvedMentionID, resolvedMentionSource, senderIdentity, targetChatSource string) (string, string) {

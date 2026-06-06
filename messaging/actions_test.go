@@ -3329,7 +3329,7 @@ func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithSharedChatMemberMention
 	}
 }
 
-func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T) {
+func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesReplyClient(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	var events []ActionEvent
 	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
@@ -3420,8 +3420,8 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T)
 	if postPath != "/api/group/31462793222/post" {
 		t.Fatalf("post path = %q", postPath)
 	}
-	if authHeader != "Bearer private-token" {
-		t.Fatalf("Authorization = %q, want private action client token", authHeader)
+	if authHeader != "Bearer bot-token" {
+		t.Fatalf("Authorization = %q, want bot reply client token", authHeader)
 	}
 	if len(mentionIDs) != 1 || mentionIDs[0] != 87368646659 {
 		t.Fatalf("mention_item_ids = %#v, want [87368646659]", mentionIDs)
@@ -3434,7 +3434,7 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T)
 	}
 	var sawUserMessageEvent bool
 	for _, event := range events {
-		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["sender_identity"] == "action_client" {
+		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["sender_identity"] == "reply_client" {
 			if event.Details["target_mention_id"] != "87368646659" {
 				t.Fatalf("target_mention_id = %#v, want person id", event.Details["target_mention_id"])
 			}
@@ -3446,7 +3446,7 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T)
 		}
 	}
 	if !sawUserMessageEvent {
-		t.Fatalf("expected completed action-client audit event, got %#v", events)
+		t.Fatalf("expected completed reply-client audit event, got %#v", events)
 	}
 }
 
