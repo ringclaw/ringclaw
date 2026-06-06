@@ -541,7 +541,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			rolePeerSenderIdentity := ""
 			if hasRolePeer {
 				messageClient, rolePeerSenderIdentity = selectRolePeerVisibleMessageClient(replyClient, actionClient)
-				mentionID, mentionSource = rolePeerVisibleMentionID(rolePeer, mentionID, mentionSource, rolePeerSenderIdentity)
+				mentionID, mentionSource = rolePeerVisibleMentionID(rolePeer, mentionID, mentionSource, rolePeerSenderIdentity, targetChatSource)
 				body = ensurePersonMentionPrefix(body, mentionID)
 			} else if currentChatMention != nil {
 				relayBotID := ""
@@ -1367,7 +1367,7 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient, actionClient *r
 	mentionSource := delivery.MentionSource
 	targetChat := delivery.TargetChat
 	targetChatSource := delivery.TargetChatSource
-	mentionID, mentionSource = rolePeerVisibleMentionID(peer, mentionID, mentionSource, senderIdentity)
+	mentionID, mentionSource = rolePeerVisibleMentionID(peer, mentionID, mentionSource, senderIdentity, targetChatSource)
 	body := meshTaskRolePeerMessage(action, req, task)
 	if body == "" {
 		return false, fmt.Errorf("message body is empty")
@@ -1439,8 +1439,8 @@ func selectRolePeerVisibleMessageClient(replyClient, actionClient *ringcentral.C
 	return replyClient, "reply_client"
 }
 
-func rolePeerVisibleMentionID(peer RolePeer, resolvedMentionID, resolvedMentionSource, senderIdentity string) (string, string) {
-	if senderIdentity == "action_client" {
+func rolePeerVisibleMentionID(peer RolePeer, resolvedMentionID, resolvedMentionSource, senderIdentity, targetChatSource string) (string, string) {
+	if senderIdentity == "action_client" && targetChatSource != "shared_chat" {
 		if extensionID := strings.TrimSpace(peer.ExtensionID); extensionID != "" {
 			return extensionID, "extension_id"
 		}
@@ -1450,6 +1450,17 @@ func rolePeerVisibleMentionID(peer RolePeer, resolvedMentionID, resolvedMentionS
 
 func sendRolePeerVisibleMessage(ctx context.Context, client *ringcentral.Client, chatID, body string, peer RolePeer, targetChatSource, senderIdentity string) (map[string]any, error) {
 	if senderIdentity == "action_client" {
+		if targetChatSource == "shared_chat" && isNumericID(chatID) && isNumericID(peer.PersonID) {
+			details, err := sendRoleAwareMessage(ctx, client, chatID, body, true, peer, targetChatSource)
+			if err != nil {
+				return nil, err
+			}
+			if details == nil {
+				details = map[string]any{}
+			}
+			details["sender_identity"] = senderIdentity
+			return details, nil
+		}
 		if err := SendTextReply(ctx, client, chatID, body); err != nil {
 			return nil, err
 		}

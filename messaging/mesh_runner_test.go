@@ -115,7 +115,22 @@ func TestMeshRunnerExecutesAgentActionsAndCompletesTask(t *testing.T) {
 func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 	var sentPath string
 	var sentText string
+	var mentionIDs []int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/group/31462793222/post" {
+			var body struct {
+				Text           string  `json:"text"`
+				MentionItemIDs []int64 `json:"mention_item_ids"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode group post: %v", err)
+			}
+			sentPath = r.URL.Path
+			sentText = body.Text
+			mentionIDs = append(mentionIDs, body.MentionItemIDs...)
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "post-1", Text: body.Text})
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats/clinical-shared-chat" {
 			_ = json.NewEncoder(w).Encode(ringcentral.Chat{
 				ID: "clinical-shared-chat", Type: "Team",
@@ -171,7 +186,8 @@ func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 				RoleID:        "role-clinical-bot",
 				DisplayName:   "clinical-bot",
 				ExtensionID:   "clinical-ext",
-				SharedChatIDs: []string{"clinical-shared-chat"},
+				PersonID:      "87368474627",
+				SharedChatIDs: []string{"31462793222"},
 			},
 		},
 	})
@@ -179,10 +195,13 @@ func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 	if err := runner.ProcessOnce(context.Background()); err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if !strings.Contains(sentPath, "/chats/clinical-shared-chat/") {
+	if sentPath != "/api/group/31462793222/post" {
 		t.Fatalf("sent path = %q", sentPath)
 	}
-	if !strings.HasPrefix(sentText, "![:Person](clinical-ext) ") {
+	if len(mentionIDs) != 1 || mentionIDs[0] != 87368474627 {
+		t.Fatalf("mention_item_ids = %#v", mentionIDs)
+	}
+	if !strings.Contains(sentText, `rel='{"id":87368474627}'`) {
 		t.Fatalf("sent text = %q", sentText)
 	}
 	if len(taskClient.responses) != 1 {
@@ -294,5 +313,10 @@ func TestBuildMeshTaskPromptRequiresActionBlocksForExecutedWork(t *testing.T) {
 		!strings.Contains(got, "MUST include the matching ACTION block") ||
 		!strings.Contains(got, "record action_events") {
 		t.Fatalf("mesh task prompt missing execution/action_event guard: %s", got)
+	}
+	if !strings.Contains(got, "ACTION:MESSAGE") ||
+		!strings.Contains(got, "ACTION:SMS") ||
+		!strings.Contains(got, "ACTION:MESH_TASK") {
+		t.Fatalf("mesh task prompt missing full action protocol: %s", got)
 	}
 }

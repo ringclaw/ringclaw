@@ -3340,12 +3340,25 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T)
 	var mu sync.Mutex
 	var postPath string
 	var postedBody string
+	var mentionIDs []int64
 	var authHeader string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.URL.Path == "/api/group/31462793222/post":
-			t.Fatalf("visible mesh notification should use normal message post, got %s %s", r.Method, r.URL.Path)
+		case r.URL.Path == "/api/group/31462793222/post" && r.Method == http.MethodPost:
+			var body struct {
+				Text           string  `json:"text"`
+				MentionItemIDs []int64 `json:"mention_item_ids"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody = body.Text
+			mentionIDs = append(mentionIDs, body.MentionItemIDs...)
+			authHeader = r.Header.Get("Authorization")
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+			return
 		case r.URL.Path == "/team-messaging/v1/chats/origin-chat/notes" && r.Method == http.MethodPost:
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": "note-1"})
 			return
@@ -3353,6 +3366,8 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T)
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": "note-1"})
 			return
 		case r.URL.Path == "/team-messaging/v1/chats/31462793222/posts" && r.Method == http.MethodPost:
+			t.Fatalf("visible mesh notification should use group mention payload, got %s %s", r.Method, r.URL.Path)
+		case strings.Contains(r.URL.Path, "/posts") && r.Method == http.MethodPost:
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			mu.Lock()
@@ -3402,20 +3417,29 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesActionClient(t *testing.T)
 
 	mu.Lock()
 	defer mu.Unlock()
-	if postPath != "/team-messaging/v1/chats/31462793222/posts" {
+	if postPath != "/api/group/31462793222/post" {
 		t.Fatalf("post path = %q", postPath)
 	}
 	if authHeader != "Bearer private-token" {
 		t.Fatalf("Authorization = %q, want private action client token", authHeader)
 	}
-	if !strings.HasPrefix(postedBody, "![:Person](20762295004) ") {
-		t.Fatalf("expected extension_id mention prefix, got %q", postedBody)
+	if len(mentionIDs) != 1 || mentionIDs[0] != 87368646659 {
+		t.Fatalf("mention_item_ids = %#v, want [87368646659]", mentionIDs)
+	}
+	if !strings.Contains(postedBody, `rel='{"id":87368646659}'`) {
+		t.Fatalf("expected person_id group mention anchor, got %q", postedBody)
+	}
+	if strings.Contains(postedBody, "![:Person](20762295004)") {
+		t.Fatalf("extension ID markdown mention should not be used in shared chat group payload, got %q", postedBody)
 	}
 	var sawUserMessageEvent bool
 	for _, event := range events {
 		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["sender_identity"] == "action_client" {
-			if event.Details["target_mention_id"] != "20762295004" {
-				t.Fatalf("target_mention_id = %#v, want extension id", event.Details["target_mention_id"])
+			if event.Details["target_mention_id"] != "87368646659" {
+				t.Fatalf("target_mention_id = %#v, want person id", event.Details["target_mention_id"])
+			}
+			if event.Details["mention_transport"] != "group_post" {
+				t.Fatalf("mention_transport = %#v, want group_post", event.Details["mention_transport"])
 			}
 			sawUserMessageEvent = true
 			break

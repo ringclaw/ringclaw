@@ -231,6 +231,7 @@ func buildMeshTaskPrompt(task MeshRuntimeTask) string {
 	b.WriteString("If you claim an SMS was sent, a task was created, a message was posted, or a card was created, you MUST include the matching ACTION block so the runtime can execute it and record action_events. ")
 	b.WriteString("If you cannot or should not execute the action yet, say it is prepared or waiting; do not say it has already been sent or created. ")
 	b.WriteString("Use `MESH_STATUS: waiting` only when the task is waiting for an external response or deadline.\n")
+	b.WriteString(ActionPrompt())
 	return b.String()
 }
 
