@@ -561,7 +561,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				record("skipped", targetChat, crossChat, map[string]any{"reason": "empty_message"})
 				continue
 			}
-			if err := SendTextReply(ctx, messageClient, targetChat, body); err != nil {
+			if err := sendRoleAwareMessage(ctx, messageClient, targetChat, body, hasRolePeer, rolePeer, targetChatSource); err != nil {
 				slog.Error("action: send message failed", "error", err, "chatID", targetChat)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
 				results = append(results, fmt.Sprintf("Failed to send message: %v", err))
@@ -1359,7 +1359,7 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Cli
 		return false, fmt.Errorf("message body is empty")
 	}
 	body = ensurePersonMentionPrefix(body, mentionID)
-	if err := SendTextReply(ctx, replyClient, targetChat, body); err != nil {
+	if err := sendRoleAwareMessage(ctx, replyClient, targetChat, body, true, peer, targetChatSource); err != nil {
 		return false, err
 	}
 	recordAgentActionEvent(ctx, ActionEvent{
@@ -1378,6 +1378,44 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient *ringcentral.Cli
 		}),
 	})
 	return true, nil
+}
+
+func sendRoleAwareMessage(ctx context.Context, client *ringcentral.Client, chatID, body string, hasRolePeer bool, peer RolePeer, targetChatSource string) error {
+	if hasRolePeer &&
+		targetChatSource == "shared_chat" &&
+		isNumericID(chatID) &&
+		isNumericID(peer.PersonID) {
+		body = stripPersonMentionPrefix(body, peer.PersonID)
+		_, err := client.SendGroupMentionPost(ctx, chatID, peer.PersonID, rolePeerDisplayLabel(peer), body)
+		if err != nil {
+			return fmt.Errorf("send group mention message: %w", err)
+		}
+		slog.Info("sent role peer group mention",
+			"component", "sender",
+			"chatID", chatID,
+			"roleID", peer.RoleID,
+			"personID", peer.PersonID,
+			"text", util.Truncate(body, 50))
+		return nil
+	}
+	return SendTextReply(ctx, client, chatID, body)
+}
+
+func stripPersonMentionPrefix(body, personID string) string {
+	body = strings.TrimSpace(body)
+	personID = strings.TrimSpace(personID)
+	if body == "" || personID == "" {
+		return body
+	}
+	prefix := "![:Person](" + personID + ")"
+	if strings.HasPrefix(body, prefix) {
+		return strings.TrimSpace(strings.TrimPrefix(body, prefix))
+	}
+	return body
+}
+
+func rolePeerDisplayLabel(peer RolePeer) string {
+	return firstNonEmptyString(peer.DisplayName, peer.RoleName, peer.BotID, peer.ExtensionID, peer.PersonID)
 }
 
 func rolePeerForID(roleID string, peers map[string]RolePeer) (RolePeer, bool) {

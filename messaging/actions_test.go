@@ -2774,6 +2774,78 @@ func TestExecuteAgentActions_MessageToRolePeerUsesConfiguredPersonID(t *testing.
 	}
 }
 
+func TestExecuteAgentActions_MessageToRolePeerUsesGroupMentionPayload(t *testing.T) {
+	var mu sync.Mutex
+	var postPath string
+	var postedBody string
+	var mentionIDs []int64
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/directory/entries/search") ||
+			(strings.Contains(r.URL.Path, "/team-messaging/v1/chats/140324085762") && r.Method == http.MethodGet) {
+			t.Fatalf("person_id should avoid lookup, got %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Path == "/api/group/140324085762/post" && r.Method == http.MethodPost {
+			var body struct {
+				GroupID        int64   `json:"group_id"`
+				Text           string  `json:"text"`
+				MentionItemIDs []int64 `json:"mention_item_ids"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody = body.Text
+			mentionIDs = append(mentionIDs, body.MentionItemIDs...)
+			mu.Unlock()
+			if body.GroupID != 140324085762 {
+				t.Fatalf("group_id = %d", body.GroupID)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer replySrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	actions := []AgentAction{{
+		Type: "MESSAGE",
+		Params: map[string]string{
+			"to_role_id": "role-nursecoord-bot",
+		},
+		Body: "Please coordinate backup coverage.",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner: true,
+		RolePeers: map[string]RolePeer{
+			"role-nursecoord-bot": {
+				RoleID:        "role-nursecoord-bot",
+				DisplayName:   "nursecoord-bot",
+				ExtensionID:   "20762295004",
+				PersonID:      "87368646659",
+				SharedChatIDs: []string{"140324085762"},
+			},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if postPath != "/api/group/140324085762/post" {
+		t.Fatalf("expected group post endpoint, got %q", postPath)
+	}
+	if len(mentionIDs) != 1 || mentionIDs[0] != 87368646659 {
+		t.Fatalf("mention_item_ids = %#v", mentionIDs)
+	}
+	wantPrefix := `<a class='at_mention_compose' rel='{"id":87368646659}'>@nursecoord-bot</a>`
+	if !strings.HasPrefix(postedBody, wantPrefix+" ") {
+		t.Fatalf("expected group mention anchor, got %q", postedBody)
+	}
+}
+
 func TestExecuteAgentActions_NonOwnerForcesOriginChat(t *testing.T) {
 	var mu sync.Mutex
 	var postPaths []string

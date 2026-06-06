@@ -9,6 +9,9 @@ func TestTeamMessagingEndpoints(t *testing.T) {
 	if got := teamMessagingChatPostEndpoint("chat-1", "post-1"); got != "/team-messaging/v1/chats/chat-1/posts/post-1" {
 		t.Fatalf("teamMessagingChatPostEndpoint = %q", got)
 	}
+	if got := groupPostEndpoint("140324085762"); got != "/api/group/140324085762/post" {
+		t.Fatalf("groupPostEndpoint = %q", got)
+	}
 }
 
 func TestVideoEndpoints(t *testing.T) {

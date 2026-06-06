@@ -60,6 +60,51 @@ func TestSendPost_HTTPError(t *testing.T) {
 	}
 }
 
+func TestSendGroupMentionPost_UsesGroupMentionPayload(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/group/140324085762/post" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		var body struct {
+			GroupID        int64   `json:"group_id"`
+			Text           string  `json:"text"`
+			Items          []any   `json:"items"`
+			Links          []any   `json:"links"`
+			MentionItemIDs []int64 `json:"mention_item_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.GroupID != 140324085762 {
+			t.Fatalf("group_id = %d", body.GroupID)
+		}
+		if len(body.MentionItemIDs) != 1 || body.MentionItemIDs[0] != 87368646659 {
+			t.Fatalf("mention_item_ids = %#v", body.MentionItemIDs)
+		}
+		wantPrefix := `<a class='at_mention_compose' rel='{"id":87368646659}'>@nursecoord-bot</a>`
+		if !strings.HasPrefix(body.Text, wantPrefix+" ") {
+			t.Fatalf("text = %q", body.Text)
+		}
+		if body.Items == nil || body.Links == nil {
+			t.Fatalf("items/links should be empty arrays, got items=%#v links=%#v", body.Items, body.Links)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Post{ID: "p1", Text: body.Text})
+	})
+	defer srv.Close()
+
+	post, err := client.SendGroupMentionPost(context.Background(), "140324085762", "87368646659", "nursecoord-bot", "Please take over.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.ID != "p1" {
+		t.Fatalf("post ID = %q", post.ID)
+	}
+}
+
 func TestUpdatePost_Success(t *testing.T) {
 	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {

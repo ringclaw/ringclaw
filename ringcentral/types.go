@@ -68,6 +68,16 @@ type CreatePostRequest struct {
 	Text string `json:"text"`
 }
 
+// CreateGroupPostRequest is the FIJI/RC group post payload used when a
+// person_id mention must be represented with mention_item_ids.
+type CreateGroupPostRequest struct {
+	GroupID        int64   `json:"group_id"`
+	Text           string  `json:"text"`
+	Items          []any   `json:"items"`
+	Links          []any   `json:"links"`
+	MentionItemIDs []int64 `json:"mention_item_ids"`
+}
+
 // UpdatePostRequest is the body for updating a post.
 type UpdatePostRequest struct {
 	Text string `json:"text"`

@@ -15,6 +15,10 @@ func teamMessagingChatPostEndpoint(chatID, postID string) string {
 	return fmt.Sprintf("%s/%s", teamMessagingChatPostsEndpoint(chatID), postID)
 }
 
+func groupPostEndpoint(groupID string) string {
+	return fmt.Sprintf("/api/group/%s/post", groupID)
+}
+
 func videoBridgesEndpoint() string {
 	return "/rcvideo/v2/account/~/extension/~/bridges"
 }

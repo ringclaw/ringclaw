@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"mime"
@@ -171,6 +172,64 @@ func (c *Client) SendPost(ctx context.Context, chatID, text string) (*Post, erro
 	}
 	c.markSentPost(post.ID)
 	return &post, nil
+}
+
+// SendGroupMentionPost creates a post through the RC group endpoint with a
+// person_id mention payload. FIJI group mentions use mention_item_ids instead
+// of the Team Messaging markdown mention syntax.
+func (c *Client) SendGroupMentionPost(ctx context.Context, groupID, personID, displayName, text string) (*Post, error) {
+	groupIDInt, err := parseInt64ID("group_id", groupID)
+	if err != nil {
+		return nil, err
+	}
+	personIDInt, err := parseInt64ID("person_id", personID)
+	if err != nil {
+		return nil, err
+	}
+	displayName = strings.TrimSpace(strings.TrimPrefix(displayName, "@"))
+	if displayName == "" {
+		displayName = personID
+	}
+	text = strings.TrimSpace(text)
+	mention := fmt.Sprintf(
+		`<a class='at_mention_compose' rel='{"id":%d}'>@%s</a>`,
+		personIDInt,
+		html.EscapeString(displayName),
+	)
+	reqBody := CreateGroupPostRequest{
+		GroupID:        groupIDInt,
+		Text:           strings.TrimSpace(mention + " " + text),
+		Items:          []any{},
+		Links:          []any{},
+		MentionItemIDs: []int64{personIDInt},
+	}
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal group post: %w", err)
+	}
+
+	respBody, err := c.doRequest(ctx, http.MethodPost, groupPostEndpoint(strconv.FormatInt(groupIDInt, 10)), "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	var post Post
+	if err := json.Unmarshal(respBody, &post); err != nil {
+		return nil, fmt.Errorf("parse group post response: %w", err)
+	}
+	c.markSentPost(post.ID)
+	return &post, nil
+}
+
+func parseInt64ID(name, value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("%s is empty", name)
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("%s must be a positive numeric ID: %q", name, value)
+	}
+	return id, nil
 }
 
 // UpdatePost updates an existing post's text.
