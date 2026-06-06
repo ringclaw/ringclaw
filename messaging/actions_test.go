@@ -2668,7 +2668,7 @@ func TestExecuteAgentActions_UnknownTypeFallback(t *testing.T) {
 }
 
 func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) {
-	t.Setenv("RINGCLAW_BOT_ID", "personal-ava-test")
+	t.Setenv("BOT_ID", "personal-ava-test")
 	var taskCalls int
 	var cardCalls int
 	var postedCard map[string]any
