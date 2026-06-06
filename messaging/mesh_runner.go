@@ -81,6 +81,7 @@ type MeshRunnerOptions struct {
 	DefaultChatID  string
 	Capabilities   []string
 	AllowedActions []string
+	RolePeers      map[string]RolePeer
 }
 
 type MeshRunner struct {
@@ -91,6 +92,7 @@ type MeshRunner struct {
 	defaultChatID  string
 	capabilities   []string
 	allowedActions []string
+	rolePeers      map[string]RolePeer
 }
 
 func NewMeshRunner(opts MeshRunnerOptions) *MeshRunner {
@@ -102,6 +104,7 @@ func NewMeshRunner(opts MeshRunnerOptions) *MeshRunner {
 		defaultChatID:  strings.TrimSpace(opts.DefaultChatID),
 		capabilities:   append([]string(nil), opts.Capabilities...),
 		allowedActions: normalizeMeshAllowedActions(opts.AllowedActions),
+		rolePeers:      cloneRolePeers(opts.RolePeers),
 	}
 }
 
@@ -164,6 +167,7 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 			OwnerDMChat:     ownerDMChat,
 			Capabilities:    r.capabilities,
 			MeshTaskCreator: r.client,
+			RolePeers:       cloneRolePeers(r.rolePeers),
 		})
 		restore()
 		if len(actionResults) > 0 {
@@ -175,6 +179,18 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 		Result:       strings.TrimSpace(result),
 		ActionEvents: actionEvents,
 	})
+}
+
+func cloneRolePeers(peers map[string]RolePeer) map[string]RolePeer {
+	if len(peers) == 0 {
+		return nil
+	}
+	out := make(map[string]RolePeer, len(peers))
+	for roleID, peer := range peers {
+		peer.SharedChatIDs = append([]string(nil), peer.SharedChatIDs...)
+		out[roleID] = peer
+	}
+	return out
 }
 
 func hasNonMeshTaskAction(actions []AgentAction) bool {

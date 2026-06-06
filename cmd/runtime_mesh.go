@@ -139,6 +139,7 @@ func runRuntimeMeshPoller(ctx context.Context, interval time.Duration, cfg *conf
 				DefaultChatID:  firstConfiguredChatID(cfg),
 				Capabilities:   cfg.RC.Capabilities,
 				AllowedActions: cfg.Mesh.AllowedActions,
+				RolePeers:      meshRolePeersFromConfig(cfg.Mesh.RolePeers),
 			})
 			if err := runner.ProcessOnce(ctx); err != nil {
 				slog.Warn("runtime mesh poll failed", "component", "runtime_mesh", "error", err)
@@ -158,4 +159,36 @@ func firstConfiguredChatID(cfg *config.Config) string {
 		return ""
 	}
 	return strings.TrimSpace(cfg.RC.ChatIDs[0])
+}
+
+func meshRolePeersFromConfig(peers map[string]config.MeshRolePeerConfig) map[string]messaging.RolePeer {
+	if len(peers) == 0 {
+		return nil
+	}
+	out := make(map[string]messaging.RolePeer, len(peers))
+	for roleID, peer := range peers {
+		roleID = strings.TrimSpace(roleID)
+		if roleID == "" {
+			roleID = strings.TrimSpace(peer.RoleID)
+		}
+		if roleID == "" {
+			continue
+		}
+		rolePeer := messaging.RolePeer{
+			RoleID:        strings.TrimSpace(peer.RoleID),
+			RoleName:      peer.RoleName,
+			BotID:         peer.BotID,
+			DisplayName:   peer.DisplayName,
+			ExtensionID:   peer.ExtensionID,
+			SharedChatIDs: append([]string(nil), peer.SharedChatIDs...),
+		}
+		if rolePeer.RoleID == "" {
+			rolePeer.RoleID = roleID
+		}
+		out[roleID] = rolePeer
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

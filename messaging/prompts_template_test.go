@@ -33,6 +33,15 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 	if !strings.Contains(got, "ACTION:MESSAGE") {
 		t.Error("ActionPromptTemplate should describe ACTION:MESSAGE")
 	}
+	if !strings.Contains(got, "ACTION:MESSAGE [chatid=<name or chat ID>] [to_role_id=<AgentsMesh role id>]") ||
+		!strings.Contains(got, "RingClaw will choose the configured shared chat and prepend the target bot mention") {
+		t.Error("ActionPromptTemplate should describe visible role-targeted bot-to-bot messages")
+	}
+	if !strings.Contains(got, "ACTION:MESH_TASK") ||
+		!strings.Contains(got, "role-nursecoord-bot") ||
+		!strings.Contains(got, "Do not send an ACTION:MESSAGE to #admin") {
+		t.Error("ActionPromptTemplate should describe Agent Mesh delegation")
+	}
 	if !strings.Contains(got, "To ask another bot/agent in the current group chat") {
 		t.Error("ActionPromptTemplate should describe current-chat agent-to-agent mention messaging")
 	}

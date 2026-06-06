@@ -28,6 +28,15 @@ type AgentAction struct {
 	Body   string
 }
 
+type RolePeer struct {
+	RoleID        string
+	RoleName      string
+	BotID         string
+	DisplayName   string
+	ExtensionID   string
+	SharedChatIDs []string
+}
+
 type MeshTaskCreator interface {
 	CreateMeshTask(context.Context, MeshRuntimeTaskCreateRequest) (MeshRuntimeTask, error)
 }
@@ -210,6 +219,9 @@ type ActionContext struct {
 	// MeshTaskCreator lets a source RingClaw runtime delegate work into
 	// AVA Control Plane Agent Mesh without carrying an admin token.
 	MeshTaskCreator MeshTaskCreator
+	// RolePeers maps AgentsMesh role IDs to concrete RingCentral bot
+	// mention targets for real RC bot-to-bot messages.
+	RolePeers map[string]RolePeer
 }
 
 // ExecuteAgentActions executes parsed actions against the RC API.
@@ -220,6 +232,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 	if forceClinicalRefillApproval {
 		actions = append([]AgentAction{buildClinicalRefillApprovalCardAction(opts.OriginalText, opts)}, actions...)
 	}
+	actions = normalizeLegacyMeshDelegationActions(actions, opts)
 	for _, a := range actions {
 		record := func(status string, targetChat string, crossChat bool, extra map[string]any) {
 			recordAgentActionEvent(ctx, ActionEvent{
@@ -298,7 +311,26 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		targetChat := chatID
 		crossChat := false
 		var currentChatMention *ringcentral.Mention
-		if cid := a.Params["chatid"]; cid != "" {
+		rolePeer, hasRolePeer := rolePeerForAction(a, opts.RolePeers)
+		if hasRolePeer {
+			if !opts.OriginIsOwner {
+				record("blocked", "", false, map[string]any{"reason": "owner_required", "to_role_id": rolePeer.RoleID})
+				results = append(results, "Refused role message: only trusted senders can message another bot role.")
+				continue
+			}
+			if strings.TrimSpace(rolePeer.ExtensionID) == "" {
+				record("failed", "", false, map[string]any{"reason": "missing_extension_id", "to_role_id": rolePeer.RoleID})
+				results = append(results, fmt.Sprintf("Failed to message role %s: target bot extension ID is not configured.", rolePeer.RoleID))
+				continue
+			}
+			targetChat = firstNonEmptyString(rolePeer.SharedChatIDs...)
+			if targetChat == "" {
+				record("failed", "", false, map[string]any{"reason": "missing_shared_chat", "to_role_id": rolePeer.RoleID})
+				results = append(results, fmt.Sprintf("Failed to message role %s: no shared chat is configured.", rolePeer.RoleID))
+				continue
+			}
+			crossChat = targetChat != chatID
+		} else if cid := a.Params["chatid"]; cid != "" {
 			if a.Type == "MESSAGE" {
 				if mention := resolveCurrentChatMention(cid, opts.Mentions); mention != nil {
 					currentChatMention = mention
@@ -351,7 +383,11 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		// (no owner DM wired, or RC transport failure), the action
 		// is refused entirely; a silent cross-chat write with no
 		// audit record is not an acceptable failure mode.
-		if crossChat && targetChat != opts.OwnerDMChat {
+		// Role-peer messages are provisioned by the Control Plane with
+		// an explicit shared chat + target bot extension. They are the
+		// bot-to-bot collaboration path, so they do not need the owner DM
+		// pre-notice that guards free-form chatid= cross-chat writes.
+		if crossChat && targetChat != opts.OwnerDMChat && !hasRolePeer {
 			if err := announceCrossChatOrRefuse(ctx, replyClient, opts, a.Type, chatID, targetChat); err != nil {
 				slog.Warn("action: cross-chat ACTION refused (fail-closed on pre-notice)",
 					"type", a.Type, "origin", chatID, "target", targetChat,
@@ -469,7 +505,10 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			if replyClient != nil {
 				currentBotID = strings.TrimSpace(replyClient.OwnerID())
 			}
-			if currentChatMention != nil {
+			if hasRolePeer {
+				body = ensurePersonMentionPrefix(body, rolePeer.ExtensionID)
+				messageClient = replyClient
+			} else if currentChatMention != nil {
 				relayBotID := ""
 				if replyClient != nil {
 					candidate := strings.TrimSpace(replyClient.OwnerID())
@@ -496,7 +535,18 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			slog.Info("action: sent message", "chatID", targetChat, "text", util.Truncate(body, 60))
-			record("completed", targetChat, crossChat, nil)
+			details := map[string]any(nil)
+			if hasRolePeer {
+				details = map[string]any{
+					"role_peer":           true,
+					"to_role_id":          rolePeer.RoleID,
+					"target_extension_id": rolePeer.ExtensionID,
+				}
+				if rolePeer.DisplayName != "" {
+					details["target_display_name"] = rolePeer.DisplayName
+				}
+			}
+			record("completed", targetChat, crossChat, details)
 
 		case "VIDEO":
 			title := a.Params["title"]
@@ -847,6 +897,126 @@ func parseClinicalRefillRequest(text string) clinicalRefillRequest {
 		return req
 	}
 	return clinicalRefillRequest{}
+}
+
+func normalizeLegacyMeshDelegationActions(actions []AgentAction, opts ActionContext) []AgentAction {
+	if opts.MeshTaskCreator == nil || !opts.OriginIsOwner || len(actions) == 0 {
+		return actions
+	}
+	out := make([]AgentAction, 0, len(actions))
+	for _, action := range actions {
+		if converted, ok := legacyDelegationActionToMeshTask(action, opts.OriginalText); ok {
+			out = append(out, converted)
+			continue
+		}
+		out = append(out, action)
+	}
+	return out
+}
+
+func legacyDelegationActionToMeshTask(action AgentAction, originalText string) (AgentAction, bool) {
+	switch strings.ToUpper(strings.TrimSpace(action.Type)) {
+	case "MESSAGE", "NOTE", "TASK", "CARD":
+	default:
+		return AgentAction{}, false
+	}
+	chatID := strings.ToLower(strings.TrimSpace(action.Params["chatid"]))
+	body := fallbackString(strings.TrimSpace(action.Body), firstActionParam(action.Params, "title", "subject"))
+	actionText := strings.TrimSpace(strings.Join([]string{
+		body,
+		firstActionParam(action.Params, "title", "subject"),
+		firstActionParam(action.Params, "assignee"),
+	}, "\n"))
+	lowerBody := strings.ToLower(actionText)
+	lowerOriginal := strings.ToLower(strings.TrimSpace(originalText))
+	if !looksLikeLegacyDelegationTarget(chatID) && !strings.Contains(lowerBody, "task_handoff_request") && !strings.Contains(lowerBody, "nursecoord-bot") {
+		return AgentAction{}, false
+	}
+	if !strings.Contains(lowerBody, "task_handoff_request") &&
+		!strings.Contains(lowerBody, "handoff") &&
+		!strings.Contains(lowerBody, "coverage") &&
+		!strings.Contains(lowerBody, "交接") &&
+		!strings.Contains(lowerOriginal, "交接") &&
+		!strings.Contains(lowerOriginal, "缺勤") &&
+		!strings.Contains(lowerOriginal, "absence") &&
+		!strings.Contains(lowerOriginal, "handoff") {
+		return AgentAction{}, false
+	}
+	toRoleID := inferDelegationRoleID(lowerBody)
+	if toRoleID == "" {
+		toRoleID = "role-nursecoord-bot"
+	}
+	summary := firstNonEmptyLine(body)
+	if summary == "" {
+		summary = strings.TrimSpace(originalText)
+	}
+	return AgentAction{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      toRoleID,
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": summary,
+		},
+		Body: fallbackString(body, "Coordinate coverage transfer and report completion."),
+	}, true
+}
+
+func looksLikeLegacyDelegationTarget(chatID string) bool {
+	chatID = strings.TrimPrefix(strings.TrimSpace(chatID), "#")
+	switch chatID {
+	case "admin", "admins", "admin-channel", "admin chat":
+		return true
+	default:
+		return false
+	}
+}
+
+func inferDelegationRoleID(lowerBody string) string {
+	for _, role := range []string{"nursecoord-bot", "clinical-bot", "andrew-bot", "alexis-bot"} {
+		if strings.Contains(lowerBody, role) {
+			return "role-" + role
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func rolePeerForAction(action AgentAction, peers map[string]RolePeer) (RolePeer, bool) {
+	if strings.ToUpper(strings.TrimSpace(action.Type)) != "MESSAGE" || len(peers) == 0 {
+		return RolePeer{}, false
+	}
+	roleID := firstActionParam(action.Params, "to_role_id", "to_role", "role_id", "role")
+	if roleID == "" {
+		return RolePeer{}, false
+	}
+	peer, ok := peers[roleID]
+	if !ok {
+		return RolePeer{}, false
+	}
+	if peer.RoleID == "" {
+		peer.RoleID = roleID
+	}
+	return peer, true
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func looksLikeNameToken(token string) bool {

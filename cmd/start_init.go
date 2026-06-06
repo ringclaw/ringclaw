@@ -101,6 +101,7 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 		slog.Info("agent conversation namespace configured", "component", "start", "namespace", ns)
 	}
 	handler.SetCapabilities(cfg.RC.Capabilities)
+	handler.SetRolePeers(cfg.Mesh.RolePeers)
 
 	// Populate agent metas for /status
 	var metas []messaging.AgentMeta

@@ -112,6 +112,71 @@ func TestMeshRunnerExecutesAgentActionsAndCompletesTask(t *testing.T) {
 	}
 }
 
+func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
+	var sentPath string
+	var sentText string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/posts") {
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post: %v", err)
+			}
+			sentPath = r.URL.Path
+			sentText = body.Text
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "post-1", Text: body.Text})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	botClient := ringcentral.NewBotClient(server.URL, "bot-token")
+	botClient.SetOwnerID("nursecoord-ext")
+	ag := &meshTestAgent{reply: "I will ask clinical-bot to review.\n\nACTION:MESSAGE to_role_id=role-clinical-bot\nPlease review the clinical follow-up package.\nEND_ACTION"}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
+		ID:     "task-role-message",
+		Intent: "coverage.transfer",
+		Title:  "Coverage transfer",
+		Context: MeshRuntimeContextPackage{
+			Summary: "Nurse coordinator needs clinical bot support.",
+		},
+	}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:        taskClient,
+		Agent:         ag,
+		ReplyClient:   botClient,
+		ActionClient:  botClient,
+		DefaultChatID: "nursecoord-chat",
+		RolePeers: map[string]RolePeer{
+			"role-clinical-bot": {
+				RoleID:        "role-clinical-bot",
+				DisplayName:   "clinical-bot",
+				ExtensionID:   "clinical-ext",
+				SharedChatIDs: []string{"clinical-shared-chat"},
+			},
+		},
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if !strings.Contains(sentPath, "/chats/clinical-shared-chat/") {
+		t.Fatalf("sent path = %q", sentPath)
+	}
+	if !strings.HasPrefix(sentText, "![:Person](clinical-ext) ") {
+		t.Fatalf("sent text = %q", sentText)
+	}
+	if len(taskClient.responses) != 1 {
+		t.Fatalf("responses = %#v", taskClient.responses)
+	}
+	events := taskClient.responses[0].ActionEvents
+	if len(events) != 1 || events[0].Details["to_role_id"] != "role-clinical-bot" {
+		t.Fatalf("action events = %#v", events)
+	}
+}
+
 func TestMeshRunnerSupportsWaitingStatus(t *testing.T) {
 	ag := &meshTestAgent{reply: "MESH_STATUS: waiting\nWaiting for Jennifer to reply YES within 15 minutes."}
 	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{ID: "task-2", Intent: "coverage.transfer", Title: "Wait for backup"}}}

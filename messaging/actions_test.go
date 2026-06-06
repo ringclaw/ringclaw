@@ -2515,6 +2515,62 @@ func TestExecuteAgentActions_MessageRelayCollaboratorPreservedWithoutChatID(t *t
 	}
 }
 
+func TestExecuteAgentActions_MessageToRolePeerAddsMentionAndSharedChat(t *testing.T) {
+	var mu sync.Mutex
+	var postPath string
+	var postedBody string
+	replySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/posts") && r.Method == http.MethodPost {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			postPath = r.URL.Path
+			postedBody, _ = body["text"].(string)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "p1"})
+	}))
+	defer replySrv.Close()
+
+	replyClient := ringcentral.NewBotClient(replySrv.URL, "bot-token")
+	replyClient.SetOwnerID("alexis-ext")
+	actions := []AgentAction{{
+		Type: "MESSAGE",
+		Params: map[string]string{
+			"to_role_id": "role-nursecoord-bot",
+		},
+		Body: "Alexis 今日缺勤，请接手续剂队列和跟进项。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), replyClient, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner: true,
+		RolePeers: map[string]RolePeer{
+			"role-nursecoord-bot": {
+				RoleID:        "role-nursecoord-bot",
+				DisplayName:   "nursecoord-bot",
+				ExtensionID:   "nursecoord-ext",
+				SharedChatIDs: []string{"shared-admin-chat"},
+			},
+		},
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no errors, got %v", results)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(postPath, "/chats/shared-admin-chat/") {
+		t.Fatalf("expected post to shared chat, got %q", postPath)
+	}
+	if !strings.HasPrefix(postedBody, "![:Person](nursecoord-ext) ") {
+		t.Fatalf("expected nursecoord mention prefix, got %q", postedBody)
+	}
+	if !strings.Contains(postedBody, "续剂队列") {
+		t.Fatalf("expected handoff body in post, got %q", postedBody)
+	}
+}
+
 func TestExecuteAgentActions_NonOwnerForcesOriginChat(t *testing.T) {
 	var mu sync.Mutex
 	var postPaths []string
@@ -2800,6 +2856,93 @@ func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 	}
 	if req.Instructions != "Transfer Alexis task queue and report completion." || req.Context.Summary != "Alexis is absent today." {
 		t.Fatalf("mesh task context = %#v", req)
+	}
+}
+
+func TestExecuteAgentActions_LegacyAdminHandoffMessageCreatesMeshTask(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	actions := []AgentAction{{
+		Type: "MESSAGE",
+		Params: map[string]string{
+			"chatid": "#admin",
+		},
+		Body: "TASK_HANDOFF_REQUEST\n来源：alexis-bot\n任务摘要：Alexis 今日缺勤，需要 nursecoord-bot 协调覆盖。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), nil, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		OriginalText:    "今天身体不舒服，缺勤，帮我处理交接",
+		MeshTaskCreator: creator,
+	})
+
+	if len(results) != 1 || !strings.Contains(results[0], "mesh-task-1") {
+		t.Fatalf("results = %#v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	req := creator.requests[0]
+	if req.ToRoleID != "role-nursecoord-bot" || req.Intent != "coverage.transfer" {
+		t.Fatalf("mesh task request = %#v", req)
+	}
+	if !strings.Contains(req.Instructions, "TASK_HANDOFF_REQUEST") || req.Context.Summary != "TASK_HANDOFF_REQUEST" {
+		t.Fatalf("mesh task context = %#v", req)
+	}
+}
+
+func TestExecuteAgentActions_LegacyAdminHandoffNoteCreatesMeshTask(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	actions := []AgentAction{{
+		Type: "NOTE",
+		Params: map[string]string{
+			"chatid": "admin",
+			"title":  "Alexis absence handoff",
+		},
+		Body: "今日缺勤交接文档：续剂队列和跟进项需要 nursecoord-bot 协调覆盖。",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), nil, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		OriginalText:    "今天身体不舒服，缺勤，帮我处理交接",
+		MeshTaskCreator: creator,
+	})
+
+	if len(results) != 1 || !strings.Contains(results[0], "mesh-task-1") {
+		t.Fatalf("results = %#v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	req := creator.requests[0]
+	if req.ToRoleID != "role-nursecoord-bot" || req.Intent != "coverage.transfer" {
+		t.Fatalf("mesh task request = %#v", req)
+	}
+	if !strings.Contains(req.Instructions, "缺勤交接文档") {
+		t.Fatalf("mesh task instructions = %q", req.Instructions)
+	}
+}
+
+func TestExecuteAgentActions_LegacyAdminMessageWithoutMeshStillResolvesNormally(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	actions := []AgentAction{{
+		Type: "MESSAGE",
+		Params: map[string]string{
+			"chatid": "#admin",
+		},
+		Body: "Please review this admin announcement.",
+	}}
+
+	got := normalizeLegacyMeshDelegationActions(actions, ActionContext{
+		OriginIsOwner:   true,
+		OriginalText:    "send announcement",
+		MeshTaskCreator: creator,
+	})
+
+	if len(creator.requests) != 0 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	if len(got) != 1 || got[0].Type != "MESSAGE" {
+		t.Fatalf("expected normal message action to remain unchanged, got %#v", got)
 	}
 }
 

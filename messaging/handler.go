@@ -134,6 +134,7 @@ type Handler struct {
 	// It is authenticated by bot_id + bootstrap token and is only wired for
 	// Control Plane managed bot pods.
 	meshTaskCreator MeshTaskCreator
+	rolePeers       map[string]RolePeer
 }
 
 // NewHandler creates a new message handler.
@@ -270,6 +271,46 @@ func (h *Handler) actionCapabilities() []string {
 	out := make([]string, 0, len(h.enabledCapabilities))
 	for capability := range h.enabledCapabilities {
 		out = append(out, capability)
+	}
+	return out
+}
+
+func (h *Handler) SetRolePeers(peers map[string]config.MeshRolePeerConfig) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.rolePeers = make(map[string]RolePeer, len(peers))
+	for roleID, peer := range peers {
+		roleID = strings.TrimSpace(roleID)
+		if roleID == "" {
+			roleID = strings.TrimSpace(peer.RoleID)
+		}
+		if roleID == "" {
+			continue
+		}
+		h.rolePeers[roleID] = RolePeer{
+			RoleID:        firstNonEmptyString(peer.RoleID, roleID),
+			RoleName:      peer.RoleName,
+			BotID:         peer.BotID,
+			DisplayName:   peer.DisplayName,
+			ExtensionID:   peer.ExtensionID,
+			SharedChatIDs: append([]string(nil), peer.SharedChatIDs...),
+		}
+	}
+	if len(h.rolePeers) == 0 {
+		h.rolePeers = nil
+	}
+}
+
+func (h *Handler) actionRolePeers() map[string]RolePeer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if len(h.rolePeers) == 0 {
+		return nil
+	}
+	out := make(map[string]RolePeer, len(h.rolePeers))
+	for roleID, peer := range h.rolePeers {
+		peer.SharedChatIDs = append([]string(nil), peer.SharedChatIDs...)
+		out[roleID] = peer
 	}
 	return out
 }
@@ -1086,6 +1127,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			Capabilities:      h.actionCapabilities(),
 			OriginalText:      originalText,
 			MeshTaskCreator:   h.MeshTaskCreator(),
+			RolePeers:         h.actionRolePeers(),
 		})
 		if len(results) > 0 {
 			defer func() {

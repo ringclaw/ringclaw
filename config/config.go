@@ -73,13 +73,23 @@ type Config struct {
 // MeshConfig enables AVA Control Plane Agent Mesh task polling for managed
 // runtimes. The runtime identity comes from the Control Plane claim config.
 type MeshConfig struct {
-	Enabled         bool     `json:"enabled,omitempty"`
-	ControlPlaneURL string   `json:"control_plane_url,omitempty"`
-	AgentID         string   `json:"agent_id,omitempty"`
-	RoleID          string   `json:"role_id,omitempty"`
-	RoleName        string   `json:"role_name,omitempty"`
-	PollInterval    string   `json:"poll_interval,omitempty"`
-	AllowedActions  []string `json:"allowed_actions,omitempty"`
+	Enabled         bool                          `json:"enabled,omitempty"`
+	ControlPlaneURL string                        `json:"control_plane_url,omitempty"`
+	AgentID         string                        `json:"agent_id,omitempty"`
+	RoleID          string                        `json:"role_id,omitempty"`
+	RoleName        string                        `json:"role_name,omitempty"`
+	PollInterval    string                        `json:"poll_interval,omitempty"`
+	AllowedActions  []string                      `json:"allowed_actions,omitempty"`
+	RolePeers       map[string]MeshRolePeerConfig `json:"role_peers,omitempty"`
+}
+
+type MeshRolePeerConfig struct {
+	RoleID        string   `json:"role_id"`
+	RoleName      string   `json:"role_name,omitempty"`
+	BotID         string   `json:"bot_id,omitempty"`
+	DisplayName   string   `json:"display_name,omitempty"`
+	ExtensionID   string   `json:"extension_id,omitempty"`
+	SharedChatIDs []string `json:"shared_chat_ids,omitempty"`
 }
 
 type BotContentConfig struct {
