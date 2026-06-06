@@ -2045,6 +2045,67 @@ func TestExecuteAgentActions_ClinicalRefillSMSResolvesPatientMemoryPhone(t *test
 	}
 }
 
+func TestExecuteAgentActions_ClinicalRefillSMSResolvesPatientIDTargetFromMemory(t *testing.T) {
+	memoryDir := t.TempDir()
+	t.Setenv("RINGCLAW_MEMORY_DIR", memoryDir)
+	entityDir := filepath.Join(memoryDir, "entities")
+	if err := os.MkdirAll(entityDir, 0o700); err != nil {
+		t.Fatalf("create entity dir: %v", err)
+	}
+	entity := `# 患者档案 · AX-2847
+
+患者姓名：Maria Lopez
+患者 ID：AX-2847
+手机号：+12025462999
+`
+	if err := os.WriteFile(filepath.Join(entityDir, "AX-2847.md"), []byte(entity), 0o600); err != nil {
+		t.Fatalf("write entity memory: %v", err)
+	}
+
+	var smsTo string
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/restapi/v1.0/account/~/extension/~/phone-number":
+			json.NewEncoder(w).Encode(ringcentral.ExtensionPhoneNumberList{
+				Records: []ringcentral.ExtensionPhoneNumber{{PhoneNumber: "+14155550100", Status: "Normal"}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/extension/~/sms":
+			var body ringcentral.CreateSMSRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode sms request: %v", err)
+			}
+			if len(body.To) != 1 {
+				t.Fatalf("expected one SMS recipient, got %+v", body.To)
+			}
+			smsTo = body.To[0].PhoneNumber
+			json.NewEncoder(w).Encode(ringcentral.SMSMessage{ID: "sms-clinical-1", MessageStatus: "Queued"})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/c1/posts":
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "post-1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/directory/entries/search":
+			t.Fatalf("clinical patient ID SMS target should be resolved from memory before directory search")
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "c1", []AgentAction{{
+		Type:   "SMS",
+		Params: map[string]string{"to": "AX-2847"},
+		Body:   "Your refill has been approved.",
+	}}, ActionContext{
+		OriginIsOwner: true,
+		OriginalText:  "continue refill workflow after provider approval",
+	})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if smsTo != "+12025462999" {
+		t.Fatalf("SMS recipient = %q, want memory phone", smsTo)
+	}
+}
+
 func TestExecuteAgentActions_LegacyRingOutAliasesToFijiClientCallAndIgnoresFrom(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("legacy RINGOUT should not call RingOut REST API: %s %s", r.Method, r.URL.Path)

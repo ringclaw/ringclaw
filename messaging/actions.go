@@ -719,7 +719,7 @@ func resolveClinicalRefillSMSTargetFromMemory(params map[string]string, opts Act
 	if target == "" || looksLikePhoneNumber(target) {
 		return
 	}
-	patientID := clinicalRefillDecisionPatientID(opts.OriginalText)
+	patientID := clinicalRefillSMSPatientID(target, opts.OriginalText)
 	if patientID == "" {
 		return
 	}
@@ -737,6 +737,13 @@ func resolveClinicalRefillSMSTargetFromMemory(params map[string]string, opts Act
 	}
 	slog.Info("action: resolved clinical refill sms target from memory",
 		"patientID", patientID, "target", target, "patient", entity.Name, "phone", entity.Phone)
+}
+
+func clinicalRefillSMSPatientID(target string, originalText string) string {
+	if patientID := normalizeClinicalPatientID(target); patientID != "" {
+		return patientID
+	}
+	return clinicalRefillDecisionPatientID(originalText)
 }
 
 func clinicalRefillDecisionPatientID(text string) string {
