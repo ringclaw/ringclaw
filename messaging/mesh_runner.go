@@ -225,6 +225,7 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 		reply = retryReply
 		cleanReply, actions = ParseAgentActions(reply)
 	}
+	actions = r.normalizeCoverageTransferActions(task, actions)
 	status, result := parseMeshRuntimeStatus(cleanReply)
 	cleanResult := strings.TrimSpace(result)
 	actions, blockedActions := r.filterAllowedActions(actions)
@@ -359,7 +360,7 @@ func (r *MeshRunner) buildCoverageSMSCorrectionPrompt(task MeshRuntimeTask, prev
 	b.WriteString(fmt.Sprintf("\n\nPrevious mesh response did not include an executable ACTION:%s, so the coverage transfer cannot advance to waiting state yet.\n", requiredAction))
 	b.WriteString("Return a corrected response now. ")
 	if requiredAction == "CARD" {
-		b.WriteString("Include ACTION:CARD with an Adaptive Card status update in the shared/admin group chat. The card should show the coverage request, Jennifer/Karen candidates, response window, and current waiting status. ")
+		b.WriteString("Include ACTION:CARD with an Adaptive Card status update. Omit chatid; the runtime posts the card to the default shared/admin group chat. The card JSON must show the coverage request, Jennifer/Karen candidate names and phone numbers, response window, and current waiting status. ")
 		b.WriteString("Do not use message, task, mesh delegation, or SMS outreach as a substitute for this required card update. ")
 	} else {
 		b.WriteString("Include ACTION:SMS blocks for the backup coverage outreach using the phone numbers from DOMAIN.md. ")
@@ -372,6 +373,43 @@ func (r *MeshRunner) buildCoverageSMSCorrectionPrompt(task MeshRuntimeTask, prev
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func (r *MeshRunner) normalizeCoverageTransferActions(task MeshRuntimeTask, actions []AgentAction) []AgentAction {
+	if !strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") || len(actions) == 0 {
+		return actions
+	}
+	out := make([]AgentAction, len(actions))
+	for i, action := range actions {
+		out[i] = action
+		if !strings.EqualFold(strings.TrimSpace(action.Type), "CARD") || !isSharedAdminChatAlias(action.Params["chatid"]) {
+			continue
+		}
+		params := make(map[string]string, len(action.Params))
+		for key, value := range action.Params {
+			if strings.EqualFold(strings.TrimSpace(key), "chatid") {
+				continue
+			}
+			params[key] = value
+		}
+		out[i].Params = params
+	}
+	return out
+}
+
+func isSharedAdminChatAlias(raw string) bool {
+	value := strings.ToLower(strings.TrimSpace(strings.Trim(raw, `"'`)))
+	value = strings.ReplaceAll(value, "_", " ")
+	value = strings.ReplaceAll(value, "-", " ")
+	value = strings.Join(strings.Fields(value), " ")
+	switch value {
+	case "#admin", "admin", "admin chat", "admin group", "shared", "shared chat", "shared group",
+		"shared/admin", "shared/admin chat", "shared/admin group", "shared admin", "shared admin chat",
+		"shared admin group", "current", "current chat", "this chat":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *MeshRunner) missingRequiredActionEvents(task MeshRuntimeTask, actions []AgentAction) []MeshRuntimeTaskActionEvent {
@@ -503,7 +541,7 @@ func buildMeshTaskPromptWithAllowedActions(task MeshRuntimeTask, allowedActions 
 		b.WriteString("Do not output ACTION types outside this list; if required work is not allowed, explain what is waiting instead.\n")
 	}
 	if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") && containsMeshAllowedAction(allowedActions, "CARD") {
-		b.WriteString("For coverage.transfer, first post an ACTION:CARD status update in the shared/admin group chat using details from DOMAIN.md, including Jennifer/Karen candidates, response window, and current waiting status. ")
+		b.WriteString("For coverage.transfer, first post an ACTION:CARD status update. Omit chatid; the runtime posts the card to the default shared/admin group chat. Use details from DOMAIN.md inside the card JSON, including Jennifer/Karen candidate names and phone numbers, response window, and current waiting status. ")
 		b.WriteString("Do not use message, task, mesh delegation, or SMS outreach as a substitute for the required status card; after emitting the card, use MESH_STATUS: waiting if you are waiting for replies.\n")
 	} else if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") && containsMeshAllowedAction(allowedActions, "SMS") {
 		b.WriteString("For coverage.transfer, first execute backup coverage outreach with ACTION:SMS to the phone numbers in DOMAIN.md. ")

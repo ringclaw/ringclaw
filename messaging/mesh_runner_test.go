@@ -508,8 +508,9 @@ func TestMeshRunnerPromptListsAllowedActionsAndCoverageCardFirst(t *testing.T) {
 	}
 	if !strings.Contains(got, "For coverage.transfer") ||
 		!strings.Contains(got, "first post an ACTION:CARD status update") ||
-		!strings.Contains(got, "using details from DOMAIN.md") ||
-		!strings.Contains(got, "Jennifer/Karen candidates") ||
+		!strings.Contains(got, "Omit chatid") ||
+		!strings.Contains(got, "Use details from DOMAIN.md inside the card JSON") ||
+		!strings.Contains(got, "Jennifer/Karen candidate names and phone numbers") ||
 		!strings.Contains(got, "Do not use message, task, mesh delegation, or SMS outreach as a substitute") {
 		t.Fatalf("mesh task prompt missing coverage CARD-first guard: %s", got)
 	}
@@ -591,7 +592,7 @@ func TestMeshRunnerRetriesCoverageTransferUntilCardAction(t *testing.T) {
 	client := ringcentral.NewBotClient(server.URL, "bot-token")
 	ag := &meshTestAgent{replies: []string{
 		"MESH_STATUS: waiting\n我正在准备联系 Jennifer/Karen 覆盖。",
-		"MESH_STATUS: waiting\nACTION:CARD\n{\"type\":\"AdaptiveCard\",\"version\":\"1.3\",\"body\":[{\"type\":\"TextBlock\",\"text\":\"Coverage update: Jennifer (+16194930090) / Karen waiting for response\"}]}\nEND_ACTION",
+		"MESH_STATUS: waiting\nACTION:CARD chatid=#admin\n{\"type\":\"AdaptiveCard\",\"version\":\"1.3\",\"body\":[{\"type\":\"TextBlock\",\"text\":\"Coverage update: Jennifer (+16194930090) / Karen waiting for response\"}]}\nEND_ACTION",
 	}}
 	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
 		ID:     "task-retry-sms",
@@ -618,6 +619,9 @@ func TestMeshRunnerRetriesCoverageTransferUntilCardAction(t *testing.T) {
 	}
 	if !strings.Contains(ag.prompts[1], "Previous mesh response did not include an executable ACTION:CARD") {
 		t.Fatalf("second prompt did not force CARD correction: %s", ag.prompts[1])
+	}
+	if !strings.Contains(ag.prompts[1], "Omit chatid") || !strings.Contains(ag.prompts[1], "phone numbers") {
+		t.Fatalf("second prompt should keep card target implicit and phone numbers in JSON: %s", ag.prompts[1])
 	}
 	if len(cards) != 1 {
 		t.Fatalf("adaptive card requests = %#v", cards)
