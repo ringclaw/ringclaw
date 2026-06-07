@@ -376,6 +376,12 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		crossChat := false
 		var currentChatMention *ringcentral.Mention
 		rolePeer, hasRolePeer := rolePeerForAction(a, opts.RolePeers)
+		targetResolverClient := actionClient
+		namedChatTargetUsesReplyClient := false
+		if cid := a.Params["chatid"]; shouldUseReplyClientForNamedChatTarget(cid, replyClient) {
+			targetResolverClient = replyClient
+			namedChatTargetUsesReplyClient = true
+		}
 		mentionID := ""
 		mentionSource := ""
 		targetChatSource := ""
@@ -411,7 +417,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				// the manager is wired; otherwise force to origin
 				// chat (legacy silent-override path).
 				if opts.OOB != nil && opts.OwnerDMChat != "" && opts.OwnerID != "" {
-					resolved, err := resolveChatParam(ctx, actionClient, cid, chatID)
+					resolved, err := resolveChatParam(ctx, targetResolverClient, cid, chatID)
 					if err != nil {
 						slog.Error("action: failed to resolve chatid", "chatid", cid, "error", err)
 						record("failed", chatID, false, map[string]any{"error": err.Error(), "reason": "resolve_chat_failed"})
@@ -429,7 +435,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 						"type", a.Type, "requested", cid, "origin", chatID)
 				}
 			} else {
-				resolved, err := resolveChatParam(ctx, actionClient, cid, chatID)
+				resolved, err := resolveChatParam(ctx, targetResolverClient, cid, chatID)
 				if err != nil {
 					slog.Error("action: failed to resolve chatid", "chatid", cid, "error", err)
 					record("failed", chatID, false, map[string]any{"error": err.Error(), "reason": "resolve_chat_failed"})
@@ -454,7 +460,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		// bot-to-bot collaboration path, so they do not need the owner DM
 		// pre-notice that guards free-form chatid= cross-chat writes.
 		if crossChat && targetChat != opts.OwnerDMChat && !hasRolePeer {
-			if initialClinicalRefill && strings.EqualFold(a.Type, "CARD") && cardHasClinicalRefillSubmitActions(a) {
+			if namedChatTargetUsesReplyClient {
 				crossChat = false
 			} else if err := announceCrossChatOrRefuse(ctx, replyClient, opts, a.Type, chatID, targetChat); err != nil {
 				slog.Warn("action: cross-chat ACTION refused (fail-closed on pre-notice)",
@@ -468,11 +474,15 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 
 		switch a.Type {
 		case "NOTE":
+			noteClient := actionClient
+			if namedChatTargetUsesReplyClient && replyClient != nil {
+				noteClient = replyClient
+			}
 			title := a.Params["title"]
 			if title == "" {
 				title = "Note"
 			}
-			note, err := actionClient.CreateNote(ctx, targetChat, &ringcentral.CreateNoteRequest{
+			note, err := noteClient.CreateNote(ctx, targetChat, &ringcentral.CreateNoteRequest{
 				Title: title,
 				Body:  a.Body,
 			})
@@ -482,7 +492,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, fmt.Sprintf("Failed to create note: %v", err))
 				continue
 			}
-			if pubErr := actionClient.PublishNote(ctx, note.ID); pubErr != nil {
+			if pubErr := noteClient.PublishNote(ctx, note.ID); pubErr != nil {
 				slog.Error("action: publish note failed", "noteID", note.ID, "error", pubErr)
 			}
 			slog.Info("action: created note", "noteID", note.ID, "chatID", targetChat, "title", title)
@@ -495,6 +505,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				continue
 			}
 			taskClient := selectCurrentChatPostClient(replyClient, actionClient, targetChat, chatID)
+			if namedChatTargetUsesReplyClient && replyClient != nil {
+				taskClient = replyClient
+			}
 			req := &ringcentral.CreateTaskRequest{Subject: subject}
 			if aid := a.Params["assignee"]; aid != "" {
 				resolvedID, err := resolveAssigneeParam(ctx, actionClient, aid)
@@ -561,6 +574,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				slog.Info("action: normalized adaptive card for RingCentral compatibility", "chatID", targetChat)
 			}
 			cardClient := selectCardClient(replyClient, actionClient, targetChat, chatID)
+			if namedChatTargetUsesReplyClient && replyClient != nil {
+				cardClient = replyClient
+			}
 			card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(normalizedCardJSON))
 			if err != nil {
 				slog.Error("action: create adaptive card failed", "error", err)
@@ -574,6 +590,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		case "MESSAGE":
 			body := strings.TrimSpace(a.Body)
 			messageClient := selectCurrentChatPostClient(replyClient, actionClient, targetChat, chatID)
+			if namedChatTargetUsesReplyClient && replyClient != nil {
+				messageClient = replyClient
+			}
 			currentBotID := ""
 			if replyClient != nil {
 				currentBotID = strings.TrimSpace(replyClient.OwnerID())
@@ -1125,6 +1144,14 @@ func normalizeClinicalTarget(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	replacer := strings.NewReplacer(" ", "", "\t", "", "\n", "", "-", "", "_", "", ".", "", ",", "", "(", "", ")", "", "[", "", "]", "", "{", "", "}", "")
 	return replacer.Replace(value)
+}
+
+func shouldUseReplyClientForNamedChatTarget(raw string, replyClient *ringcentral.Client) bool {
+	if replyClient == nil {
+		return false
+	}
+	id := extractChatID(raw)
+	return id != "" && !isNumericID(id) && !isSelfPronoun(id)
 }
 
 func shouldForceClinicalRefillApproval(originalText string, actions []AgentAction) bool {

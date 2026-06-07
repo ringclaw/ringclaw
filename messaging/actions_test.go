@@ -3192,14 +3192,14 @@ func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) 
 	}
 }
 
-func TestExecuteAgentActions_ClinicalRefillApprovalFallbackTargetsProviderDM(t *testing.T) {
-	t.Setenv("BOT_ID", "personal-ava-test")
-
+func TestExecuteAgentActions_CardWithNamedChatIDUsesBotClientForDirectRouting(t *testing.T) {
 	var createConversationCalls int
 	var postedCardPath string
+	var authHeaders []string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/directory/entries/search":
 			json.NewEncoder(w).Encode(map[string]any{
@@ -3209,6 +3209,8 @@ func TestExecuteAgentActions_ClinicalRefillApprovalFallbackTargetsProviderDM(t *
 					"lastName":  "Wenner",
 				}},
 			})
+		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats":
+			json.NewEncoder(w).Encode(map[string]any{"records": []map[string]any{}})
 		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/conversations":
 			createConversationCalls++
 			json.NewEncoder(w).Encode(map[string]string{"id": "provider-dm-1", "type": "Direct"})
@@ -3222,17 +3224,18 @@ func TestExecuteAgentActions_ClinicalRefillApprovalFallbackTargetsProviderDM(t *
 	defer srv.Close()
 
 	botClient := ringcentral.NewBotClient(srv.URL, "bot-token")
+	botClient.SetOwnerID("bot-1")
 	privateClient := ringcentral.NewClient(&ringcentral.Credentials{
 		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
 	})
 	privateClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
 
 	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "clinical-chat-1", []AgentAction{{
-		Type: "CARD",
-		Body: `{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Refill Routed"}]}`,
+		Type:   "CARD",
+		Params: map[string]string{"chatid": "Andrew Wenner"},
+		Body:   `{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Approval request"}]}`,
 	}}, ActionContext{
 		OriginIsOwner: true,
-		OriginalText:  "refill AX-2847 Sertraline 100mg Andrew Wenner",
 	})
 	if len(results) != 0 {
 		t.Fatalf("unexpected results: %+v", results)
@@ -3242,6 +3245,11 @@ func TestExecuteAgentActions_ClinicalRefillApprovalFallbackTargetsProviderDM(t *
 	}
 	if postedCardPath != "/team-messaging/v1/chats/provider-dm-1/adaptive-cards" {
 		t.Fatalf("posted card path = %q", postedCardPath)
+	}
+	for _, got := range authHeaders {
+		if got != "Bearer bot-token" {
+			t.Fatalf("expected refill approval routing to use bot token, got %q; all=%v", got, authHeaders)
+		}
 	}
 }
 
