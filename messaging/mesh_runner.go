@@ -96,6 +96,19 @@ type MeshRuntimeTaskCreateRequest struct {
 	Context      MeshRuntimeContextPackage `json:"context,omitempty"`
 }
 
+type MeshRuntimeOrchestrationStartRequest struct {
+	PlanID  string                    `json:"plan_id,omitempty"`
+	Intent  string                    `json:"intent"`
+	Title   string                    `json:"title,omitempty"`
+	Context MeshRuntimeContextPackage `json:"context,omitempty"`
+}
+
+type MeshRuntimeOrchestrationStartResult struct {
+	PlanID  string                    `json:"plan_id"`
+	TraceID string                    `json:"trace_id,omitempty"`
+	Context MeshRuntimeContextPackage `json:"context,omitempty"`
+}
+
 type MeshRuntimeTaskActionEvent struct {
 	Type    string                 `json:"type"`
 	Status  string                 `json:"status"`
@@ -114,6 +127,10 @@ type MeshTaskClient interface {
 	PollMeshTasks(context.Context, MeshRuntimeTaskPollRequest) ([]MeshRuntimeTask, error)
 	CreateMeshTask(context.Context, MeshRuntimeTaskCreateRequest) (MeshRuntimeTask, error)
 	RespondMeshTask(context.Context, string, MeshRuntimeTaskResponse) error
+}
+
+type MeshOrchestrationStarter interface {
+	StartOrchestration(context.Context, MeshRuntimeOrchestrationStartRequest) (MeshRuntimeOrchestrationStartResult, error)
 }
 
 type MeshRunnerOptions struct {

@@ -236,6 +236,9 @@ type ActionContext struct {
 	// MeshTaskCreator lets a source RingClaw runtime delegate work into
 	// AVA Control Plane Agent Mesh without carrying an admin token.
 	MeshTaskCreator MeshTaskCreator
+	// OrchestrationStarter lets a source RingClaw runtime create a top-level
+	// plan before the first delegated mesh task is created.
+	OrchestrationStarter MeshOrchestrationStarter
 	// RolePeers maps AgentsMesh role IDs to concrete RingCentral bot
 	// mention targets for real RC bot-to-bot messages.
 	RolePeers map[string]RolePeer
@@ -296,6 +299,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, fmt.Sprintf("Failed to create mesh task: %v", err))
 				continue
 			}
+			req = startOrchestrationForMeshTask(ctx, req, opts, chatID, record)
 			task, err := opts.MeshTaskCreator.CreateMeshTask(ctx, req)
 			if err != nil {
 				record("failed", "", false, map[string]any{"error": err.Error(), "to_role_id": req.ToRoleID, "intent": req.Intent})
@@ -743,6 +747,59 @@ func actionEventExtraWithPlan(extra map[string]any, planID string) map[string]an
 		extra["plan_id"] = planID
 	}
 	return extra
+}
+
+func startOrchestrationForMeshTask(ctx context.Context, req MeshRuntimeTaskCreateRequest, opts ActionContext, originChatID string, record func(status string, targetChat string, crossChat bool, extra map[string]any)) MeshRuntimeTaskCreateRequest {
+	if opts.OrchestrationStarter == nil || strings.TrimSpace(req.PlanID) != "" {
+		return req
+	}
+	startReq := MeshRuntimeOrchestrationStartRequest{
+		Intent:  req.Intent,
+		Title:   req.Title,
+		Context: req.Context,
+	}
+	if startReq.Context.Data == nil {
+		startReq.Context.Data = map[string]interface{}{}
+	}
+	putMeshContextData(startReq.Context.Data, "origin_chat_id", originChatID)
+	putMeshContextData(startReq.Context.Data, "source_post_id", opts.SourcePostID)
+	putMeshContextData(startReq.Context.Data, "source_task_id", opts.SourceTaskID)
+	putMeshContextData(startReq.Context.Data, "source_agent_id", opts.SourceAgentID)
+	putMeshContextData(startReq.Context.Data, "requester_id", opts.RequesterID)
+	putMeshContextData(startReq.Context.Data, "to_role_id", req.ToRoleID)
+	putMeshContextData(startReq.Context.Data, "intent", req.Intent)
+	result, err := opts.OrchestrationStarter.StartOrchestration(ctx, startReq)
+	if err != nil {
+		record("warning", "", false, map[string]any{
+			"reason":     "orchestration_start_failed",
+			"error":      err.Error(),
+			"to_role_id": req.ToRoleID,
+			"intent":     req.Intent,
+		})
+		return req
+	}
+	req.PlanID = strings.TrimSpace(result.PlanID)
+	if req.Context.Data == nil {
+		req.Context.Data = map[string]interface{}{}
+	}
+	putMeshContextData(req.Context.Data, "plan_id", result.PlanID)
+	putMeshContextData(req.Context.Data, "trace_id", result.TraceID)
+	if result.Context.Summary != "" && req.Context.Summary == "" {
+		req.Context.Summary = result.Context.Summary
+	}
+	for key, value := range result.Context.Data {
+		if _, exists := req.Context.Data[key]; !exists {
+			req.Context.Data[key] = value
+		}
+	}
+	record("started", "", false, map[string]any{
+		"plan_id":    result.PlanID,
+		"trace_id":   result.TraceID,
+		"to_role_id": req.ToRoleID,
+		"intent":     req.Intent,
+		"reason":     "orchestration_started",
+	})
+	return req
 }
 
 var (

@@ -1117,19 +1117,25 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		if actionClient != nil {
 			ownerID = actionClient.OwnerID()
 		}
+		meshCreator := h.MeshTaskCreator()
+		var orchestrationStarter MeshOrchestrationStarter
+		if starter, ok := meshCreator.(MeshOrchestrationStarter); ok {
+			orchestrationStarter = starter
+		}
 		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
-			OriginIsOwner:     h.isOwnerSender(post.CreatorID),
-			OOB:               h.OOBManager(),
-			OwnerDMChat:       h.OwnerDMChatID(),
-			RequesterID:       post.CreatorID,
-			OwnerID:           ownerID,
-			Mentions:          post.Mentions,
-			RelayCollaborator: relayCollaboratorMention(client, post),
-			Capabilities:      h.actionCapabilities(),
-			OriginalText:      originalText,
-			SourcePostID:      post.ID,
-			MeshTaskCreator:   h.MeshTaskCreator(),
-			RolePeers:         h.actionRolePeers(),
+			OriginIsOwner:        h.isOwnerSender(post.CreatorID),
+			OOB:                  h.OOBManager(),
+			OwnerDMChat:          h.OwnerDMChatID(),
+			RequesterID:          post.CreatorID,
+			OwnerID:              ownerID,
+			Mentions:             post.Mentions,
+			RelayCollaborator:    relayCollaboratorMention(client, post),
+			Capabilities:         h.actionCapabilities(),
+			OriginalText:         originalText,
+			SourcePostID:         post.ID,
+			MeshTaskCreator:      meshCreator,
+			OrchestrationStarter: orchestrationStarter,
+			RolePeers:            h.actionRolePeers(),
 		})
 		if len(results) > 0 {
 			defer func() {

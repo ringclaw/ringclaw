@@ -46,6 +46,21 @@ type runtimeMeshTaskCreateResult struct {
 	RoutePlan messaging.MeshRuntimeRoutePlan `json:"route_plan,omitempty"`
 }
 
+type runtimeOrchestrationStartRequest struct {
+	BotID          string                              `json:"bot_id"`
+	BootstrapToken string                              `json:"bootstrap_token"`
+	PlanID         string                              `json:"plan_id,omitempty"`
+	Intent         string                              `json:"intent"`
+	Title          string                              `json:"title,omitempty"`
+	Context        messaging.MeshRuntimeContextPackage `json:"context,omitempty"`
+}
+
+type runtimeOrchestrationStartResult struct {
+	PlanID  string                              `json:"plan_id"`
+	TraceID string                              `json:"trace_id,omitempty"`
+	Context messaging.MeshRuntimeContextPackage `json:"context,omitempty"`
+}
+
 type runtimeMeshTaskRespondRequest struct {
 	BotID          string                                 `json:"bot_id"`
 	BootstrapToken string                                 `json:"bootstrap_token"`
@@ -90,6 +105,23 @@ func (c runtimeMeshTaskClient) CreateMeshTask(ctx context.Context, req messaging
 		result.Task.RoutePlan.PlanID = result.Task.PlanID
 	}
 	return result.Task, err
+}
+
+func (c runtimeMeshTaskClient) StartOrchestration(ctx context.Context, req messaging.MeshRuntimeOrchestrationStartRequest) (messaging.MeshRuntimeOrchestrationStartResult, error) {
+	var result runtimeOrchestrationStartResult
+	err := postJSON(ctx, c.controlPlaneURL, "/runtime/v1/orchestrations/start", runtimeOrchestrationStartRequest{
+		BotID:          c.botID,
+		BootstrapToken: c.bootstrapToken,
+		PlanID:         req.PlanID,
+		Intent:         req.Intent,
+		Title:          req.Title,
+		Context:        req.Context,
+	}, http.StatusCreated, &result)
+	return messaging.MeshRuntimeOrchestrationStartResult{
+		PlanID:  result.PlanID,
+		TraceID: result.TraceID,
+		Context: result.Context,
+	}, err
 }
 
 func (c runtimeMeshTaskClient) RespondMeshTask(ctx context.Context, taskID string, resp messaging.MeshRuntimeTaskResponse) error {

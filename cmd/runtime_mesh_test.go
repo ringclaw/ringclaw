@@ -80,6 +80,65 @@ func TestRuntimeMeshTaskClientPollsAndResponds(t *testing.T) {
 	}
 }
 
+func TestRuntimeMeshTaskClientStartsOrchestration(t *testing.T) {
+	var sawStart bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/runtime/v1/orchestrations/start" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		sawStart = true
+		var req struct {
+			BotID          string `json:"bot_id"`
+			BootstrapToken string `json:"bootstrap_token"`
+			Intent         string `json:"intent"`
+			Title          string `json:"title"`
+			Context        struct {
+				Data map[string]any `json:"data"`
+			} `json:"context"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode start: %v", err)
+		}
+		if req.BotID != "bot-1" || req.BootstrapToken != "boot-1" || req.Intent != "coverage.transfer" || req.Title != "Coverage handoff" {
+			t.Fatalf("start request = %#v", req)
+		}
+		if req.Context.Data["source_post_id"] != "post-123" {
+			t.Fatalf("start context data = %#v", req.Context.Data)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"plan_id":  "plan-post-123",
+			"trace_id": "trace-post-123",
+			"context": map[string]any{
+				"data": map[string]any{
+					"plan_id":  "plan-post-123",
+					"trace_id": "trace-post-123",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := runtimeMeshTaskClient{
+		controlPlaneURL: server.URL,
+		botID:           "bot-1",
+		bootstrapToken:  "boot-1",
+	}
+	result, err := client.StartOrchestration(context.Background(), messaging.MeshRuntimeOrchestrationStartRequest{
+		Intent: "coverage.transfer",
+		Title:  "Coverage handoff",
+		Context: messaging.MeshRuntimeContextPackage{Data: map[string]interface{}{
+			"source_post_id": "post-123",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("StartOrchestration() error = %v", err)
+	}
+	if !sawStart || result.PlanID != "plan-post-123" || result.TraceID != "trace-post-123" {
+		t.Fatalf("sawStart=%v result=%#v", sawStart, result)
+	}
+}
+
 func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 	var sawCreate bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

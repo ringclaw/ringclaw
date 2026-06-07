@@ -3107,6 +3107,16 @@ func (s *meshTaskCreatorActionStub) CreateMeshTask(_ context.Context, req MeshRu
 	}, nil
 }
 
+type meshOrchestrationStarterActionStub struct {
+	requests []MeshRuntimeOrchestrationStartRequest
+	result   MeshRuntimeOrchestrationStartResult
+}
+
+func (s *meshOrchestrationStarterActionStub) StartOrchestration(_ context.Context, req MeshRuntimeOrchestrationStartRequest) (MeshRuntimeOrchestrationStartResult, error) {
+	s.requests = append(s.requests, req)
+	return s.result, nil
+}
+
 func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	actions := []AgentAction{{
@@ -3137,6 +3147,53 @@ func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 	}
 	if req.Instructions != "Transfer Alexis task queue and report completion." || req.Context.Summary != "Alexis is absent today." {
 		t.Fatalf("mesh task context = %#v", req)
+	}
+}
+
+func TestExecuteAgentActions_MeshTaskStartsOrchestrationBeforeCreate(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	starter := &meshOrchestrationStarterActionStub{result: MeshRuntimeOrchestrationStartResult{
+		PlanID:  "plan-post-absence-1",
+		TraceID: "trace-post-absence-1",
+	}}
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis is absent today.",
+		},
+		Body: "Transfer Alexis task queue.",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), nil, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:        true,
+		RequesterID:          "alexis",
+		SourcePostID:         "post-absence-1",
+		MeshTaskCreator:      creator,
+		OrchestrationStarter: starter,
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no user-visible mesh results, got %v", results)
+	}
+	if len(starter.requests) != 1 {
+		t.Fatalf("orchestration start requests = %#v", starter.requests)
+	}
+	if starter.requests[0].Intent != "coverage.transfer" ||
+		starter.requests[0].Context.Data["source_post_id"] != "post-absence-1" ||
+		starter.requests[0].Context.Data["origin_chat_id"] != "origin-chat" {
+		t.Fatalf("orchestration start request = %#v", starter.requests[0])
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	if creator.requests[0].PlanID != "plan-post-absence-1" {
+		t.Fatalf("mesh task plan id = %q", creator.requests[0].PlanID)
+	}
+	if creator.requests[0].Context.Data["plan_id"] != "plan-post-absence-1" ||
+		creator.requests[0].Context.Data["trace_id"] != "trace-post-absence-1" {
+		t.Fatalf("mesh task context data = %#v", creator.requests[0].Context.Data)
 	}
 }
 
