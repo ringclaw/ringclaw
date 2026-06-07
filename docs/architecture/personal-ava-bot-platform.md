@@ -164,16 +164,19 @@ Video and Phone are default Personal AVA Pro capabilities in the action layer. O
 
 Agent Mesh turns RingClaw from a single conversation runtime into an execution
 node inside an enterprise task orchestration graph. The product control plane
-decides which role can delegate to which role; RingClaw only runs the assigned
-task for the Bot it hosts.
+decides which role can delegate to which role, creates the plan chain, and
+records the route decision; RingClaw only runs the assigned task for the Bot it
+hosts.
 
 ```mermaid
 flowchart LR
-  CP["AVA Control Plane<br/>role policy + task registry"] --> Poll["RingClaw Runtime<br/>mesh poller"]
+  CP["AVA Control Plane<br/>orchestrator + role policy + task registry"] --> Plan["PlanRun / PlanStep<br/>trace_id"]
+  Plan --> Poll["RingClaw Runtime<br/>mesh poller"]
   Poll --> Agent["Default Agent<br/>Codex / Claude / HTTP"]
   Agent --> Parser["ACTION parser<br/>existing RingClaw format"]
   Parser --> Gate["allowed_actions gate<br/>role-scoped"]
   Gate --> RC["RingCentral action clients"]
+  Gate --> Visible["Visible notification<br/>shared chat / DM"]
   Gate --> Result["task result<br/>waiting / completed / failed"]
   Result --> CP
 ```
@@ -184,30 +187,51 @@ Runtime responsibilities:
 | --- | --- |
 | Claim assigned tasks | `POST /runtime/v1/mesh/tasks` using `bot_id` + bootstrap token |
 | Preserve role context | Inject role, intent, instructions, summary, structured data, and memory refs into the agent prompt |
-| Reuse existing ACTION model | Parse the same `ACTION:MESSAGE`, `ACTION:SMS`, `ACTION:TASK`, `ACTION:CARD` blocks used by chat flows |
-| Enforce role action limits | Drop ACTION blocks not present in `mesh.allowed_actions` |
+| Reuse existing ACTION model | Parse the same `ACTION:MESSAGE`, `ACTION:TASK`, `ACTION:CARD`, and explicitly allowed high-risk action blocks used by chat flows |
+| Enforce role action limits | Execute ACTION blocks present in `mesh.allowed_actions`; blocked actions are reported as action events instead of being silently trusted |
+| Enforce truthful execution | If the model claims work has been sent/created, it must emit the matching ACTION block; for `coverage.transfer`, RingClaw retries once if the required card is missing |
 | Report audit evidence | Send task status and action execution events to `POST /runtime/v1/mesh/tasks/{taskId}/respond` |
 
 Recommended MVP action allowlist:
 
 ```text
-MESSAGE, SMS, TASK, CARD
+MESSAGE, TASK, CARD
 ```
 
-`VIDEO` and `PHONE_CALL` should stay behind explicit role allowlists or approval
-policies, because they create external collaboration side effects. Heartbeat and
-cron can use the same action execution substrate, but Agent Mesh keeps the human
-ownership chain explicit through the source role, target role, task ID, and audit
-event sequence.
+`SMS`, `VIDEO`, and `PHONE_CALL` should stay behind explicit role allowlists or
+approval policies, because they create external collaboration side effects.
+Heartbeat and cron can use the same action execution substrate, but Agent Mesh
+keeps the human ownership chain explicit through the source role, target role,
+plan ID, task ID, trace ID, and audit event sequence.
+
+For the current `coverage.transfer` demo, the target role is Card-first:
+
+```text
+coverage.transfer
+  -> target role must emit ACTION:CARD first
+  -> the card is posted in the shared/admin group
+  -> card shows Jennifer / Karen candidates, response window, waiting status, and next step
+  -> task can then return MESH_STATUS: waiting while the team confirms coverage
+```
+
+The domain data that drives this flow lives in Control Plane-managed runtime
+memory. At runtime it is mounted read-only, for example:
+
+```text
+/home/ringclaw/.ringclaw/SOUL.md
+/home/ringclaw/.ringclaw/workspace/memory/DOMAIN.md
+/home/ringclaw/.ringclaw/skills/*
+```
 
 Example: Alexis absence handoff
 
 ```text
 alexis-bot receives "I am out today"
-  -> creates a mesh task for nursecoord role
+  -> Control Plane creates a plan chain and mesh task for nursecoord role
+  -> visible notification is posted so FIJI users can see A-A coordination
   -> nursecoord-bot runtime polls the task
   -> default agent reads the handoff context
-  -> emits ACTION:MESSAGE / ACTION:SMS within allowed_actions
+  -> emits ACTION:CARD within allowed_actions
   -> RingClaw executes the actions
   -> Control Plane records completed / waiting / failed with action events
 ```
