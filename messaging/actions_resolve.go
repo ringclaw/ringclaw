@@ -54,11 +54,73 @@ func resolveNameToChatID(ctx context.Context, client *ringcentral.Client, name s
 	fullName := strings.TrimSpace(best.FirstName + " " + best.LastName)
 	slog.Info("action: resolved person", "name", name, "match", fullName, "id", best.ID)
 
+	if chatID, err := findExistingDirectChat(ctx, client, best.ID); err != nil {
+		slog.Warn("action: failed to inspect existing direct chats", "name", name, "personID", best.ID, "error", err)
+	} else if chatID != "" {
+		slog.Info("action: reused existing direct chat", "name", name, "match", fullName, "chatID", chatID)
+		return chatID, nil
+	}
+
 	chat, err := client.CreateConversation(ctx, []string{best.ID})
 	if err != nil {
 		return "", fmt.Errorf("create conversation with %s: %w", fullName, err)
 	}
 	return chat.ID, nil
+}
+
+func findExistingDirectChat(ctx context.Context, client *ringcentral.Client, personID string) (string, error) {
+	if client == nil {
+		return "", nil
+	}
+	ownerID := strings.TrimSpace(client.OwnerID())
+	if ownerID == "" || strings.TrimSpace(personID) == "" {
+		return "", nil
+	}
+	chats, err := client.ListChats(ctx, "Direct")
+	if err != nil {
+		return "", err
+	}
+	for _, chat := range chats.Records {
+		if directChatMatches(chat, ownerID, personID) {
+			return strings.TrimSpace(chat.ID), nil
+		}
+	}
+	return "", nil
+}
+
+func directChatMatches(chat ringcentral.Chat, ownerID, personID string) bool {
+	if !strings.EqualFold(strings.TrimSpace(chat.Type), "Direct") {
+		return false
+	}
+	ownerID = strings.TrimSpace(ownerID)
+	personID = strings.TrimSpace(personID)
+	if ownerID == "" || personID == "" {
+		return false
+	}
+	matchedOwner := false
+	matchedPerson := false
+	for _, member := range chat.Members {
+		if directChatMemberMatches(member, ownerID) {
+			matchedOwner = true
+		}
+		if directChatMemberMatches(member, personID) {
+			matchedPerson = true
+		}
+	}
+	return matchedOwner && matchedPerson
+}
+
+func directChatMemberMatches(member ringcentral.ChatMember, targetID string) bool {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return false
+	}
+	for _, candidate := range []string{member.ID, member.ExtensionID} {
+		if strings.TrimSpace(candidate) == targetID {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveNameToPersonID resolves a person name to a person ID via directory search.

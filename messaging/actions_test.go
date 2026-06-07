@@ -780,6 +780,57 @@ func TestResolveNameToChatID(t *testing.T) {
 	}
 }
 
+func TestResolveNameToChatID_PrefersExistingDirectChat(t *testing.T) {
+	var createConversationCalls int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "directory/entries/search"):
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"records": []map[string]string{
+					{"id": "person-1", "firstName": "Ian", "lastName": "Zhang"},
+				},
+			})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/team-messaging/v1/chats"):
+			json.NewEncoder(w).Encode(map[string]any{
+				"records": []map[string]any{
+					{
+						"id":   "existing-direct-1",
+						"type": "Direct",
+						"members": []map[string]string{
+							{"id": "bot-1"},
+							{"id": "person-1"},
+						},
+					},
+				},
+			})
+		case strings.Contains(r.URL.Path, "conversations"):
+			createConversationCalls++
+			json.NewEncoder(w).Encode(map[string]string{"id": "dm-chat-99", "type": "Direct"})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	creds := &ringcentral.Credentials{ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL}
+	client := ringcentral.NewClient(creds)
+	client.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+	client.SetOwnerID("bot-1")
+
+	chatID, err := resolveNameToChatID(context.Background(), client, "Ian Zhang")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if chatID != "existing-direct-1" {
+		t.Fatalf("expected existing-direct-1, got %q", chatID)
+	}
+	if createConversationCalls != 0 {
+		t.Fatalf("expected no create conversation call, got %d", createConversationCalls)
+	}
+}
+
 func TestResolveNameToPersonID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
