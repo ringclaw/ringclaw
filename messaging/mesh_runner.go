@@ -204,7 +204,7 @@ func (r *MeshRunner) ProcessOnce(ctx context.Context) error {
 }
 
 func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) error {
-	prompt := buildMeshTaskPrompt(task)
+	prompt := r.buildMeshTaskPrompt(task)
 	reply, err := r.agent.Chat(ctx, "mesh/"+task.ID, prompt)
 	if err != nil {
 		return r.client.RespondMeshTask(ctx, task.ID, MeshRuntimeTaskResponse{
@@ -213,10 +213,29 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 		})
 	}
 	cleanReply, actions := ParseAgentActions(reply)
+	if requiredAction := r.coverageRequiredActionType(task); requiredAction != "" && !hasMeshActionType(actions, requiredAction) {
+		correctionPrompt := r.buildCoverageSMSCorrectionPrompt(task, reply)
+		retryReply, err := r.agent.Chat(ctx, "mesh/"+task.ID, correctionPrompt)
+		if err != nil {
+			return r.client.RespondMeshTask(ctx, task.ID, MeshRuntimeTaskResponse{
+				Status: MeshRuntimeTaskStatusFailed,
+				Result: fmt.Sprintf("coverage.transfer requires ACTION:%s but corrective retry failed: %s", requiredAction, err.Error()),
+			})
+		}
+		reply = retryReply
+		cleanReply, actions = ParseAgentActions(reply)
+	}
 	status, result := parseMeshRuntimeStatus(cleanReply)
 	cleanResult := strings.TrimSpace(result)
-	actions = r.filterAllowedActions(actions)
-	actionEvents := []MeshRuntimeTaskActionEvent{}
+	actions, blockedActions := r.filterAllowedActions(actions)
+	actionEvents := r.blockedActionEvents(task, blockedActions)
+	missingRequiredEvents := r.missingRequiredActionEvents(task, actions)
+	actionEvents = append(actionEvents, missingRequiredEvents...)
+	if len(missingRequiredEvents) > 0 {
+		status = MeshRuntimeTaskStatusFailed
+		result = strings.TrimSpace(result + "\ncoverage.transfer requires an executable " + missingRequiredEvents[0].Type + " action before it can wait for backup replies.")
+		cleanResult = strings.TrimSpace(result)
+	}
 	if len(actions) > 0 {
 		if (r.replyClient == nil || r.actionClient == nil) && hasNonMeshTaskAction(actions) {
 			return r.client.RespondMeshTask(ctx, task.ID, MeshRuntimeTaskResponse{
@@ -311,6 +330,93 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 	})
 }
 
+func (r *MeshRunner) coverageRequiredActionType(task MeshRuntimeTask) string {
+	if !strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") {
+		return ""
+	}
+	if containsMeshAllowedAction(r.allowedActions, "CARD") {
+		return "CARD"
+	}
+	if containsMeshAllowedAction(r.allowedActions, "SMS") {
+		return "SMS"
+	}
+	return ""
+}
+
+func hasMeshActionType(actions []AgentAction, actionType string) bool {
+	for _, action := range actions {
+		if strings.EqualFold(strings.TrimSpace(action.Type), strings.TrimSpace(actionType)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *MeshRunner) buildCoverageSMSCorrectionPrompt(task MeshRuntimeTask, previousReply string) string {
+	requiredAction := r.coverageRequiredActionType(task)
+	var b strings.Builder
+	b.WriteString(r.buildMeshTaskPrompt(task))
+	b.WriteString(fmt.Sprintf("\n\nPrevious mesh response did not include an executable ACTION:%s, so the coverage transfer cannot advance to waiting state yet.\n", requiredAction))
+	b.WriteString("Return a corrected response now. ")
+	if requiredAction == "CARD" {
+		b.WriteString("Include ACTION:CARD with an Adaptive Card status update in the shared/admin group chat. The card should show the coverage request, Jennifer/Karen candidates, response window, and current waiting status. ")
+		b.WriteString("Do not use message, task, mesh delegation, or SMS outreach as a substitute for this required card update. ")
+	} else {
+		b.WriteString("Include ACTION:SMS blocks for the backup coverage outreach using the phone numbers from DOMAIN.md. ")
+		b.WriteString("Do not use ACTION:MESSAGE, ACTION:TASK, ACTION:MESH_TASK, or ACTION:CARD as a substitute for this required SMS outreach. ")
+	}
+	b.WriteString(fmt.Sprintf("After the ACTION:%s block(s), use MESH_STATUS: waiting only if you are waiting for candidate replies.\n", requiredAction))
+	if previous := strings.TrimSpace(previousReply); previous != "" {
+		b.WriteString("\nPrevious response:\n")
+		b.WriteString(previous)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (r *MeshRunner) missingRequiredActionEvents(task MeshRuntimeTask, actions []AgentAction) []MeshRuntimeTaskActionEvent {
+	requiredAction := r.coverageRequiredActionType(task)
+	if requiredAction == "" || hasMeshActionType(actions, requiredAction) {
+		return nil
+	}
+	details := r.meshTaskActionDetails(task, map[string]any{
+		"reason":          "required_" + strings.ToLower(requiredAction) + "_action_missing",
+		"required_action": requiredAction,
+		"allowed_actions": append([]string(nil), r.allowedActions...),
+	})
+	return []MeshRuntimeTaskActionEvent{{
+		Type:    requiredAction,
+		Status:  "blocked",
+		Details: convertMeshActionDetails(details),
+	}}
+}
+
+func (r *MeshRunner) blockedActionEvents(task MeshRuntimeTask, actions []AgentAction) []MeshRuntimeTaskActionEvent {
+	if len(actions) == 0 {
+		return nil
+	}
+	events := make([]MeshRuntimeTaskActionEvent, 0, len(actions))
+	for _, action := range actions {
+		details := r.meshTaskActionDetails(task, map[string]any{
+			"reason":          "mesh_action_not_allowed",
+			"allowed_actions": append([]string(nil), r.allowedActions...),
+			"action_type":     strings.ToUpper(strings.TrimSpace(action.Type)),
+		})
+		if len(action.Params) > 0 {
+			details["action_params"] = action.Params
+		}
+		if body := strings.TrimSpace(action.Body); body != "" {
+			details["action_body"] = body
+		}
+		events = append(events, MeshRuntimeTaskActionEvent{
+			Type:    strings.ToUpper(strings.TrimSpace(action.Type)),
+			Status:  "blocked",
+			Details: convertMeshActionDetails(details),
+		})
+	}
+	return events
+}
+
 func (r *MeshRunner) meshTaskActionDetails(task MeshRuntimeTask, extra map[string]any) map[string]any {
 	details := map[string]any{
 		"task_id":         task.ID,
@@ -361,7 +467,18 @@ func shouldPostMeshCleanReplyFallback(cleanReply string, events []MeshRuntimeTas
 	return true
 }
 
+func (r *MeshRunner) buildMeshTaskPrompt(task MeshRuntimeTask) string {
+	if r == nil {
+		return buildMeshTaskPrompt(task)
+	}
+	return buildMeshTaskPromptWithAllowedActions(task, r.allowedActions)
+}
+
 func buildMeshTaskPrompt(task MeshRuntimeTask) string {
+	return buildMeshTaskPromptWithAllowedActions(task, nil)
+}
+
+func buildMeshTaskPromptWithAllowedActions(task MeshRuntimeTask, allowedActions []string) string {
 	var b strings.Builder
 	b.WriteString("You are executing an AVA Agent Mesh task.\n")
 	if task.Intent != "" {
@@ -380,6 +497,17 @@ func buildMeshTaskPrompt(task MeshRuntimeTask) string {
 		if data, err := json.Marshal(task.Context); err == nil {
 			b.WriteString("Context package JSON: " + string(data) + "\n")
 		}
+	}
+	if len(allowedActions) > 0 {
+		b.WriteString("Allowed ACTION types for this target role: " + strings.Join(allowedActions, ", ") + ". ")
+		b.WriteString("Do not output ACTION types outside this list; if required work is not allowed, explain what is waiting instead.\n")
+	}
+	if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") && containsMeshAllowedAction(allowedActions, "CARD") {
+		b.WriteString("For coverage.transfer, first post an ACTION:CARD status update in the shared/admin group chat using details from DOMAIN.md, including Jennifer/Karen candidates, response window, and current waiting status. ")
+		b.WriteString("Do not use message, task, mesh delegation, or SMS outreach as a substitute for the required status card; after emitting the card, use MESH_STATUS: waiting if you are waiting for replies.\n")
+	} else if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") && containsMeshAllowedAction(allowedActions, "SMS") {
+		b.WriteString("For coverage.transfer, first execute backup coverage outreach with ACTION:SMS to the phone numbers in DOMAIN.md. ")
+		b.WriteString("Do not use ACTION:MESSAGE or ACTION:TASK as a substitute for SMS outreach; after emitting SMS or timeout actions, use MESH_STATUS: waiting if you are waiting for replies.\n")
 	}
 	b.WriteString("Return useful text plus ACTION blocks when work must be executed. ")
 	b.WriteString("If you claim an SMS was sent, a task was created, a message was posted, or a card was created, you MUST include the matching ACTION block so the runtime can execute it and record action_events. ")
@@ -413,17 +541,20 @@ func parseMeshRuntimeStatus(reply string) (string, string) {
 	return status, strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-func (r *MeshRunner) filterAllowedActions(actions []AgentAction) []AgentAction {
+func (r *MeshRunner) filterAllowedActions(actions []AgentAction) ([]AgentAction, []AgentAction) {
 	if len(r.allowedActions) == 0 {
-		return actions
+		return actions, nil
 	}
 	var out []AgentAction
+	var blocked []AgentAction
 	for _, action := range actions {
 		if containsMeshAllowedAction(r.allowedActions, action.Type) {
 			out = append(out, action)
+		} else {
+			blocked = append(blocked, action)
 		}
 	}
-	return out
+	return out, blocked
 }
 
 func normalizeMeshAllowedActions(values []string) []string {

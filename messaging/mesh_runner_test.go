@@ -14,11 +14,21 @@ import (
 
 type meshTestAgent struct {
 	reply      string
+	replies    []string
 	lastPrompt string
+	prompts    []string
 }
 
 func (a *meshTestAgent) Chat(_ context.Context, _ string, message string) (string, error) {
 	a.lastPrompt = message
+	a.prompts = append(a.prompts, message)
+	if len(a.replies) > 0 {
+		idx := len(a.prompts) - 1
+		if idx >= len(a.replies) {
+			idx = len(a.replies) - 1
+		}
+		return a.replies[idx], nil
+	}
 	return a.reply, nil
 }
 
@@ -477,5 +487,158 @@ func TestBuildMeshTaskPromptRequiresActionBlocksForExecutedWork(t *testing.T) {
 		!strings.Contains(got, "ACTION:SMS") ||
 		!strings.Contains(got, "ACTION:MESH_TASK") {
 		t.Fatalf("mesh task prompt missing full action protocol: %s", got)
+	}
+}
+
+func TestMeshRunnerPromptListsAllowedActionsAndCoverageCardFirst(t *testing.T) {
+	runner := NewMeshRunner(MeshRunnerOptions{
+		AllowedActions: []string{"message", "sms", "task", "card"},
+	})
+	got := runner.buildMeshTaskPrompt(MeshRuntimeTask{
+		ID:     "task-coverage",
+		Intent: "coverage.transfer",
+		Title:  "Alexis absence coverage",
+		Context: MeshRuntimeContextPackage{
+			Summary: "Alexis is absent; Jennifer and Karen are backup admins in DOMAIN.md.",
+		},
+	})
+
+	if !strings.Contains(got, "Allowed ACTION types for this target role: MESSAGE, SMS, TASK, CARD") {
+		t.Fatalf("mesh task prompt missing role action policy: %s", got)
+	}
+	if !strings.Contains(got, "For coverage.transfer") ||
+		!strings.Contains(got, "first post an ACTION:CARD status update") ||
+		!strings.Contains(got, "using details from DOMAIN.md") ||
+		!strings.Contains(got, "Jennifer/Karen candidates") ||
+		!strings.Contains(got, "Do not use message, task, mesh delegation, or SMS outreach as a substitute") {
+		t.Fatalf("mesh task prompt missing coverage CARD-first guard: %s", got)
+	}
+	if strings.Contains(got, "ACTION:MESH_TASK is allowed") {
+		t.Fatalf("mesh task prompt should not imply MESH_TASK is allowed by this role: %s", got)
+	}
+}
+
+func TestMeshRunnerRecordsBlockedDisallowedActions(t *testing.T) {
+	ag := &meshTestAgent{reply: "MESH_STATUS: waiting\nClinical support may be needed.\n\nACTION:MESH_TASK to_role_id=role-clinical-bot intent=coverage.transfer title=\"Clinical coverage\"\nDelegate coverage.\nEND_ACTION"}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
+		ID:     "task-block-disallowed-action",
+		Intent: "coverage.transfer",
+		Title:  "Alexis absence coverage",
+	}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:         taskClient,
+		Agent:          ag,
+		DefaultChatID:  "admin-chat",
+		AllowedActions: []string{"MESSAGE", "SMS", "TASK", "CARD"},
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if len(taskClient.responses) != 1 {
+		t.Fatalf("responses = %#v", taskClient.responses)
+	}
+	resp := taskClient.responses[0]
+	if resp.Status != MeshRuntimeTaskStatusFailed {
+		t.Fatalf("response status = %q", resp.Status)
+	}
+	if len(resp.ActionEvents) != 2 {
+		t.Fatalf("action events = %#v", resp.ActionEvents)
+	}
+	var meshBlocked, cardMissing bool
+	for _, event := range resp.ActionEvents {
+		if event.Type == "MESH_TASK" && event.Status == "blocked" && event.Details["reason"] == "mesh_action_not_allowed" {
+			meshBlocked = true
+		}
+		if event.Type == "CARD" && event.Status == "blocked" && event.Details["reason"] == "required_card_action_missing" {
+			cardMissing = true
+		}
+	}
+	if !meshBlocked || !cardMissing {
+		t.Fatalf("action events = %#v", resp.ActionEvents)
+	}
+	var meshEvent MeshRuntimeTaskActionEvent
+	for _, event := range resp.ActionEvents {
+		if event.Type == "MESH_TASK" {
+			meshEvent = event
+			break
+		}
+	}
+	if got, _ := meshEvent.Details["allowed_actions"].([]string); strings.Join(got, ",") != "MESSAGE,SMS,TASK,CARD" {
+		t.Fatalf("allowed actions detail = %#v", meshEvent.Details["allowed_actions"])
+	}
+}
+
+func TestMeshRunnerRetriesCoverageTransferUntilCardAction(t *testing.T) {
+	var cards []json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/admin-chat/adaptive-cards":
+			var body json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode adaptive card request: %v", err)
+			}
+			cards = append(cards, body)
+			_ = json.NewEncoder(w).Encode(ringcentral.AdaptiveCard{ID: "card-coverage-1", Type: "AdaptiveCard", Version: "1.3"})
+			return
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := ringcentral.NewBotClient(server.URL, "bot-token")
+	ag := &meshTestAgent{replies: []string{
+		"MESH_STATUS: waiting\n我正在准备联系 Jennifer/Karen 覆盖。",
+		"MESH_STATUS: waiting\nACTION:CARD\n{\"type\":\"AdaptiveCard\",\"version\":\"1.3\",\"body\":[{\"type\":\"TextBlock\",\"text\":\"Coverage update: Jennifer (+16194930090) / Karen waiting for response\"}]}\nEND_ACTION",
+	}}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
+		ID:     "task-retry-sms",
+		Intent: "coverage.transfer",
+		Title:  "Alexis absence coverage",
+		Context: MeshRuntimeContextPackage{
+			Summary: "Alexis is absent today. Jennifer and Karen backup phone numbers are in DOMAIN.md.",
+		},
+	}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:         taskClient,
+		Agent:          ag,
+		ReplyClient:    client,
+		ActionClient:   client,
+		DefaultChatID:  "admin-chat",
+		AllowedActions: []string{"MESSAGE", "SMS", "TASK", "CARD"},
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if len(ag.prompts) != 2 {
+		t.Fatalf("agent prompt count = %d; prompts=%#v", len(ag.prompts), ag.prompts)
+	}
+	if !strings.Contains(ag.prompts[1], "Previous mesh response did not include an executable ACTION:CARD") {
+		t.Fatalf("second prompt did not force CARD correction: %s", ag.prompts[1])
+	}
+	if len(cards) != 1 {
+		t.Fatalf("adaptive card requests = %#v", cards)
+	}
+	if !strings.Contains(string(cards[0]), "+16194930090") {
+		t.Fatalf("card should include updated Jennifer phone number: %s", string(cards[0]))
+	}
+	if len(taskClient.responses) != 1 {
+		t.Fatalf("responses = %#v", taskClient.responses)
+	}
+	resp := taskClient.responses[0]
+	if resp.Status != MeshRuntimeTaskStatusWaiting {
+		t.Fatalf("response status = %q", resp.Status)
+	}
+	var sawCard bool
+	for _, event := range resp.ActionEvents {
+		if event.Type == "CARD" && event.Status == "completed" {
+			sawCard = true
+		}
+	}
+	if !sawCard {
+		t.Fatalf("missing completed CARD event: %#v", resp.ActionEvents)
 	}
 }
