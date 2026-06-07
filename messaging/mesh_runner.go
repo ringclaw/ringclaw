@@ -30,6 +30,7 @@ type MeshRuntimeMemoryRef struct {
 
 type MeshRuntimeTask struct {
 	ID           string                    `json:"id"`
+	PlanID       string                    `json:"plan_id,omitempty"`
 	AccountID    string                    `json:"account_id,omitempty"`
 	FromAgentID  string                    `json:"from_agent_id,omitempty"`
 	ToAgentID    string                    `json:"to_agent_id,omitempty"`
@@ -44,6 +45,7 @@ type MeshRuntimeTask struct {
 }
 
 type MeshRuntimeRoutePlan struct {
+	PlanID          string                         `json:"plan_id,omitempty"`
 	TraceID         string                         `json:"trace_id,omitempty"`
 	FromAgentID     string                         `json:"from_agent_id,omitempty"`
 	ToAgentID       string                         `json:"to_agent_id,omitempty"`
@@ -86,6 +88,7 @@ type MeshRuntimeTaskPollRequest struct {
 }
 
 type MeshRuntimeTaskCreateRequest struct {
+	PlanID       string                    `json:"plan_id,omitempty"`
 	ToRoleID     string                    `json:"to_role_id"`
 	Intent       string                    `json:"intent"`
 	Title        string                    `json:"title,omitempty"`
@@ -212,6 +215,7 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 			Capabilities:    r.capabilities,
 			SourceTaskID:    task.ID,
 			SourceAgentID:   r.sourceAgentID,
+			PlanID:          task.PlanID,
 			MeshTaskCreator: r.client,
 			RolePeers:       cloneRolePeers(r.rolePeers),
 		})
@@ -275,6 +279,7 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 func (r *MeshRunner) meshTaskActionDetails(task MeshRuntimeTask, extra map[string]any) map[string]any {
 	details := map[string]any{
 		"task_id":         task.ID,
+		"plan_id":         task.PlanID,
 		"trace_id":        task.TraceID,
 		"intent":          task.Intent,
 		"from_agent_id":   task.FromAgentID,

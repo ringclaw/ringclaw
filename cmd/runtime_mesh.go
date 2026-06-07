@@ -31,6 +31,7 @@ type runtimeMeshTasksResult struct {
 type runtimeMeshTaskCreateRequest struct {
 	BotID          string                              `json:"bot_id"`
 	BootstrapToken string                              `json:"bootstrap_token"`
+	PlanID         string                              `json:"plan_id,omitempty"`
 	ToRoleID       string                              `json:"to_role_id"`
 	Intent         string                              `json:"intent"`
 	Title          string                              `json:"title,omitempty"`
@@ -40,6 +41,7 @@ type runtimeMeshTaskCreateRequest struct {
 
 type runtimeMeshTaskCreateResult struct {
 	Task      messaging.MeshRuntimeTask      `json:"task"`
+	PlanID    string                         `json:"plan_id,omitempty"`
 	TraceID   string                         `json:"trace_id,omitempty"`
 	RoutePlan messaging.MeshRuntimeRoutePlan `json:"route_plan,omitempty"`
 }
@@ -68,6 +70,7 @@ func (c runtimeMeshTaskClient) CreateMeshTask(ctx context.Context, req messaging
 	err := postJSON(ctx, c.controlPlaneURL, "/runtime/v1/mesh/tasks/create", runtimeMeshTaskCreateRequest{
 		BotID:          c.botID,
 		BootstrapToken: c.bootstrapToken,
+		PlanID:         req.PlanID,
 		ToRoleID:       req.ToRoleID,
 		Intent:         req.Intent,
 		Title:          req.Title,
@@ -77,8 +80,14 @@ func (c runtimeMeshTaskClient) CreateMeshTask(ctx context.Context, req messaging
 	if result.Task.TraceID == "" {
 		result.Task.TraceID = result.TraceID
 	}
+	if result.Task.PlanID == "" {
+		result.Task.PlanID = result.PlanID
+	}
 	if result.Task.RoutePlan.TraceID == "" {
 		result.Task.RoutePlan = result.RoutePlan
+	}
+	if result.Task.RoutePlan.PlanID == "" {
+		result.Task.RoutePlan.PlanID = result.Task.PlanID
 	}
 	return result.Task, err
 }

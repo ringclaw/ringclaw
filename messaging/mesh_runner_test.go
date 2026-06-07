@@ -427,6 +427,7 @@ func TestMeshRunnerDelegatedTaskCarriesSourceTaskAndAgent(t *testing.T) {
 	ag := &meshTestAgent{reply: "ACTION:MESH_TASK to_role_id=role-clinical-bot intent=clinical.handoff title=\"Clinical handoff\"\nShare clinical follow-up context.\nEND_ACTION"}
 	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
 		ID:     "task-3",
+		PlanID: "plan-absence-1",
 		Intent: "coverage.transfer",
 		Title:  "Coverage transfer",
 	}}}
@@ -452,6 +453,12 @@ func TestMeshRunnerDelegatedTaskCarriesSourceTaskAndAgent(t *testing.T) {
 	}
 	if got, _ := data["origin_chat_id"].(string); got != "admin-chat" {
 		t.Fatalf("origin_chat_id = %#v; data=%#v", data["origin_chat_id"], data)
+	}
+	if taskClient.created[0].PlanID != "plan-absence-1" {
+		t.Fatalf("created plan id = %q", taskClient.created[0].PlanID)
+	}
+	if got, _ := data["plan_id"].(string); got != "plan-absence-1" {
+		t.Fatalf("plan_id = %#v; data=%#v", data["plan_id"], data)
 	}
 }
 

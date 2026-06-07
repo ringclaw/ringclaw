@@ -229,6 +229,10 @@ type ActionContext struct {
 	SourceTaskID string
 	// SourceAgentID identifies the current runtime mesh agent when available.
 	SourceAgentID string
+	// PlanID identifies the top-level planner/orchestrator chain currently
+	// being executed. Mesh task delegation inherits it so downstream agents
+	// remain attached to the same plan run.
+	PlanID string
 	// MeshTaskCreator lets a source RingClaw runtime delegate work into
 	// AVA Control Plane Agent Mesh without carrying an admin token.
 	MeshTaskCreator MeshTaskCreator
@@ -1687,6 +1691,7 @@ func meshTaskRequestFromAction(a AgentAction, opts ActionContext, originChatID s
 	putMeshContextData(data, "source_post_id", opts.SourcePostID)
 	putMeshContextData(data, "source_task_id", opts.SourceTaskID)
 	putMeshContextData(data, "source_agent_id", opts.SourceAgentID)
+	putMeshContextData(data, "plan_id", opts.PlanID)
 	putMeshContextData(data, "requester_id", opts.RequesterID)
 	putMeshContextData(data, "to_role_id", toRoleID)
 	putMeshContextData(data, "intent", intent)
@@ -1694,6 +1699,7 @@ func meshTaskRequestFromAction(a AgentAction, opts ActionContext, originChatID s
 		data = nil
 	}
 	return MeshRuntimeTaskCreateRequest{
+		PlanID:       strings.TrimSpace(opts.PlanID),
 		ToRoleID:     toRoleID,
 		Intent:       intent,
 		Title:        title,

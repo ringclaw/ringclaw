@@ -90,6 +90,7 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 		var req struct {
 			BotID          string `json:"bot_id"`
 			BootstrapToken string `json:"bootstrap_token"`
+			PlanID         string `json:"plan_id"`
 			ToRoleID       string `json:"to_role_id"`
 			Intent         string `json:"intent"`
 			Title          string `json:"title"`
@@ -104,13 +105,18 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 		if req.BotID != "bot-1" || req.BootstrapToken != "boot-1" || req.ToRoleID != "nurse-coordinator" || req.Intent != "coverage.transfer" {
 			t.Fatalf("create request = %#v", req)
 		}
+		if req.PlanID != "plan-absence-1" {
+			t.Fatalf("create plan_id = %q", req.PlanID)
+		}
 		if req.Context.Data["source_post_id"] != "post-123" {
 			t.Fatalf("create context data = %#v", req.Context.Data)
 		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{
+			"plan_id":  "plan-absence-1",
 			"trace_id": "trace-post-123",
 			"route_plan": map[string]any{
+				"plan_id":    "plan-absence-1",
 				"trace_id":   "trace-post-123",
 				"to_role_id": req.ToRoleID,
 				"routing_decision": map[string]any{
@@ -130,6 +136,7 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 			},
 			"task": map[string]any{
 				"id":         "task-1",
+				"plan_id":    "plan-absence-1",
 				"intent":     req.Intent,
 				"to_role_id": req.ToRoleID,
 				"title":      req.Title,
@@ -144,6 +151,7 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 		bootstrapToken:  "boot-1",
 	}
 	task, err := client.CreateMeshTask(context.Background(), messaging.MeshRuntimeTaskCreateRequest{
+		PlanID:       "plan-absence-1",
 		ToRoleID:     "nurse-coordinator",
 		Intent:       "coverage.transfer",
 		Title:        "Alexis absence coverage",
@@ -160,6 +168,9 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 	}
 	if task.TraceID != "trace-post-123" || task.RoutePlan.VisibleDelivery.ChatID != "chat-admin" {
 		t.Fatalf("created task route plan = %#v", task)
+	}
+	if task.PlanID != "plan-absence-1" || task.RoutePlan.PlanID != "plan-absence-1" {
+		t.Fatalf("created task plan = %#v", task)
 	}
 	if task.RoutePlan.RoutingDecision.Mode != "explicit_role" ||
 		task.RoutePlan.RoutingDecision.SelectedRoleID != "nurse-coordinator" {
