@@ -2262,6 +2262,63 @@ func TestExecuteAgentActions_CardUsesBotClientInGroup(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_CardDowngradesUnsupportedTableForRC(t *testing.T) {
+	var posted map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/team-messaging/v1/chats/group-chat/adaptive-cards" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+			t.Fatalf("decode card: %v", err)
+		}
+		body, _ := json.Marshal(posted)
+		if strings.Contains(string(body), `"Table"`) || strings.Contains(string(body), `"TableRow"`) || strings.Contains(string(body), `"TableCell"`) {
+			http.Error(w, `{"errors":[{"errorCode":"CMN-104","message":"Cannot parse request."}]}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "ac1",
+			"type":    "AdaptiveCard",
+			"version": "1.3",
+		})
+	}))
+	defer srv.Close()
+
+	botClient, privateClient := newNamedTestClients(srv.URL)
+	actions := []AgentAction{{
+		Type: "CARD",
+		Body: `{
+			"type":"AdaptiveCard",
+			"version":"1.3",
+			"body":[{
+				"type":"Table",
+				"columns":[{"width":1},{"width":2}],
+				"rows":[{
+					"type":"TableRow",
+					"cells":[
+						{"type":"TableCell","items":[{"type":"TextBlock","text":"姓名","weight":"Bolder"}]},
+						{"type":"TableCell","items":[{"type":"TextBlock","text":"Jennifer S.","wrap":true}]}
+					]
+				}]
+			}]
+		}`,
+	}}
+
+	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "group-chat", actions, ActionContext{OriginIsOwner: true})
+	if len(results) != 0 {
+		t.Fatalf("expected no action errors, got %v", results)
+	}
+	if posted == nil {
+		t.Fatal("expected adaptive card request")
+	}
+	body, _ := json.Marshal(posted)
+	if !strings.Contains(string(body), `"ColumnSet"`) {
+		t.Fatalf("expected table to be downgraded to ColumnSet, got %s", body)
+	}
+}
+
 func TestExecuteAgentActions_CardFallsBackToBotWithoutPrivateClient(t *testing.T) {
 	var mu sync.Mutex
 	var authHeaders []string

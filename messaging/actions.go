@@ -550,14 +550,18 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				record("skipped", targetChat, crossChat, map[string]any{"reason": "empty_card"})
 				continue
 			}
-			if !json.Valid([]byte(cardJSON)) {
-				slog.Error("action: invalid adaptive card JSON")
-				record("failed", targetChat, crossChat, map[string]any{"reason": "invalid_card_json"})
+			normalizedCardJSON, normalized, err := normalizeAdaptiveCardJSONForRingCentral(cardJSON)
+			if err != nil {
+				slog.Error("action: invalid adaptive card JSON", "error", err)
+				record("failed", targetChat, crossChat, map[string]any{"reason": "invalid_card_json", "error": err.Error()})
 				results = append(results, "Failed to create card: invalid JSON")
 				continue
 			}
+			if normalized {
+				slog.Info("action: normalized adaptive card for RingCentral compatibility", "chatID", targetChat)
+			}
 			cardClient := selectCardClient(replyClient, actionClient, targetChat, chatID)
-			card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(cardJSON))
+			card, err := cardClient.CreateAdaptiveCard(ctx, targetChat, json.RawMessage(normalizedCardJSON))
 			if err != nil {
 				slog.Error("action: create adaptive card failed", "error", err)
 				record("failed", targetChat, crossChat, map[string]any{"error": err.Error()})
@@ -763,6 +767,114 @@ func actionEventExtraWithPlan(extra map[string]any, planID string) map[string]an
 		extra["plan_id"] = planID
 	}
 	return extra
+}
+
+func normalizeAdaptiveCardJSONForRingCentral(cardJSON string) (string, bool, error) {
+	var decoded any
+	if err := json.Unmarshal([]byte(cardJSON), &decoded); err != nil {
+		return "", false, err
+	}
+	normalized, changed := normalizeAdaptiveCardNodeForRingCentral(decoded)
+	if !changed {
+		return cardJSON, false, nil
+	}
+	body, err := json.Marshal(normalized)
+	if err != nil {
+		return "", false, err
+	}
+	return string(body), true, nil
+}
+
+func normalizeAdaptiveCardNodeForRingCentral(node any) (any, bool) {
+	switch value := node.(type) {
+	case map[string]any:
+		changed := false
+		for key, child := range value {
+			normalized, childChanged := normalizeAdaptiveCardNodeForRingCentral(child)
+			if childChanged {
+				value[key] = normalized
+				changed = true
+			}
+		}
+		if strings.EqualFold(stringMapValue(value, "type"), "Table") {
+			return adaptiveCardTableToContainer(value), true
+		}
+		return value, changed
+	case []any:
+		changed := false
+		for i, child := range value {
+			normalized, childChanged := normalizeAdaptiveCardNodeForRingCentral(child)
+			if childChanged {
+				value[i] = normalized
+				changed = true
+			}
+		}
+		return value, changed
+	default:
+		return node, false
+	}
+}
+
+func adaptiveCardTableToContainer(table map[string]any) map[string]any {
+	container := map[string]any{
+		"type":  "Container",
+		"items": adaptiveCardTableRowsToColumnSets(table),
+	}
+	for _, key := range []string{"id", "spacing", "separator", "isVisible"} {
+		if value, ok := table[key]; ok {
+			container[key] = value
+		}
+	}
+	return container
+}
+
+func adaptiveCardTableRowsToColumnSets(table map[string]any) []any {
+	rows, _ := table["rows"].([]any)
+	columnSpecs, _ := table["columns"].([]any)
+	items := make([]any, 0, len(rows))
+	for _, row := range rows {
+		rowMap, _ := row.(map[string]any)
+		cells, _ := rowMap["cells"].([]any)
+		columns := make([]any, 0, len(cells))
+		for i, cell := range cells {
+			cellMap, _ := cell.(map[string]any)
+			cellItems, _ := cellMap["items"].([]any)
+			column := map[string]any{
+				"type":  "Column",
+				"width": adaptiveCardColumnWidth(columnSpecs, i),
+				"items": cellItems,
+			}
+			if style, ok := cellMap["style"]; ok {
+				column["style"] = style
+			}
+			columns = append(columns, column)
+		}
+		columnSet := map[string]any{
+			"type":    "ColumnSet",
+			"columns": columns,
+		}
+		if style, ok := rowMap["style"]; ok {
+			columnSet["style"] = style
+		}
+		items = append(items, columnSet)
+	}
+	return items
+}
+
+func adaptiveCardColumnWidth(columnSpecs []any, index int) any {
+	if index < len(columnSpecs) {
+		if spec, ok := columnSpecs[index].(map[string]any); ok {
+			if width, ok := spec["width"]; ok {
+				return width
+			}
+		}
+	}
+	return "stretch"
+}
+
+func stringMapValue(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func startOrchestrationForMeshTask(ctx context.Context, req MeshRuntimeTaskCreateRequest, opts ActionContext, originChatID string, record func(status string, targetChat string, crossChat bool, extra map[string]any)) MeshRuntimeTaskCreateRequest {
