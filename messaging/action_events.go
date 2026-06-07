@@ -68,9 +68,19 @@ func actionEventDetails(originChat, targetChat string, crossChat bool, extra map
 		details["cross_chat"] = true
 	}
 	for key, value := range extra {
-		if value != nil && value != "" {
+		if !isEmptyActionEventValue(value) {
 			details[key] = value
 		}
 	}
 	return details
+}
+
+func isEmptyActionEventValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	if text, ok := value.(string); ok {
+		return text == ""
+	}
+	return false
 }

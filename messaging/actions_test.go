@@ -3089,6 +3089,7 @@ func TestShouldForceClinicalRefillApproval_ReplacesCardWithoutSubmitActions(t *t
 
 type meshTaskCreatorActionStub struct {
 	requests  []MeshRuntimeTaskCreateRequest
+	planID    string
 	traceID   string
 	routePlan MeshRuntimeRoutePlan
 }
@@ -3097,6 +3098,7 @@ func (s *meshTaskCreatorActionStub) CreateMeshTask(_ context.Context, req MeshRu
 	s.requests = append(s.requests, req)
 	return MeshRuntimeTask{
 		ID:        "mesh-task-1",
+		PlanID:    firstNonEmptyString(s.planID, req.PlanID),
 		TraceID:   s.traceID,
 		Intent:    req.Intent,
 		ToRoleID:  req.ToRoleID,
@@ -3368,7 +3370,7 @@ func TestExecuteAgentActions_MeshTaskNotifiesRolePeerWithSharedChatMemberMention
 }
 
 func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesReplyClient(t *testing.T) {
-	creator := &meshTaskCreatorActionStub{}
+	creator := &meshTaskCreatorActionStub{planID: "plan-post-absence-1", traceID: "trace-post-absence-1"}
 	var events []ActionEvent
 	restore := SetActionEventRecorder(func(_ context.Context, event ActionEvent) {
 		events = append(events, event)
@@ -3480,8 +3482,18 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesReplyClient(t *testing.T) 
 		t.Fatalf("extension ID markdown mention should not be used in shared chat group payload, got %q", postedBody)
 	}
 	var sawUserMessageEvent bool
+	var sawMeshTaskEvent bool
 	for _, event := range events {
+		if event.Type == "MESH_TASK" && event.Status == "completed" {
+			if event.Details["plan_id"] != "plan-post-absence-1" || event.Details["trace_id"] != "trace-post-absence-1" {
+				t.Fatalf("mesh task event missing plan trace details: %#v", event.Details)
+			}
+			sawMeshTaskEvent = true
+		}
 		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["sender_identity"] == "reply_client" {
+			if event.Details["plan_id"] != "plan-post-absence-1" {
+				t.Fatalf("visible notification event missing plan_id: %#v", event.Details)
+			}
 			if event.Details["target_mention_id"] != "87368646659" {
 				t.Fatalf("target_mention_id = %#v, want person id", event.Details["target_mention_id"])
 			}
@@ -3491,6 +3503,9 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesReplyClient(t *testing.T) 
 			sawUserMessageEvent = true
 			break
 		}
+	}
+	if !sawMeshTaskEvent {
+		t.Fatalf("expected completed mesh task event, got %#v", events)
 	}
 	if !sawUserMessageEvent {
 		t.Fatalf("expected completed reply-client audit event, got %#v", events)

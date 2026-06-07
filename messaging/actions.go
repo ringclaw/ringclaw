@@ -255,6 +255,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 	}
 	for _, a := range actions {
 		record := func(status string, targetChat string, crossChat bool, extra map[string]any) {
+			extra = actionEventExtraWithPlan(extra, opts.PlanID)
 			recordAgentActionEvent(ctx, ActionEvent{
 				Type:    a.Type,
 				Status:  status,
@@ -301,7 +302,16 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, fmt.Sprintf("Failed to create mesh task: %v", err))
 				continue
 			}
-			record("completed", "", false, map[string]any{"task_id": task.ID, "to_role_id": task.ToRoleID, "intent": task.Intent})
+			record("completed", "", false, map[string]any{
+				"plan_id":        firstNonEmptyString(task.PlanID, task.RoutePlan.PlanID, req.PlanID),
+				"trace_id":       firstNonEmptyString(task.TraceID, task.RoutePlan.TraceID),
+				"task_id":        task.ID,
+				"to_agent_id":    firstNonEmptyString(task.ToAgentID, task.RoutePlan.ToAgentID),
+				"to_role_id":     task.ToRoleID,
+				"intent":         task.Intent,
+				"route_decision": task.RoutePlan.RoutingDecision,
+				"route_plan":     task.RoutePlan,
+			})
 			if notified, err := notifyRolePeerForMeshTask(ctx, replyClient, actionClient, chatID, a, req, task, opts.RolePeers); err != nil {
 				recordAgentActionEvent(ctx, ActionEvent{
 					Type:   "MESSAGE",
@@ -309,6 +319,8 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					Details: actionEventDetails(chatID, "", false, map[string]any{
 						"error":      err.Error(),
 						"reason":     "mesh_task_role_peer_notify_failed",
+						"plan_id":    firstNonEmptyString(task.PlanID, task.RoutePlan.PlanID, req.PlanID),
+						"trace_id":   firstNonEmptyString(task.TraceID, task.RoutePlan.TraceID),
 						"task_id":    task.ID,
 						"to_role_id": req.ToRoleID,
 					}),
@@ -717,6 +729,20 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		}
 	}
 	return results
+}
+
+func actionEventExtraWithPlan(extra map[string]any, planID string) map[string]any {
+	planID = strings.TrimSpace(planID)
+	if planID == "" {
+		return extra
+	}
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	if _, ok := extra["plan_id"]; !ok {
+		extra["plan_id"] = planID
+	}
+	return extra
 }
 
 var (
@@ -1411,6 +1437,7 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient, actionClient *r
 	}
 	extra := map[string]any{
 		"role_peer":           true,
+		"plan_id":             firstNonEmptyString(task.PlanID, task.RoutePlan.PlanID, req.PlanID),
 		"trace_id":            firstNonEmptyString(task.TraceID, task.RoutePlan.TraceID),
 		"task_id":             task.ID,
 		"to_role_id":          peer.RoleID,
