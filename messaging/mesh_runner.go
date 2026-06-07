@@ -109,6 +109,15 @@ type MeshRuntimeOrchestrationStartResult struct {
 	Context MeshRuntimeContextPackage `json:"context,omitempty"`
 }
 
+type MeshRuntimeOrchestrationDispatchRequest struct {
+	PlanID       string                    `json:"plan_id,omitempty"`
+	ToRoleID     string                    `json:"to_role_id,omitempty"`
+	Intent       string                    `json:"intent"`
+	Title        string                    `json:"title,omitempty"`
+	Instructions string                    `json:"instructions,omitempty"`
+	Context      MeshRuntimeContextPackage `json:"context,omitempty"`
+}
+
 type MeshRuntimeTaskActionEvent struct {
 	Type    string                 `json:"type"`
 	Status  string                 `json:"status"`
@@ -131,6 +140,10 @@ type MeshTaskClient interface {
 
 type MeshOrchestrationStarter interface {
 	StartOrchestration(context.Context, MeshRuntimeOrchestrationStartRequest) (MeshRuntimeOrchestrationStartResult, error)
+}
+
+type MeshOrchestrationDispatcher interface {
+	DispatchOrchestration(context.Context, MeshRuntimeOrchestrationDispatchRequest) (MeshRuntimeTask, error)
 }
 
 type MeshRunnerOptions struct {
@@ -224,17 +237,22 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 			ownerID = r.replyClient.OwnerID()
 			ownerDMChat = r.replyClient.DMChatID()
 		}
+		var orchestrationDispatcher MeshOrchestrationDispatcher
+		if dispatcher, ok := r.client.(MeshOrchestrationDispatcher); ok {
+			orchestrationDispatcher = dispatcher
+		}
 		actionResults := ExecuteAgentActions(ctx, r.replyClient, r.actionClient, r.defaultChatID, actions, ActionContext{
-			OriginIsOwner:   true,
-			RequesterID:     "mesh-runtime",
-			OwnerID:         ownerID,
-			OwnerDMChat:     ownerDMChat,
-			Capabilities:    r.capabilities,
-			SourceTaskID:    task.ID,
-			SourceAgentID:   r.sourceAgentID,
-			PlanID:          task.PlanID,
-			MeshTaskCreator: r.client,
-			RolePeers:       cloneRolePeers(r.rolePeers),
+			OriginIsOwner:           true,
+			RequesterID:             "mesh-runtime",
+			OwnerID:                 ownerID,
+			OwnerDMChat:             ownerDMChat,
+			Capabilities:            r.capabilities,
+			SourceTaskID:            task.ID,
+			SourceAgentID:           r.sourceAgentID,
+			PlanID:                  task.PlanID,
+			MeshTaskCreator:         r.client,
+			OrchestrationDispatcher: orchestrationDispatcher,
+			RolePeers:               cloneRolePeers(r.rolePeers),
 		})
 		restore()
 		if len(actionResults) > 0 {

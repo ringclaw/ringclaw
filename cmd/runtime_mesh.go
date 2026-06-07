@@ -61,6 +61,24 @@ type runtimeOrchestrationStartResult struct {
 	Context messaging.MeshRuntimeContextPackage `json:"context,omitempty"`
 }
 
+type runtimeOrchestrationDispatchRequest struct {
+	BotID          string                              `json:"bot_id"`
+	BootstrapToken string                              `json:"bootstrap_token"`
+	PlanID         string                              `json:"plan_id,omitempty"`
+	ToRoleID       string                              `json:"to_role_id,omitempty"`
+	Intent         string                              `json:"intent"`
+	Title          string                              `json:"title,omitempty"`
+	Instructions   string                              `json:"instructions,omitempty"`
+	Context        messaging.MeshRuntimeContextPackage `json:"context,omitempty"`
+}
+
+type runtimeOrchestrationDispatchResult struct {
+	Task      messaging.MeshRuntimeTask      `json:"task"`
+	PlanID    string                         `json:"plan_id,omitempty"`
+	TraceID   string                         `json:"trace_id,omitempty"`
+	RoutePlan messaging.MeshRuntimeRoutePlan `json:"route_plan,omitempty"`
+}
+
 type runtimeMeshTaskRespondRequest struct {
 	BotID          string                                 `json:"bot_id"`
 	BootstrapToken string                                 `json:"bootstrap_token"`
@@ -122,6 +140,33 @@ func (c runtimeMeshTaskClient) StartOrchestration(ctx context.Context, req messa
 		TraceID: result.TraceID,
 		Context: result.Context,
 	}, err
+}
+
+func (c runtimeMeshTaskClient) DispatchOrchestration(ctx context.Context, req messaging.MeshRuntimeOrchestrationDispatchRequest) (messaging.MeshRuntimeTask, error) {
+	var result runtimeOrchestrationDispatchResult
+	err := postJSON(ctx, c.controlPlaneURL, "/runtime/v1/orchestrations/dispatch", runtimeOrchestrationDispatchRequest{
+		BotID:          c.botID,
+		BootstrapToken: c.bootstrapToken,
+		PlanID:         req.PlanID,
+		ToRoleID:       req.ToRoleID,
+		Intent:         req.Intent,
+		Title:          req.Title,
+		Instructions:   req.Instructions,
+		Context:        req.Context,
+	}, http.StatusCreated, &result)
+	if result.Task.TraceID == "" {
+		result.Task.TraceID = result.TraceID
+	}
+	if result.Task.PlanID == "" {
+		result.Task.PlanID = result.PlanID
+	}
+	if result.Task.RoutePlan.TraceID == "" {
+		result.Task.RoutePlan = result.RoutePlan
+	}
+	if result.Task.RoutePlan.PlanID == "" {
+		result.Task.RoutePlan.PlanID = result.Task.PlanID
+	}
+	return result.Task, err
 }
 
 func (c runtimeMeshTaskClient) RespondMeshTask(ctx context.Context, taskID string, resp messaging.MeshRuntimeTaskResponse) error {

@@ -139,6 +139,80 @@ func TestRuntimeMeshTaskClientStartsOrchestration(t *testing.T) {
 	}
 }
 
+func TestRuntimeMeshTaskClientDispatchesOrchestration(t *testing.T) {
+	var sawDispatch bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/runtime/v1/orchestrations/dispatch" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		sawDispatch = true
+		var req struct {
+			BotID          string `json:"bot_id"`
+			BootstrapToken string `json:"bootstrap_token"`
+			ToRoleID       string `json:"to_role_id"`
+			Intent         string `json:"intent"`
+			Title          string `json:"title"`
+			Instructions   string `json:"instructions"`
+			Context        struct {
+				Data map[string]any `json:"data"`
+			} `json:"context"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode dispatch: %v", err)
+		}
+		if req.BotID != "bot-1" || req.BootstrapToken != "boot-1" ||
+			req.Intent != "coverage.transfer" || req.ToRoleID != "role-nursecoord-bot" ||
+			req.Title != "Coverage handoff" || req.Instructions != "Transfer coverage." {
+			t.Fatalf("dispatch request = %#v", req)
+		}
+		if req.Context.Data["source_post_id"] != "post-123" {
+			t.Fatalf("dispatch context data = %#v", req.Context.Data)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"plan_id":  "plan-post-123",
+			"trace_id": "trace-post-123",
+			"route_plan": map[string]any{
+				"plan_id":  "plan-post-123",
+				"trace_id": "trace-post-123",
+			},
+			"task": map[string]any{
+				"id":         "mesh-task-1",
+				"plan_id":    "plan-post-123",
+				"trace_id":   "trace-post-123",
+				"to_role_id": "role-nursecoord-bot",
+				"intent":     "coverage.transfer",
+				"route_plan": map[string]any{
+					"plan_id":  "plan-post-123",
+					"trace_id": "trace-post-123",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := runtimeMeshTaskClient{
+		controlPlaneURL: server.URL,
+		botID:           "bot-1",
+		bootstrapToken:  "boot-1",
+	}
+	task, err := client.DispatchOrchestration(context.Background(), messaging.MeshRuntimeOrchestrationDispatchRequest{
+		ToRoleID:     "role-nursecoord-bot",
+		Intent:       "coverage.transfer",
+		Title:        "Coverage handoff",
+		Instructions: "Transfer coverage.",
+		Context: messaging.MeshRuntimeContextPackage{Data: map[string]interface{}{
+			"source_post_id": "post-123",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("DispatchOrchestration() error = %v", err)
+	}
+	if !sawDispatch || task.ID != "mesh-task-1" || task.PlanID != "plan-post-123" || task.RoutePlan.TraceID != "trace-post-123" {
+		t.Fatalf("sawDispatch=%v task=%#v", sawDispatch, task)
+	}
+}
+
 func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 	var sawCreate bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

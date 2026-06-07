@@ -3117,6 +3117,16 @@ func (s *meshOrchestrationStarterActionStub) StartOrchestration(_ context.Contex
 	return s.result, nil
 }
 
+type meshOrchestrationDispatcherActionStub struct {
+	requests []MeshRuntimeOrchestrationDispatchRequest
+	result   MeshRuntimeTask
+}
+
+func (s *meshOrchestrationDispatcherActionStub) DispatchOrchestration(_ context.Context, req MeshRuntimeOrchestrationDispatchRequest) (MeshRuntimeTask, error) {
+	s.requests = append(s.requests, req)
+	return s.result, nil
+}
+
 func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	actions := []AgentAction{{
@@ -3147,6 +3157,50 @@ func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 	}
 	if req.Instructions != "Transfer Alexis task queue and report completion." || req.Context.Summary != "Alexis is absent today." {
 		t.Fatalf("mesh task context = %#v", req)
+	}
+}
+
+func TestExecuteAgentActions_MeshTaskDispatchesThroughControlPlaneOrchestrator(t *testing.T) {
+	dispatcher := &meshOrchestrationDispatcherActionStub{result: MeshRuntimeTask{
+		ID:       "mesh-task-1",
+		PlanID:   "plan-post-absence-1",
+		TraceID:  "trace-post-absence-1",
+		Intent:   "coverage.transfer",
+		ToRoleID: "role-nursecoord-bot",
+		RoutePlan: MeshRuntimeRoutePlan{
+			PlanID:  "plan-post-absence-1",
+			TraceID: "trace-post-absence-1",
+		},
+	}}
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-nursecoord-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff",
+			"context_summary": "Alexis is absent today.",
+		},
+		Body: "Transfer Alexis task queue.",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), nil, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:           true,
+		RequesterID:             "alexis",
+		SourcePostID:            "post-absence-1",
+		OrchestrationDispatcher: dispatcher,
+	})
+	if len(results) != 0 {
+		t.Fatalf("expected no user-visible mesh results, got %v", results)
+	}
+	if len(dispatcher.requests) != 1 {
+		t.Fatalf("orchestration dispatch requests = %#v", dispatcher.requests)
+	}
+	req := dispatcher.requests[0]
+	if req.Intent != "coverage.transfer" ||
+		req.ToRoleID != "role-nursecoord-bot" ||
+		req.Context.Data["source_post_id"] != "post-absence-1" ||
+		req.Context.Data["origin_chat_id"] != "origin-chat" {
+		t.Fatalf("orchestration dispatch request = %#v", req)
 	}
 }
 

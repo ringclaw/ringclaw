@@ -1122,20 +1122,25 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 		if starter, ok := meshCreator.(MeshOrchestrationStarter); ok {
 			orchestrationStarter = starter
 		}
+		var orchestrationDispatcher MeshOrchestrationDispatcher
+		if dispatcher, ok := meshCreator.(MeshOrchestrationDispatcher); ok {
+			orchestrationDispatcher = dispatcher
+		}
 		results := ExecuteAgentActions(ctx, client, actionClient, chatID, actions, ActionContext{
-			OriginIsOwner:        h.isOwnerSender(post.CreatorID),
-			OOB:                  h.OOBManager(),
-			OwnerDMChat:          h.OwnerDMChatID(),
-			RequesterID:          post.CreatorID,
-			OwnerID:              ownerID,
-			Mentions:             post.Mentions,
-			RelayCollaborator:    relayCollaboratorMention(client, post),
-			Capabilities:         h.actionCapabilities(),
-			OriginalText:         originalText,
-			SourcePostID:         post.ID,
-			MeshTaskCreator:      meshCreator,
-			OrchestrationStarter: orchestrationStarter,
-			RolePeers:            h.actionRolePeers(),
+			OriginIsOwner:           h.isOwnerSender(post.CreatorID),
+			OOB:                     h.OOBManager(),
+			OwnerDMChat:             h.OwnerDMChatID(),
+			RequesterID:             post.CreatorID,
+			OwnerID:                 ownerID,
+			Mentions:                post.Mentions,
+			RelayCollaborator:       relayCollaboratorMention(client, post),
+			Capabilities:            h.actionCapabilities(),
+			OriginalText:            originalText,
+			SourcePostID:            post.ID,
+			MeshTaskCreator:         meshCreator,
+			OrchestrationStarter:    orchestrationStarter,
+			OrchestrationDispatcher: orchestrationDispatcher,
+			RolePeers:               h.actionRolePeers(),
 		})
 		if len(results) > 0 {
 			defer func() {

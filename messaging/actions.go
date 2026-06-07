@@ -239,6 +239,9 @@ type ActionContext struct {
 	// OrchestrationStarter lets a source RingClaw runtime create a top-level
 	// plan before the first delegated mesh task is created.
 	OrchestrationStarter MeshOrchestrationStarter
+	// OrchestrationDispatcher lets Control Plane own the first scheduling hop:
+	// it creates/reuses the plan and creates the first mesh task atomically.
+	OrchestrationDispatcher MeshOrchestrationDispatcher
 	// RolePeers maps AgentsMesh role IDs to concrete RingCentral bot
 	// mention targets for real RC bot-to-bot messages.
 	RolePeers map[string]RolePeer
@@ -288,7 +291,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, "Refused mesh task: only trusted senders can delegate agent tasks.")
 				continue
 			}
-			if opts.MeshTaskCreator == nil {
+			if opts.MeshTaskCreator == nil && opts.OrchestrationDispatcher == nil {
 				record("failed", "", false, map[string]any{"reason": "mesh_not_configured"})
 				results = append(results, "Failed to create mesh task: Agent Mesh is not configured for this bot.")
 				continue
@@ -299,8 +302,13 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 				results = append(results, fmt.Sprintf("Failed to create mesh task: %v", err))
 				continue
 			}
-			req = startOrchestrationForMeshTask(ctx, req, opts, chatID, record)
-			task, err := opts.MeshTaskCreator.CreateMeshTask(ctx, req)
+			var task MeshRuntimeTask
+			if opts.OrchestrationDispatcher != nil {
+				task, err = dispatchOrchestrationForMeshTask(ctx, req, opts, chatID)
+			} else {
+				req = startOrchestrationForMeshTask(ctx, req, opts, chatID, record)
+				task, err = opts.MeshTaskCreator.CreateMeshTask(ctx, req)
+			}
 			if err != nil {
 				record("failed", "", false, map[string]any{"error": err.Error(), "to_role_id": req.ToRoleID, "intent": req.Intent})
 				results = append(results, fmt.Sprintf("Failed to create mesh task: %v", err))
@@ -800,6 +808,31 @@ func startOrchestrationForMeshTask(ctx context.Context, req MeshRuntimeTaskCreat
 		"reason":     "orchestration_started",
 	})
 	return req
+}
+
+func dispatchOrchestrationForMeshTask(ctx context.Context, req MeshRuntimeTaskCreateRequest, opts ActionContext, originChatID string) (MeshRuntimeTask, error) {
+	if opts.OrchestrationDispatcher == nil {
+		return MeshRuntimeTask{}, fmt.Errorf("orchestration dispatcher is not configured")
+	}
+	dispatchReq := MeshRuntimeOrchestrationDispatchRequest{
+		PlanID:       req.PlanID,
+		ToRoleID:     req.ToRoleID,
+		Intent:       req.Intent,
+		Title:        req.Title,
+		Instructions: req.Instructions,
+		Context:      req.Context,
+	}
+	if dispatchReq.Context.Data == nil {
+		dispatchReq.Context.Data = map[string]interface{}{}
+	}
+	putMeshContextData(dispatchReq.Context.Data, "origin_chat_id", originChatID)
+	putMeshContextData(dispatchReq.Context.Data, "source_post_id", opts.SourcePostID)
+	putMeshContextData(dispatchReq.Context.Data, "source_task_id", opts.SourceTaskID)
+	putMeshContextData(dispatchReq.Context.Data, "source_agent_id", opts.SourceAgentID)
+	putMeshContextData(dispatchReq.Context.Data, "requester_id", opts.RequesterID)
+	putMeshContextData(dispatchReq.Context.Data, "to_role_id", req.ToRoleID)
+	putMeshContextData(dispatchReq.Context.Data, "intent", req.Intent)
+	return opts.OrchestrationDispatcher.DispatchOrchestration(ctx, dispatchReq)
 }
 
 var (
