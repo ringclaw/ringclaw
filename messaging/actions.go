@@ -1417,6 +1417,9 @@ func notifyRolePeerForMeshTask(ctx context.Context, replyClient, actionClient *r
 		"target_chat_source":  targetChatSource,
 		"target_display_name": peer.DisplayName,
 	}
+	if task.RoutePlan.RoutingDecision.Mode != "" {
+		extra["route_decision"] = task.RoutePlan.RoutingDecision
+	}
 	for key, value := range deliveryDetails {
 		extra[key] = value
 	}
@@ -1668,9 +1671,6 @@ func meshTaskRequestFromAction(a AgentAction, opts ActionContext, originChatID s
 		instructions = strings.TrimSpace(a.Body)
 	}
 	summary := firstActionParam(a.Params, "context_summary", "summary")
-	if toRoleID == "" {
-		return MeshRuntimeTaskCreateRequest{}, fmt.Errorf("to_role_id is required")
-	}
 	if intent == "" {
 		return MeshRuntimeTaskCreateRequest{}, fmt.Errorf("intent is required")
 	}

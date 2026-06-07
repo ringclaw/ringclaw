@@ -50,8 +50,18 @@ type MeshRuntimeRoutePlan struct {
 	ToRoleID        string                         `json:"to_role_id,omitempty"`
 	TargetBotID     string                         `json:"target_bot_id,omitempty"`
 	Intent          string                         `json:"intent,omitempty"`
+	RoutingDecision MeshRuntimeRoutingDecision     `json:"routing_decision,omitempty"`
 	VisibleDelivery MeshRuntimeVisibleDeliveryPlan `json:"visible_delivery,omitempty"`
 	CallbackPolicy  MeshRuntimeCallbackPolicy      `json:"callback_policy,omitempty"`
+}
+
+type MeshRuntimeRoutingDecision struct {
+	Mode             string   `json:"mode,omitempty"`
+	Intent           string   `json:"intent,omitempty"`
+	RequestedRoleID  string   `json:"requested_role_id,omitempty"`
+	SelectedRoleID   string   `json:"selected_role_id,omitempty"`
+	CandidateRoleIDs []string `json:"candidate_role_ids,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
 }
 
 type MeshRuntimeVisibleDeliveryPlan struct {
@@ -212,41 +222,45 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 	}
 	if shouldPostMeshCleanReplyFallback(cleanResult, actionEvents) && r.replyClient != nil && strings.TrimSpace(r.defaultChatID) != "" {
 		if err := SendTextReply(ctx, r.replyClient, r.defaultChatID, cleanResult); err != nil {
+			details := r.meshTaskActionDetails(task, map[string]any{
+				"mesh_clean_reply_fallback": true,
+				"error":                     err.Error(),
+			})
 			actionEvents = append(actionEvents, MeshRuntimeTaskActionEvent{
-				Type:   "MESSAGE",
-				Status: "failed",
-				Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, r.defaultChatID, false, map[string]any{
-					"mesh_clean_reply_fallback": true,
-					"error":                     err.Error(),
-				})),
+				Type:    "MESSAGE",
+				Status:  "failed",
+				Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, r.defaultChatID, false, details)),
 			})
 		} else {
+			details := r.meshTaskActionDetails(task, map[string]any{
+				"mesh_clean_reply_fallback": true,
+			})
 			actionEvents = append(actionEvents, MeshRuntimeTaskActionEvent{
-				Type:   "MESSAGE",
-				Status: "completed",
-				Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, r.defaultChatID, false, map[string]any{
-					"mesh_clean_reply_fallback": true,
-				})),
+				Type:    "MESSAGE",
+				Status:  "completed",
+				Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, r.defaultChatID, false, details)),
 			})
 		}
 		ownerDMChat := strings.TrimSpace(r.replyClient.DMChatID())
 		if ownerDMChat != "" && ownerDMChat != strings.TrimSpace(r.defaultChatID) {
 			if err := SendTextReply(ctx, r.replyClient, ownerDMChat, cleanResult); err != nil {
+				details := r.meshTaskActionDetails(task, map[string]any{
+					"mesh_owner_dm_update": true,
+					"error":                err.Error(),
+				})
 				actionEvents = append(actionEvents, MeshRuntimeTaskActionEvent{
-					Type:   "MESSAGE",
-					Status: "failed",
-					Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, ownerDMChat, true, map[string]any{
-						"mesh_owner_dm_update": true,
-						"error":                err.Error(),
-					})),
+					Type:    "MESSAGE",
+					Status:  "failed",
+					Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, ownerDMChat, true, details)),
 				})
 			} else {
+				details := r.meshTaskActionDetails(task, map[string]any{
+					"mesh_owner_dm_update": true,
+				})
 				actionEvents = append(actionEvents, MeshRuntimeTaskActionEvent{
-					Type:   "MESSAGE",
-					Status: "completed",
-					Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, ownerDMChat, true, map[string]any{
-						"mesh_owner_dm_update": true,
-					})),
+					Type:    "MESSAGE",
+					Status:  "completed",
+					Details: convertMeshActionDetails(actionEventDetails(r.defaultChatID, ownerDMChat, true, details)),
 				})
 			}
 		}
@@ -256,6 +270,22 @@ func (r *MeshRunner) processTask(ctx context.Context, task MeshRuntimeTask) erro
 		Result:       strings.TrimSpace(result),
 		ActionEvents: actionEvents,
 	})
+}
+
+func (r *MeshRunner) meshTaskActionDetails(task MeshRuntimeTask, extra map[string]any) map[string]any {
+	details := map[string]any{
+		"task_id":         task.ID,
+		"trace_id":        task.TraceID,
+		"intent":          task.Intent,
+		"from_agent_id":   task.FromAgentID,
+		"to_agent_id":     task.ToAgentID,
+		"to_role_id":      task.ToRoleID,
+		"source_agent_id": r.sourceAgentID,
+	}
+	for key, value := range extra {
+		details[key] = value
+	}
+	return details
 }
 
 func cloneRolePeers(peers map[string]RolePeer) map[string]RolePeer {

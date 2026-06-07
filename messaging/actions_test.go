@@ -3138,6 +3138,40 @@ func TestExecuteAgentActions_MeshTaskCreatesDelegatedTask(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentActions_MeshTaskAllowsControlPlaneToScheduleTargetRole(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"intent":          "absence_coverage_request",
+			"title":           "Alexis absence coverage",
+			"context_summary": "Alexis is absent today.",
+		},
+		Body: "Transfer Alexis task queue and report completion.",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), nil, nil, "origin-chat", actions, ActionContext{
+		OriginIsOwner:   true,
+		MeshTaskCreator: creator,
+	})
+	if len(results) != 0 {
+		t.Fatalf("results = %#v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+	req := creator.requests[0]
+	if req.ToRoleID != "" {
+		t.Fatalf("mesh task request should let Control Plane schedule target role, got %#v", req)
+	}
+	if req.Intent != "coverage.transfer" || req.Title != "Alexis absence coverage" {
+		t.Fatalf("mesh task request = %#v", req)
+	}
+	if _, ok := req.Context.Data["to_role_id"]; ok {
+		t.Fatalf("context should not contain empty to_role_id: %#v", req.Context.Data)
+	}
+}
+
 func TestExecuteAgentActions_MeshTaskAddsStableSourceContext(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	actions := []AgentAction{{
@@ -3472,6 +3506,13 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesControlPlaneRoutePlan(t *t
 			ToAgentID:   "mesh-agent-nursecoord",
 			TargetBotID: "personal-ava-nursecoord",
 			Intent:      "coverage.transfer",
+			RoutingDecision: MeshRuntimeRoutingDecision{
+				Mode:             "auto_unique_intent",
+				Intent:           "coverage.transfer",
+				SelectedRoleID:   "role-nursecoord-bot",
+				CandidateRoleIDs: []string{"role-nursecoord-bot"},
+				Reason:           "unique delegated role can handle intent coverage.transfer",
+			},
 			VisibleDelivery: MeshRuntimeVisibleDeliveryPlan{
 				Enabled:           true,
 				Transport:         "shared_chat",
@@ -3540,6 +3581,10 @@ func TestExecuteAgentActions_MeshTaskVisibleNotifyUsesControlPlaneRoutePlan(t *t
 		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["trace_id"] == "trace-post-106362159108" {
 			if event.Details["target_chat_source"] != "shared_chat" || event.Details["target_mention_id"] != "87368646659" {
 				t.Fatalf("unexpected route-plan event details: %#v", event.Details)
+			}
+			decision, ok := event.Details["route_decision"].(MeshRuntimeRoutingDecision)
+			if !ok || decision.Mode != "auto_unique_intent" || decision.SelectedRoleID != "role-nursecoord-bot" {
+				t.Fatalf("route decision was not recorded in event details: %#v", event.Details["route_decision"])
 			}
 			sawRouteEvent = true
 			break

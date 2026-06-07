@@ -113,6 +113,14 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 			"route_plan": map[string]any{
 				"trace_id":   "trace-post-123",
 				"to_role_id": req.ToRoleID,
+				"routing_decision": map[string]any{
+					"mode":               "explicit_role",
+					"intent":             "coverage.transfer",
+					"requested_role_id":  "nurse-coordinator",
+					"selected_role_id":   "nurse-coordinator",
+					"candidate_role_ids": []string{"nurse-coordinator"},
+					"reason":             "explicit target role requested",
+				},
 				"visible_delivery": map[string]any{
 					"enabled":           true,
 					"transport":         "shared_chat",
@@ -152,6 +160,10 @@ func TestRuntimeMeshTaskClientCreatesTaskAsSourceRuntime(t *testing.T) {
 	}
 	if task.TraceID != "trace-post-123" || task.RoutePlan.VisibleDelivery.ChatID != "chat-admin" {
 		t.Fatalf("created task route plan = %#v", task)
+	}
+	if task.RoutePlan.RoutingDecision.Mode != "explicit_role" ||
+		task.RoutePlan.RoutingDecision.SelectedRoleID != "nurse-coordinator" {
+		t.Fatalf("created task routing decision = %#v", task.RoutePlan.RoutingDecision)
 	}
 	if !sawCreate {
 		t.Fatal("create endpoint was not called")

@@ -38,7 +38,7 @@ func TestActionPromptTemplate_MatchesDefault(t *testing.T) {
 		t.Error("ActionPromptTemplate should describe visible role-targeted bot-to-bot messages")
 	}
 	if !strings.Contains(got, "ACTION:MESH_TASK") ||
-		!strings.Contains(got, "Use the role id provided by the user's role policy, SOUL, skill, or runtime context") ||
+		!strings.Contains(got, "to_role_id is optional when exactly one delegated role can handle the intent") ||
 		!strings.Contains(got, "Do not send an ACTION:MESSAGE to #admin") ||
 		!strings.Contains(got, "intent=coverage.transfer") ||
 		!strings.Contains(got, "absence_coverage_request") {

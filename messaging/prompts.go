@@ -59,7 +59,7 @@ ACTION:SMS to=<target phone or person/contact name> [from=<owned phone>]
 <message body>
 END_ACTION
 
-ACTION:MESH_TASK to_role_id=<role id> intent=<task intent> [title=<title>] [context_summary=<summary>]
+ACTION:MESH_TASK intent=<task intent> [to_role_id=<role id>] [title=<title>] [context_summary=<summary>]
 <instructions for the target agent role>
 END_ACTION
 
@@ -68,7 +68,7 @@ END_ACTION
 - assignee: person name or ![:Person](ID).
 - The system resolves names to IDs automatically. NEVER use person/creator/user IDs as chatid.
 - When the work should be handled by another Personal AVA / AgentsMesh role, use ACTION:MESH_TASK. Do not send an ACTION:MESSAGE to #admin, admin, or a channel as a substitute for agent-to-agent delegation.
-- Use the role id provided by the user's role policy, SOUL, skill, or runtime context when generating ACTION:MESH_TASK. Put the handoff details in the action body and a one-line context_summary. Do not invent a fixed target role.
+- Prefer the role id provided by the user's role policy, SOUL, skill, or runtime context when generating ACTION:MESH_TASK. to_role_id is optional when exactly one delegated role can handle the intent; Control Plane rejects ambiguous routes and asks for an explicit role. Put the handoff details in the action body and a one-line context_summary. Do not invent a fixed target role.
 - For absence, sick-day, or coverage handoff delegation, use intent=coverage.transfer. Do not invent aliases such as absence_coverage_request.
 - When you need a visible RingCentral bot-to-bot message instead of a Mesh task, use ACTION:MESSAGE to_role_id=<role id>. RingClaw will choose the configured shared chat and prepend the target bot mention.
 - For SMS and phone calls, there is no separate CONTACT action. Put the person's name in to=; RingClaw resolves it through directory/address-book contacts and uses a reachable phone number.

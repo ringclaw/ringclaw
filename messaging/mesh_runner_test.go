@@ -187,6 +187,79 @@ func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
 	}
 }
 
+func TestMeshRunnerPostsSecondAgentCleanReplyWithTraceForFrontend(t *testing.T) {
+	var sent []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/admin-chat/posts" {
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode post: %v", err)
+			}
+			sent = append(sent, body.Text)
+			_ = json.NewEncoder(w).Encode(ringcentral.Post{ID: "post-1", Text: body.Text})
+			return
+		}
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	botClient := ringcentral.NewBotClient(server.URL, "bot-token")
+	visibleReply := "收到 coverage.transfer 任务，正在联系 Jennifer/Karen 覆盖。"
+	ag := &meshTestAgent{reply: visibleReply}
+	taskClient := &meshTaskClientStub{tasks: []MeshRuntimeTask{{
+		ID:          "mesh-task-nursecoord-visible",
+		TraceID:     "trace-aa-visible",
+		FromAgentID: "mesh-agent-personal-ava-alexis",
+		ToAgentID:   "mesh-agent-personal-ava-nursecoord",
+		ToRoleID:    "role-nursecoord-bot",
+		Intent:      "coverage.transfer",
+		Title:       "Coverage handoff",
+		Context: MeshRuntimeContextPackage{
+			Summary: "Alexis is absent and nursecoord-bot must continue the coverage workflow.",
+		},
+	}}}
+	runner := NewMeshRunner(MeshRunnerOptions{
+		Client:        taskClient,
+		Agent:         ag,
+		ReplyClient:   botClient,
+		DefaultChatID: "admin-chat",
+		SourceAgentID: "mesh-agent-personal-ava-nursecoord",
+	})
+
+	if err := runner.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if len(sent) != 1 || sent[0] != visibleReply {
+		t.Fatalf("visible replies = %#v", sent)
+	}
+	if len(taskClient.responses) != 1 {
+		t.Fatalf("responses = %#v", taskClient.responses)
+	}
+	resp := taskClient.responses[0]
+	if resp.Status != MeshRuntimeTaskStatusCompleted {
+		t.Fatalf("response status = %q", resp.Status)
+	}
+	var fallback MeshRuntimeTaskActionEvent
+	for _, event := range resp.ActionEvents {
+		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["mesh_clean_reply_fallback"] == true {
+			fallback = event
+			break
+		}
+	}
+	if fallback.Type == "" {
+		t.Fatalf("missing clean reply fallback action event: %#v", resp.ActionEvents)
+	}
+	if fallback.Details["trace_id"] != "trace-aa-visible" ||
+		fallback.Details["task_id"] != "mesh-task-nursecoord-visible" ||
+		fallback.Details["to_role_id"] != "role-nursecoord-bot" ||
+		fallback.Details["to_agent_id"] != "mesh-agent-personal-ava-nursecoord" ||
+		fallback.Details["source_agent_id"] != "mesh-agent-personal-ava-nursecoord" {
+		t.Fatalf("fallback details = %#v", fallback.Details)
+	}
+}
+
 func TestMeshRunnerPassesRolePeersToAgentActions(t *testing.T) {
 	var sentPath string
 	var sentText string
