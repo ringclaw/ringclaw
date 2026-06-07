@@ -1136,6 +1136,7 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			RelayCollaborator:       relayCollaboratorMention(client, post),
 			Capabilities:            h.actionCapabilities(),
 			OriginalText:            originalText,
+			InteractiveOriginChatID: interactiveOriginChatID(post),
 			SourcePostID:            post.ID,
 			MeshTaskCreator:         meshCreator,
 			OrchestrationStarter:    orchestrationStarter,
@@ -1176,6 +1177,13 @@ func (h *Handler) sendReplyWithActions(ctx context.Context, client *ringcentral.
 			slog.Error("failed to send image", "component", "handler", "error", mediaErr)
 		}
 	}
+}
+
+func interactiveOriginChatID(post ringcentral.Post) string {
+	if post.RuntimeMetadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(post.RuntimeMetadata["origin_chat_id"])
 }
 
 // chatWithAgent sends a message to an agent and returns the reply.

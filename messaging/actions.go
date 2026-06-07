@@ -220,6 +220,11 @@ type ActionContext struct {
 	// action execution enforce workflow-specific safety rails even when the
 	// model emits the wrong ACTION blocks.
 	OriginalText string
+	// InteractiveOriginChatID records the source operational chat for
+	// provider-approval interactive events that were clicked in a DM. When
+	// present, downstream refill workflow actions can route back to the
+	// coordination room instead of continuing in the provider DM.
+	InteractiveOriginChatID string
 	// SourcePostID identifies the RingCentral post that produced this action.
 	// Mesh task creation carries it into Control Plane so duplicate processing
 	// of the same post can be deduped across pods/restarts.
@@ -252,8 +257,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 	var results []string
 	initialClinicalRefill := isInitialClinicalRefillRequest(opts.OriginalText)
 	forceClinicalRefillApproval := shouldForceClinicalRefillApproval(opts.OriginalText, actions)
+	defaultActionChatID := clinicalRefillWorkflowChatID(chatID, opts)
 	if forceClinicalRefillApproval {
-		actions = append([]AgentAction{buildClinicalRefillApprovalCardAction(opts.OriginalText, opts)}, actions...)
+		actions = append([]AgentAction{buildClinicalRefillApprovalCardAction(opts.OriginalText, chatID, opts)}, actions...)
 	}
 	actions = normalizeLegacyMeshDelegationActions(actions, opts)
 	if actionClient != nil {
@@ -366,7 +372,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 			continue
 		}
 
-		targetChat := chatID
+		targetChat := defaultActionChatID
 		crossChat := false
 		var currentChatMention *ringcentral.Mention
 		rolePeer, hasRolePeer := rolePeerForAction(a, opts.RolePeers)
@@ -413,7 +419,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 						continue
 					}
 					targetChat = resolved
-					if resolved != chatID {
+					if resolved != defaultActionChatID {
 						record("approval_required", targetChat, true, map[string]any{"requester_id": opts.RequesterID})
 						results = append(results, crossChatOOBChallenge(ctx, actionClient, a, chatID, targetChat, opts))
 						continue
@@ -431,7 +437,7 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					continue
 				}
 				targetChat = resolved
-				crossChat = resolved != chatID
+				crossChat = resolved != defaultActionChatID
 			}
 		}
 
@@ -448,7 +454,9 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 		// bot-to-bot collaboration path, so they do not need the owner DM
 		// pre-notice that guards free-form chatid= cross-chat writes.
 		if crossChat && targetChat != opts.OwnerDMChat && !hasRolePeer {
-			if err := announceCrossChatOrRefuse(ctx, replyClient, opts, a.Type, chatID, targetChat); err != nil {
+			if initialClinicalRefill && strings.EqualFold(a.Type, "CARD") && cardHasClinicalRefillSubmitActions(a) {
+				crossChat = false
+			} else if err := announceCrossChatOrRefuse(ctx, replyClient, opts, a.Type, chatID, targetChat); err != nil {
 				slog.Warn("action: cross-chat ACTION refused (fail-closed on pre-notice)",
 					"type", a.Type, "origin", chatID, "target", targetChat,
 					"requesterID", opts.RequesterID, "error", err)
@@ -1106,7 +1114,19 @@ func clinicalRefillGuardReply(originalText string) string {
 	return fmt.Sprintf("已发送 %s 的续剂审批卡，等待 %s 操作 approve / followup / deny。未发送 SMS，未创建 Task。", req.PatientID, req.ProviderName)
 }
 
-func buildClinicalRefillApprovalCardAction(originalText string, opts ActionContext) AgentAction {
+func clinicalRefillWorkflowChatID(currentChatID string, opts ActionContext) string {
+	originChatID := strings.TrimSpace(opts.InteractiveOriginChatID)
+	if originChatID == "" || originChatID == currentChatID {
+		return currentChatID
+	}
+	fields := strings.Fields(strings.TrimSpace(opts.OriginalText))
+	if len(fields) == 0 || !isClinicalRefillDecisionVerb(fields[0]) {
+		return currentChatID
+	}
+	return originChatID
+}
+
+func buildClinicalRefillApprovalCardAction(originalText string, originChatID string, opts ActionContext) AgentAction {
 	req := parseClinicalRefillRequest(originalText)
 	if req.PatientID == "" {
 		req.PatientID = "Unknown"
@@ -1153,24 +1173,31 @@ func buildClinicalRefillApprovalCardAction(originalText string, opts ActionConte
 			},
 		},
 		"actions": []map[string]any{
-			refillSubmitAction("Approve", "approve", rxID, req, opts),
-			refillSubmitAction("Need follow-up", "followup", rxID, req, opts),
-			refillSubmitAction("Deny", "deny", rxID, req, opts),
+			refillSubmitAction("Approve", "approve", rxID, req, originChatID, opts),
+			refillSubmitAction("Need follow-up", "followup", rxID, req, originChatID, opts),
+			refillSubmitAction("Deny", "deny", rxID, req, originChatID, opts),
 		},
 	}
 	body, err := json.Marshal(card)
 	if err != nil {
 		body = []byte(`{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Refill approval requested"}]}`)
 	}
-	return AgentAction{Type: "CARD", Body: string(body)}
+	action := AgentAction{Type: "CARD", Body: string(body)}
+	if req.ProviderName != "" {
+		action.Params = map[string]string{"chatid": req.ProviderName}
+	}
+	return action
 }
 
-func refillSubmitAction(title, action, rxID string, req clinicalRefillRequest, opts ActionContext) map[string]any {
+func refillSubmitAction(title, action, rxID string, req clinicalRefillRequest, originChatID string, opts ActionContext) map[string]any {
 	data := map[string]any{
 		"action":     action,
 		"rx_id":      rxID,
 		"patient_id": req.PatientID,
 		"medication": req.Medication,
+	}
+	if strings.TrimSpace(originChatID) != "" {
+		data["origin_chat_id"] = strings.TrimSpace(originChatID)
 	}
 	if req.ProviderName != "" {
 		data["provider_name"] = req.ProviderName

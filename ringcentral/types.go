@@ -2,21 +2,22 @@ package ringcentral
 
 // Post represents a Team Messaging post.
 type Post struct {
-	ID               string       `json:"id"`
-	GroupID          string       `json:"groupId"`
-	Type             string       `json:"type"`
-	Text             string       `json:"text"`
-	CreatorID        string       `json:"creatorId"`
-	AddedPersonIDs   []string     `json:"addedPersonIds"`
-	CreationTime     string       `json:"creationTime"`
-	LastModifiedTime string       `json:"lastModifiedTime"`
-	Attachments      []Attachment `json:"attachments"`
-	Mentions         []Mention    `json:"mentions"`
-	Activity         string       `json:"activity"`
-	Title            string       `json:"title"`
-	IconURI          string       `json:"iconUri"`
-	IconEmoji        string       `json:"iconEmoji"`
-	EventType        string       `json:"eventType"`
+	ID               string            `json:"id"`
+	GroupID          string            `json:"groupId"`
+	Type             string            `json:"type"`
+	Text             string            `json:"text"`
+	CreatorID        string            `json:"creatorId"`
+	AddedPersonIDs   []string          `json:"addedPersonIds"`
+	CreationTime     string            `json:"creationTime"`
+	LastModifiedTime string            `json:"lastModifiedTime"`
+	Attachments      []Attachment      `json:"attachments"`
+	Mentions         []Mention         `json:"mentions"`
+	Activity         string            `json:"activity"`
+	Title            string            `json:"title"`
+	IconURI          string            `json:"iconUri"`
+	IconEmoji        string            `json:"iconEmoji"`
+	EventType        string            `json:"eventType"`
+	RuntimeMetadata  map[string]string `json:"-"`
 }
 
 // Attachment represents a post attachment.

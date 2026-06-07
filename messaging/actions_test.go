@@ -3007,6 +3007,16 @@ func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/directory/entries/search":
+			json.NewEncoder(w).Encode(map[string]any{
+				"records": []map[string]string{{
+					"id":        "provider-person-1",
+					"firstName": "Andrew",
+					"lastName":  "Wenner",
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/conversations":
+			json.NewEncoder(w).Encode(map[string]string{"id": "provider-dm-1", "type": "Direct"})
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/tasks"):
 			taskCalls++
 			t.Fatalf("unexpected task creation for initial refill request")
@@ -3048,6 +3058,9 @@ func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) 
 	if cardCalls != 1 {
 		t.Fatalf("expected only one replacement card call, got %d", cardCalls)
 	}
+	if postedChatID, ok := postedCard["chat_id"].(string); ok && postedChatID != "" {
+		t.Fatalf("adaptive card payload unexpectedly contained chat_id=%q", postedChatID)
+	}
 	actionsRaw, ok := postedCard["actions"].([]any)
 	if !ok || len(actionsRaw) != 3 {
 		t.Fatalf("expected three submit actions in card, got %#v", postedCard["actions"])
@@ -3062,6 +3075,103 @@ func TestExecuteAgentActions_ClinicalRefillBlocksTaskAndSendsCard(t *testing.T) 
 	}
 	if data["bot_id"] != "personal-ava-test" || data["patient_id"] != "AX-2847" || data["action"] != "approve" {
 		t.Fatalf("unexpected submit data: %#v", data)
+	}
+	if data["origin_chat_id"] != "chat-1" {
+		t.Fatalf("origin_chat_id = %#v", data["origin_chat_id"])
+	}
+	if actions[0].Params["chatid"] != "" {
+		t.Fatalf("original action should remain unmodified, got chatid=%q", actions[0].Params["chatid"])
+	}
+}
+
+func TestExecuteAgentActions_ClinicalRefillApprovalFallbackTargetsProviderDM(t *testing.T) {
+	t.Setenv("BOT_ID", "personal-ava-test")
+
+	var createConversationCalls int
+	var postedCardPath string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/restapi/v1.0/account/~/directory/entries/search":
+			json.NewEncoder(w).Encode(map[string]any{
+				"records": []map[string]string{{
+					"id":        "provider-person-1",
+					"firstName": "Andrew",
+					"lastName":  "Wenner",
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/conversations":
+			createConversationCalls++
+			json.NewEncoder(w).Encode(map[string]string{"id": "provider-dm-1", "type": "Direct"})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/provider-dm-1/adaptive-cards":
+			postedCardPath = r.URL.Path
+			json.NewEncoder(w).Encode(map[string]any{"id": "card-1", "type": "AdaptiveCard"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	botClient := ringcentral.NewBotClient(srv.URL, "bot-token")
+	privateClient := ringcentral.NewClient(&ringcentral.Credentials{
+		ClientID: "id", ClientSecret: "secret", JWTToken: "jwt", ServerURL: srv.URL,
+	})
+	privateClient.Auth().SetTokenForTest("test-token", time.Now().Add(1*time.Hour))
+
+	results := ExecuteAgentActions(context.Background(), botClient, privateClient, "clinical-chat-1", []AgentAction{{
+		Type: "CARD",
+		Body: `{"type":"AdaptiveCard","version":"1.3","body":[{"type":"TextBlock","text":"Refill Routed"}]}`,
+	}}, ActionContext{
+		OriginIsOwner: true,
+		OriginalText:  "refill AX-2847 Sertraline 100mg Andrew Wenner",
+	})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if createConversationCalls != 1 {
+		t.Fatalf("expected one DM resolution call, got %d", createConversationCalls)
+	}
+	if postedCardPath != "/team-messaging/v1/chats/provider-dm-1/adaptive-cards" {
+		t.Fatalf("posted card path = %q", postedCardPath)
+	}
+}
+
+func TestExecuteAgentActions_ClinicalRefillDecisionRoutesChatActionsBackToOrigin(t *testing.T) {
+	var messagePath string
+	var taskPath string
+
+	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/clinical-chat-1/posts":
+			messagePath = r.URL.Path
+			json.NewEncoder(w).Encode(ringcentral.Post{ID: "post-1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/clinical-chat-1/tasks":
+			taskPath = r.URL.Path
+			json.NewEncoder(w).Encode(ringcentral.Task{ID: "task-1", Subject: "Send refill to pharmacy"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer srv.Close()
+
+	results := ExecuteAgentActions(context.Background(), client, client, "provider-dm-1", []AgentAction{
+		{Type: "MESSAGE", Body: "SMS sent to patient."},
+		{Type: "TASK", Params: map[string]string{"subject": "Send refill to pharmacy"}},
+	}, ActionContext{
+		OriginIsOwner:           true,
+		OriginalText:            "approve RX-20260607-AX2847",
+		InteractiveOriginChatID: "clinical-chat-1",
+	})
+	if len(results) != 0 {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if messagePath != "/team-messaging/v1/chats/clinical-chat-1/posts" {
+		t.Fatalf("message path = %q", messagePath)
+	}
+	if taskPath != "/team-messaging/v1/chats/clinical-chat-1/tasks" {
+		t.Fatalf("task path = %q", taskPath)
 	}
 }
 

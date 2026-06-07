@@ -100,6 +100,9 @@ func processRuntimeInteractiveEvent(ctx context.Context, controlPlaneURL, botID,
 		CreatorID:    executorID,
 		CreationTime: firstNonEmptyString(event.EventTimestamp, time.Now().UTC().Format(time.RFC3339Nano)),
 		EventType:    "PostAdded",
+		RuntimeMetadata: map[string]string{
+			"origin_chat_id": interactiveString(event.Data, "origin_chat_id"),
+		},
 	}
 	updateRuntimeInteractiveDecisionCard(ctx, c.bot, event)
 	slog.Info("dispatching runtime interactive event", "component", "runtime_interactive", "eventID", event.ID, "creatorID", executorID, "submitterID", event.UserID, "submitter", runtimeInteractiveSubmitter(event), "chatID", event.ConversationID, "text", text)
