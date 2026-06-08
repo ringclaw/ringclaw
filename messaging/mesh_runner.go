@@ -356,8 +356,11 @@ func (r *MeshRunner) buildCoverageSMSCorrectionPrompt(task MeshRuntimeTask, prev
 	b.WriteString(r.buildMeshTaskPrompt(task))
 	b.WriteString(fmt.Sprintf("\n\nPrevious mesh response did not include an executable ACTION:%s, so the coverage transfer cannot advance to waiting state yet.\n", requiredAction))
 	b.WriteString("Return a corrected response now. ")
-	b.WriteString("Include ACTION:CARD with an Adaptive Card status update. Omit chatid; the runtime posts the card to the default shared/admin group chat. The card JSON must show the coverage request, Jennifer/Karen candidate names and phone numbers, response window, and current waiting status. ")
-	b.WriteString("Do not use message, task, mesh delegation, or SMS outreach as a substitute for this required card update. ")
+	b.WriteString("Include exactly two ACTION:CARD blocks for coverage.transfer. ")
+	b.WriteString("The first ACTION:CARD must omit chatid so the runtime posts the status card to the default shared/admin group chat. ")
+	b.WriteString("The second ACTION:CARD must explicitly target Jennifer's Direct approval chat. ")
+	b.WriteString("The Jennifer approval card must use the current coverage card schema and include runtime-compatible Action.Submit data so a click produces coverage_confirm or coverage_decline. ")
+	b.WriteString("Do not use message, task, mesh delegation, owner-DM updates, or SMS outreach as a substitute for these required cards. ")
 	b.WriteString(fmt.Sprintf("After the ACTION:%s block(s), use MESH_STATUS: waiting only if you are waiting for candidate replies.\n", requiredAction))
 	if previous := strings.TrimSpace(previousReply); previous != "" {
 		b.WriteString("\nPrevious response:\n")
@@ -534,7 +537,8 @@ func buildMeshTaskPromptWithAllowedActions(task MeshRuntimeTask, allowedActions 
 	}
 	if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") && containsMeshAllowedAction(allowedActions, "CARD") {
 		b.WriteString("For coverage.transfer, first post an ACTION:CARD status update. Omit chatid; the runtime posts the card to the default shared/admin group chat. Use details from DOMAIN.md inside the card JSON, including Jennifer/Karen candidate names and phone numbers, response window, and current waiting status. ")
-		b.WriteString("Use the Jennifer Direct approval card flow for backup coverage confirmation. Do not use message, task, mesh delegation, or SMS outreach as a substitute for the required status card; after emitting the card, use MESH_STATUS: waiting if you are waiting for replies.\n")
+		b.WriteString("Then post a second ACTION:CARD for Jennifer's Direct approval chat. This second card is required and must not be replaced by message, task, mesh delegation, owner-DM updates, or SMS outreach. ")
+		b.WriteString("A valid Stage 1 coverage.transfer answer contains exactly two card actions before waiting: one shared/admin status card and one Jennifer Direct approval card. Use `MESH_STATUS: waiting` only after both card actions are present.\n")
 	} else if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") {
 		b.WriteString("For coverage.transfer, do not use ACTION:SMS for backup coverage outreach. If the Jennifer Direct approval card flow is unavailable in this task, explain the waiting/blocker state instead of switching channels.\n")
 	}
