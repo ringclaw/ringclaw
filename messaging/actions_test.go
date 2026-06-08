@@ -4492,6 +4492,34 @@ func TestExecuteAgentActions_LegacyAdminMessageWithoutMeshStillResolvesNormally(
 	}
 }
 
+func TestShouldUseReplyClientForResolvedTarget_UsesReplyClientForReachableNumericChat(t *testing.T) {
+	replyClient, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/team-messaging/v1/chats/31462793222":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "31462793222", "type": "Team"})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer srv.Close()
+
+	if !shouldUseReplyClientForResolvedTarget(context.Background(), replyClient, "31462793222", "31462793222") {
+		t.Fatal("expected reachable numeric chat target to prefer reply client")
+	}
+}
+
+func TestShouldUseReplyClientForResolvedTarget_RejectsUnreachableNumericChat(t *testing.T) {
+	replyClient, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	defer srv.Close()
+
+	if shouldUseReplyClientForResolvedTarget(context.Background(), replyClient, "31462793222", "31462793222") {
+		t.Fatal("expected unreachable numeric chat target to stay on action client")
+	}
+}
+
 func TestBestDirectoryMatch_ExactOverFuzzy(t *testing.T) {
 	records := []ringcentral.DirectoryEntry{
 		{ID: "1", FirstName: "John", LastName: "Linaza"},

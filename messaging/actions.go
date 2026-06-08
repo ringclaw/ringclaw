@@ -442,6 +442,10 @@ func ExecuteAgentActions(ctx context.Context, replyClient, actionClient *ringcen
 					results = append(results, fmt.Sprintf("Failed to resolve chat '%s': %v", cid, err))
 					continue
 				}
+				if !namedChatTargetUsesReplyClient && shouldUseReplyClientForResolvedTarget(ctx, replyClient, cid, resolved) {
+					namedChatTargetUsesReplyClient = true
+					targetResolverClient = replyClient
+				}
 				targetChat = resolved
 				crossChat = resolved != defaultActionChatID
 			}
@@ -1152,6 +1156,26 @@ func shouldUseReplyClientForNamedChatTarget(raw string, replyClient *ringcentral
 	}
 	id := extractChatID(raw)
 	return id != "" && !isNumericID(id) && !isSelfPronoun(id)
+}
+
+func shouldUseReplyClientForResolvedTarget(ctx context.Context, replyClient *ringcentral.Client, raw, resolved string) bool {
+	if replyClient == nil {
+		return false
+	}
+	id := strings.TrimSpace(extractChatID(raw))
+	if id == "" || isSelfPronoun(id) {
+		return false
+	}
+	if !isNumericID(id) {
+		return true
+	}
+	if strings.TrimSpace(resolved) == "" {
+		return false
+	}
+	if _, err := replyClient.GetChat(ctx, resolved); err == nil {
+		return true
+	}
+	return false
 }
 
 func shouldForceClinicalRefillApproval(originalText string, actions []AgentAction) bool {

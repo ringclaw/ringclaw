@@ -602,6 +602,9 @@ func TestMeshRunnerRetriesCoverageTransferUntilCardAction(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/owner-dm/posts":
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": "owner-notice-1"})
 			return
+		case r.Method == http.MethodGet && r.URL.Path == "/team-messaging/v1/chats/140778029058":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "140778029058", "type": "Direct"})
+			return
 		case r.Method == http.MethodPost && r.URL.Path == "/team-messaging/v1/chats/admin-chat/adaptive-cards":
 			var body json.RawMessage
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
