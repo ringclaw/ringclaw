@@ -4468,6 +4468,39 @@ func TestExecuteAgentActions_CoverageMeshTaskDoesNotCreateHandoffNoteForMeshRunt
 	}
 }
 
+func TestExecuteAgentActions_CoverageMeshTaskDoesNotCreateHandoffNoteForInteractiveFollowup(t *testing.T) {
+	creator := &meshTaskCreatorActionStub{}
+	actionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("interactive follow-up should not create an automatic handoff note, got %s %s", r.Method, r.URL.Path)
+	}))
+	defer actionSrv.Close()
+
+	actionClient := ringcentral.NewBotClient(actionSrv.URL, "bot-token")
+	actions := []AgentAction{{
+		Type: "MESH_TASK",
+		Params: map[string]string{
+			"to_role_id":      "role-alexis-bot",
+			"intent":          "coverage.transfer",
+			"title":           "Coverage handoff complete",
+			"context_summary": "Jennifer confirmed coverage; alexis-bot should notify Alexis.",
+		},
+		Body: "HANDOFF_COMPLETE Jennifer confirmed coverage and accepted the full-day shift.",
+	}}
+
+	results := ExecuteAgentActions(context.Background(), actionClient, actionClient, "jennifer-dm-chat", actions, ActionContext{
+		OriginIsOwner:           true,
+		OriginalText:            "coverage_confirm",
+		InteractiveOriginChatID: "31462793222",
+		MeshTaskCreator:         creator,
+	})
+	if len(results) != 0 {
+		t.Fatalf("results = %#v", results)
+	}
+	if len(creator.requests) != 1 {
+		t.Fatalf("mesh task requests = %#v", creator.requests)
+	}
+}
+
 func TestExecuteAgentActions_LegacyAdminMessageWithoutMeshStillResolvesNormally(t *testing.T) {
 	creator := &meshTaskCreatorActionStub{}
 	actions := []AgentAction{{
