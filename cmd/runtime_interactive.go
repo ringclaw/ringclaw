@@ -163,7 +163,7 @@ func runtimeInteractiveEventText(event runtimeInteractiveEvent) string {
 	if command := interactiveString(event.Data, "command"); command != "" {
 		return command
 	}
-	action := strings.ToLower(strings.TrimSpace(interactiveString(event.Data, "action")))
+	action := runtimeInteractiveAction(event)
 	rxID := strings.TrimSpace(interactiveString(event.Data, "rx_id"))
 	if rxID == "" {
 		rxID = strings.TrimSpace(interactiveString(event.Data, "rxId"))
@@ -359,7 +359,45 @@ func runtimeInteractiveCoverageDecisionCard(event runtimeInteractiveEvent, actio
 }
 
 func runtimeInteractiveAction(event runtimeInteractiveEvent) string {
-	return strings.ToLower(strings.TrimSpace(interactiveString(event.Data, "action")))
+	if event.Data == nil {
+		return ""
+	}
+	for _, candidate := range []string{
+		interactiveString(event.Data, "action"),
+		interactiveString(event.Data, "intent"),
+		interactiveString(event.Data, "response"),
+		interactiveString(event.Data, "coverage_response"),
+	} {
+		if normalized := normalizeRuntimeInteractiveAction(candidate); normalized != "" {
+			return normalized
+		}
+	}
+	return ""
+}
+
+func normalizeRuntimeInteractiveAction(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	switch raw {
+	case "":
+		return ""
+	case "approve", "approved":
+		return "approve"
+	case "followup", "follow-up", "follow_up":
+		return "followup"
+	case "deny", "denied", "reject", "rejected":
+		return "deny"
+	case "coverage_confirm", "coverage.confirm", "confirm_coverage", "coverage- confirm":
+		return "coverage_confirm"
+	case "coverage_followup", "coverage.followup", "coverage.follow-up", "coverage.follow_up", "need_followup", "need-followup", "need_follow_up":
+		return "coverage_followup"
+	case "coverage_decline", "coverage.decline", "decline_coverage":
+		return "coverage_decline"
+	case "accept", "accepted", "accept_full_day", "full_day_accept", "coverage_accept":
+		return "coverage_confirm"
+	case "decline", "declined", "decline_full_day", "full_day_decline", "coverage_reject":
+		return "coverage_decline"
+	}
+	return raw
 }
 
 func runtimeInteractiveSubmitter(event runtimeInteractiveEvent) string {

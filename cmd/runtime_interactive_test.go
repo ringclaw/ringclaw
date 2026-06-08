@@ -112,6 +112,56 @@ func TestRuntimeInteractiveDecisionCard_CoverageFollowupUsesCoverageTemplate(t *
 	}
 }
 
+func TestRuntimeInteractiveEventText_CoverageAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]any
+		want string
+	}{
+		{
+			name: "explicit action",
+			data: map[string]any{"action": "coverage_confirm"},
+			want: "coverage_confirm",
+		},
+		{
+			name: "response accept",
+			data: map[string]any{"response": "accept"},
+			want: "coverage_confirm",
+		},
+		{
+			name: "response coverage confirm",
+			data: map[string]any{"response": "coverage_confirm"},
+			want: "coverage_confirm",
+		},
+		{
+			name: "coverage response accept full day",
+			data: map[string]any{"coverage_response": "accept_full_day"},
+			want: "coverage_confirm",
+		},
+		{
+			name: "intent coverage dot confirm",
+			data: map[string]any{"intent": "coverage.confirm"},
+			want: "coverage_confirm",
+		},
+		{
+			name: "decline alias",
+			data: map[string]any{"coverage_response": "decline_full_day"},
+			want: "coverage_decline",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runtimeInteractiveEventText(runtimeInteractiveEvent{Data: tt.data})
+			if got != tt.want {
+				t.Fatalf("runtimeInteractiveEventText() = %q, want %q", got, tt.want)
+			}
+			if action := runtimeInteractiveAction(runtimeInteractiveEvent{Data: tt.data}); action != tt.want {
+				t.Fatalf("runtimeInteractiveAction() = %q, want %q", action, tt.want)
+			}
+		})
+	}
+}
 func TestRuntimeInteractiveExecutorID_PrefersPrivateOwner(t *testing.T) {
 	bot := ringcentral.NewBotClient("", "bot-token")
 	bot.SetOwnerID("bot-owner")
