@@ -190,6 +190,14 @@ func runtimeInteractiveDecisionCard(event runtimeInteractiveEvent) json.RawMessa
 	if action == "" {
 		return nil
 	}
+	switch action {
+	case "coverage_confirm", "coverage_followup", "coverage_decline":
+		return runtimeInteractiveCoverageDecisionCard(event, action)
+	}
+	return runtimeInteractiveRefillDecisionCard(event, action)
+}
+
+func runtimeInteractiveRefillDecisionCard(event runtimeInteractiveEvent, action string) json.RawMessage {
 	rxID := firstNonEmptyString(interactiveString(event.Data, "rx_id"), interactiveString(event.Data, "rxId"), "Refill request")
 	patientID := firstNonEmptyString(interactiveString(event.Data, "patient_id"), interactiveString(event.Data, "patientId"), "Unknown")
 	medication := firstNonEmptyString(interactiveString(event.Data, "medication"), "See request")
@@ -243,6 +251,89 @@ func runtimeInteractiveDecisionCard(event runtimeInteractiveEvent) json.RawMessa
 			{
 				"type":   "TextBlock",
 				"text":   strings.TrimSpace(fmt.Sprintf("%s - %s %s", rxID, patientID, medication)),
+				"size":   "Large",
+				"color":  "Accent",
+				"weight": "Bolder",
+				"wrap":   true,
+			},
+			{
+				"type":  "FactSet",
+				"facts": facts,
+			},
+			{
+				"type":      "TextBlock",
+				"text":      message,
+				"wrap":      true,
+				"separator": true,
+			},
+		},
+	}
+	body, err := json.Marshal(card)
+	if err != nil {
+		return nil
+	}
+	return body
+}
+
+func runtimeInteractiveCoverageDecisionCard(event runtimeInteractiveEvent, action string) json.RawMessage {
+	coverageID := firstNonEmptyString(interactiveString(event.Data, "coverage_id"), interactiveString(event.Data, "coverageId"), "Coverage request")
+	candidate := firstNonEmptyString(interactiveString(event.Data, "candidate_name"), interactiveString(event.Data, "candidateName"), runtimeInteractiveSubmitter(event))
+	date := firstNonEmptyString(interactiveString(event.Data, "date"), "See request")
+	shift := firstNonEmptyString(interactiveString(event.Data, "shift"), "See request")
+	workload := firstNonEmptyString(interactiveString(event.Data, "workload"), interactiveString(event.Data, "transferred_workload"), "See request")
+	submitter := runtimeInteractiveSubmitter(event)
+
+	header := "Coverage decision recorded"
+	status := "Submitted by " + submitter
+	color := "Accent"
+	message := "Coverage decision recorded. Runtime will continue the coverage workflow."
+	switch action {
+	case "coverage_confirm":
+		header = "Coverage confirmed"
+		status = "Confirmed by " + submitter
+		color = "Good"
+		message = "Coverage confirmation has been recorded. Runtime will continue the coverage workflow."
+	case "coverage_followup":
+		header = "Coverage follow-up requested"
+		status = "Follow-up requested by " + submitter
+		color = "Warning"
+		message = "Follow-up is required before this coverage handoff can continue."
+	case "coverage_decline":
+		header = "Coverage declined"
+		status = "Declined by " + submitter
+		color = "Attention"
+		message = "Coverage decline has been recorded. Runtime will continue the fallback coverage workflow."
+	}
+
+	facts := []map[string]string{
+		{"title": "Coverage ID", "value": coverageID},
+		{"title": "Candidate", "value": candidate},
+		{"title": "Date", "value": date},
+		{"title": "Shift", "value": shift},
+		{"title": "Status", "value": status},
+	}
+	if action == "coverage_confirm" {
+		facts = append(facts, map[string]string{"title": "Transferred workload", "value": workload})
+	}
+	if event.EventTimestamp != "" {
+		facts = append(facts, map[string]string{"title": "Submitted", "value": event.EventTimestamp})
+	}
+	card := map[string]any{
+		"$schema":      "http://adaptivecards.io/schemas/adaptive-card.json",
+		"type":         "AdaptiveCard",
+		"version":      "1.3",
+		"fallbackText": fmt.Sprintf("%s: %s", header, coverageID),
+		"body": []map[string]any{
+			{
+				"type":   "TextBlock",
+				"text":   header,
+				"size":   "Small",
+				"color":  color,
+				"weight": "Bolder",
+			},
+			{
+				"type":   "TextBlock",
+				"text":   strings.TrimSpace(fmt.Sprintf("%s - %s", coverageID, candidate)),
 				"size":   "Large",
 				"color":  "Accent",
 				"weight": "Bolder",
