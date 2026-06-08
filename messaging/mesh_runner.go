@@ -338,9 +338,6 @@ func (r *MeshRunner) coverageRequiredActionType(task MeshRuntimeTask) string {
 	if containsMeshAllowedAction(r.allowedActions, "CARD") {
 		return "CARD"
 	}
-	if containsMeshAllowedAction(r.allowedActions, "SMS") {
-		return "SMS"
-	}
 	return ""
 }
 
@@ -359,13 +356,8 @@ func (r *MeshRunner) buildCoverageSMSCorrectionPrompt(task MeshRuntimeTask, prev
 	b.WriteString(r.buildMeshTaskPrompt(task))
 	b.WriteString(fmt.Sprintf("\n\nPrevious mesh response did not include an executable ACTION:%s, so the coverage transfer cannot advance to waiting state yet.\n", requiredAction))
 	b.WriteString("Return a corrected response now. ")
-	if requiredAction == "CARD" {
-		b.WriteString("Include ACTION:CARD with an Adaptive Card status update. Omit chatid; the runtime posts the card to the default shared/admin group chat. The card JSON must show the coverage request, Jennifer/Karen candidate names and phone numbers, response window, and current waiting status. ")
-		b.WriteString("Do not use message, task, mesh delegation, or SMS outreach as a substitute for this required card update. ")
-	} else {
-		b.WriteString("Include ACTION:SMS blocks for the backup coverage outreach using the phone numbers from DOMAIN.md. ")
-		b.WriteString("Do not use ACTION:MESSAGE, ACTION:TASK, ACTION:MESH_TASK, or ACTION:CARD as a substitute for this required SMS outreach. ")
-	}
+	b.WriteString("Include ACTION:CARD with an Adaptive Card status update. Omit chatid; the runtime posts the card to the default shared/admin group chat. The card JSON must show the coverage request, Jennifer/Karen candidate names and phone numbers, response window, and current waiting status. ")
+	b.WriteString("Do not use message, task, mesh delegation, or SMS outreach as a substitute for this required card update. ")
 	b.WriteString(fmt.Sprintf("After the ACTION:%s block(s), use MESH_STATUS: waiting only if you are waiting for candidate replies.\n", requiredAction))
 	if previous := strings.TrimSpace(previousReply); previous != "" {
 		b.WriteString("\nPrevious response:\n")
@@ -542,10 +534,9 @@ func buildMeshTaskPromptWithAllowedActions(task MeshRuntimeTask, allowedActions 
 	}
 	if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") && containsMeshAllowedAction(allowedActions, "CARD") {
 		b.WriteString("For coverage.transfer, first post an ACTION:CARD status update. Omit chatid; the runtime posts the card to the default shared/admin group chat. Use details from DOMAIN.md inside the card JSON, including Jennifer/Karen candidate names and phone numbers, response window, and current waiting status. ")
-		b.WriteString("Do not use message, task, mesh delegation, or SMS outreach as a substitute for the required status card; after emitting the card, use MESH_STATUS: waiting if you are waiting for replies.\n")
-	} else if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") && containsMeshAllowedAction(allowedActions, "SMS") {
-		b.WriteString("For coverage.transfer, first execute backup coverage outreach with ACTION:SMS to the phone numbers in DOMAIN.md. ")
-		b.WriteString("Do not use ACTION:MESSAGE or ACTION:TASK as a substitute for SMS outreach; after emitting SMS or timeout actions, use MESH_STATUS: waiting if you are waiting for replies.\n")
+		b.WriteString("Use the Jennifer Direct approval card flow for backup coverage confirmation. Do not use message, task, mesh delegation, or SMS outreach as a substitute for the required status card; after emitting the card, use MESH_STATUS: waiting if you are waiting for replies.\n")
+	} else if strings.EqualFold(strings.TrimSpace(task.Intent), "coverage.transfer") {
+		b.WriteString("For coverage.transfer, do not use ACTION:SMS for backup coverage outreach. If the Jennifer Direct approval card flow is unavailable in this task, explain the waiting/blocker state instead of switching channels.\n")
 	}
 	b.WriteString("Return useful text plus ACTION blocks when work must be executed. ")
 	b.WriteString("If you claim an SMS was sent, a task was created, a message was posted, or a card was created, you MUST include the matching ACTION block so the runtime can execute it and record action_events. ")

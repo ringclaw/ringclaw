@@ -517,6 +517,32 @@ func TestMeshRunnerPromptListsAllowedActionsAndCoverageCardFirst(t *testing.T) {
 	if strings.Contains(got, "ACTION:MESH_TASK is allowed") {
 		t.Fatalf("mesh task prompt should not imply MESH_TASK is allowed by this role: %s", got)
 	}
+	if strings.Contains(got, "first execute backup coverage outreach with ACTION:SMS") {
+		t.Fatalf("mesh task prompt should not advertise SMS-first coverage outreach: %s", got)
+	}
+}
+
+func TestMeshRunnerCoverageTransferDoesNotRequireSMSWhenCardUnavailable(t *testing.T) {
+	runner := NewMeshRunner(MeshRunnerOptions{
+		AllowedActions: []string{"message", "sms", "task"},
+	})
+
+	task := MeshRuntimeTask{
+		ID:     "task-coverage-no-card",
+		Intent: "coverage.transfer",
+		Title:  "Alexis absence coverage",
+	}
+	if got := runner.coverageRequiredActionType(task); got != "" {
+		t.Fatalf("coverageRequiredActionType() = %q, want empty when CARD is unavailable", got)
+	}
+
+	prompt := runner.buildMeshTaskPrompt(task)
+	if !strings.Contains(prompt, "do not use ACTION:SMS for backup coverage outreach") {
+		t.Fatalf("mesh task prompt missing SMS prohibition fallback: %s", prompt)
+	}
+	if strings.Contains(prompt, "first execute backup coverage outreach with ACTION:SMS") {
+		t.Fatalf("mesh task prompt should not advertise SMS fallback: %s", prompt)
+	}
 }
 
 func TestMeshRunnerRecordsBlockedDisallowedActions(t *testing.T) {
