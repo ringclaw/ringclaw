@@ -171,8 +171,8 @@ func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
 	if sentByPath["/team-messaging/v1/chats/admin-chat/posts"] != visibleReply {
 		t.Fatalf("shared chat message = %q, want clean reply fallback; all=%#v", sentByPath["/team-messaging/v1/chats/admin-chat/posts"], sentByPath)
 	}
-	if sentByPath["/team-messaging/v1/chats/owner-dm/posts"] != visibleReply {
-		t.Fatalf("owner DM message = %q, want clean reply fallback; all=%#v", sentByPath["/team-messaging/v1/chats/owner-dm/posts"], sentByPath)
+	if _, ok := sentByPath["/team-messaging/v1/chats/owner-dm/posts"]; ok {
+		t.Fatalf("owner DM should not receive mesh clean reply fallback; all=%#v", sentByPath)
 	}
 	if len(taskClient.responses) != 1 {
 		t.Fatalf("responses = %#v", taskClient.responses)
@@ -180,7 +180,6 @@ func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
 	events := taskClient.responses[0].ActionEvents
 	var sawFailedAction bool
 	var sawCleanFallback bool
-	var sawDMUpdate bool
 	for _, event := range events {
 		if event.Type == "MESSAGE" && event.Status == "failed" {
 			sawFailedAction = true
@@ -188,11 +187,8 @@ func TestMeshRunnerPostsCleanReplyWhenMessageActionFails(t *testing.T) {
 		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["mesh_clean_reply_fallback"] == true {
 			sawCleanFallback = true
 		}
-		if event.Type == "MESSAGE" && event.Status == "completed" && event.Details["mesh_owner_dm_update"] == true {
-			sawDMUpdate = true
-		}
 	}
-	if !sawFailedAction || !sawCleanFallback || !sawDMUpdate {
+	if !sawFailedAction || !sawCleanFallback {
 		t.Fatalf("action events = %#v", events)
 	}
 }
