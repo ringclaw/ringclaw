@@ -733,7 +733,7 @@ func TestHandleActionCommand_EventListGroup(t *testing.T) {
 	client, srv := newTestActionClient(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"records": []map[string]string{{"id": "e1", "title": "Team Standup", "startTime": "2026-04-01T09:00:00Z"}},
+			"records": []map[string]string{{"id": "e1", "title": "Team Standup", "startTime": time.Now().UTC().Format(time.RFC3339)}},
 		})
 	})
 	defer srv.Close()
