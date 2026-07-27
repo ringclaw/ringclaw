@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/ringclaw/ringclaw/agent"
 	"github.com/ringclaw/ringclaw/api"
@@ -117,11 +118,16 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 		if agCfg.Type == "http" {
 			command = agCfg.Endpoint
 		}
+		var agTimeout time.Duration
+		if agCfg.Timeout > 0 {
+			agTimeout = time.Duration(agCfg.Timeout) * time.Second
+		}
 		metas = append(metas, messaging.AgentMeta{
 			Name:    name,
 			Type:    agCfg.Type,
 			Command: command,
 			Model:   agCfg.Model,
+			Timeout: agTimeout,
 		})
 	}
 	handler.SetAgentMetas(metas)
@@ -175,11 +181,16 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 			if agCfg.Type == "http" {
 				command = agCfg.Endpoint
 			}
+			var agTimeout time.Duration
+			if agCfg.Timeout > 0 {
+				agTimeout = time.Duration(agCfg.Timeout) * time.Second
+			}
 			metas = append(metas, messaging.AgentMeta{
 				Name:    name,
 				Type:    agCfg.Type,
 				Command: command,
 				Model:   agCfg.Model,
+				Timeout: agTimeout,
 			})
 			if !before[name] {
 				added = append(added, name)

@@ -34,15 +34,22 @@ type AgentMeta struct {
 	Type    string // "acp", "cli", "http"
 	Command string // binary path or endpoint
 	Model   string
+	Timeout time.Duration // per-agent response timeout (0 = use defaultAgentTimeout)
 }
+
+// defaultAgentTimeout is the maximum time to wait for an agent response when
+// no per-agent timeout is configured. Prevents goroutine leaks when an agent
+// process hangs indefinitely.
+const defaultAgentTimeout = 5 * time.Minute
 
 // Handler processes incoming RingCentral messages and dispatches replies.
 type Handler struct {
 	mu            sync.RWMutex
-	defaultName   string
-	agents        map[string]agent.Agent // name -> running agent
-	agentMetas    []AgentMeta            // all configured agents (for /status)
-	customAliases map[string]string      // custom alias -> agent name (from config)
+	defaultName    string
+	agents         map[string]agent.Agent // name -> running agent
+	agentMetas     []AgentMeta            // all configured agents (for /status)
+	agentTimeouts  map[string]time.Duration // name -> per-agent response timeout
+	customAliases  map[string]string      // custom alias -> agent name (from config)
 	factory       AgentFactory
 	saveDefault   SaveDefaultFunc
 	version       string
@@ -127,6 +134,7 @@ type Handler struct {
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc, version string) *Handler {
 	return &Handler{
 		agents:            make(map[string]agent.Agent),
+		agentTimeouts:     make(map[string]time.Duration),
 		factory:           factory,
 		saveDefault:       saveDefault,
 		version:           version,
@@ -326,9 +334,28 @@ func (h *Handler) SetGroupSummaryConfig(groupID string, limit int) {
 
 // SetAgentMetas sets the list of all configured agents (for /status).
 func (h *Handler) SetAgentMetas(metas []AgentMeta) {
+	timeouts := make(map[string]time.Duration, len(metas))
+	for _, m := range metas {
+		if m.Timeout > 0 {
+			timeouts[m.Name] = m.Timeout
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.agentMetas = metas
+	h.agentTimeouts = timeouts
+}
+
+// agentTimeout returns the configured timeout for the named agent, falling back
+// to defaultAgentTimeout when none is set.
+func (h *Handler) agentTimeout(name string) time.Duration {
+	h.mu.RLock()
+	d := h.agentTimeouts[name]
+	h.mu.RUnlock()
+	if d <= 0 {
+		return defaultAgentTimeout
+	}
+	return d
 }
 
 // SetDefaultAgent sets the default agent (already started).
@@ -791,6 +818,14 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 	// fs/terminal gate.
 	ctx = h.withOriginForPost(ctx, client, post)
 
+	// Apply per-agent response timeout so a hung agent process does not
+	// block this goroutine indefinitely. The timeout is sourced from the
+	// agent's config (timeout field) with a fallback to defaultAgentTimeout.
+	timeout := h.agentTimeout(ag.Info().Name)
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Prepend the persona + memory banner (empty string when persona
 	// is disabled or all sources are blank). This keeps the operator's
 	// SOUL and layered memory visible to every agent regardless of
@@ -879,7 +914,11 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Cli
 				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
 			}
-			reply, err := h.chatWithAttachments(ctx, ag, conversationID, prompt, images, audio)
+			// Apply per-agent timeout so a hung agent doesn't block the goroutine forever.
+			timeout := h.agentTimeout(n)
+			agCtx, agCancel := context.WithTimeout(ctx, timeout)
+			defer agCancel()
+			reply, err := h.chatWithAttachments(agCtx, ag, conversationID, prompt, images, audio)
 			if err != nil {
 				ch <- result{name: n, reply: agent.UserMessage(err)}
 				return
