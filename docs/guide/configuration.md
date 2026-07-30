@@ -223,6 +223,7 @@ extras below.
 | `env` | object | `{}` | Extra env vars passed to the agent subprocess (not to ringclaw itself). |
 | `model` | string | agent-specific | Model name. Defaults: claude → `sonnet`, openclaw → `openclaw:main`, HTTP fallback → `gpt-4o-mini`. |
 | `system_prompt` | string | — | System prompt injected at session start. |
+| `timeout` | int (seconds) | `300` | v0.4.6+: max time to wait for an agent reply before the dispatch is cancelled. Applies to **all** types. `<= 0` falls back to the 5-minute default. |
 
 ### ACP-specific (`type: acp`)
 
@@ -244,7 +245,7 @@ extras below.
 | `sender` | string | — | Only used by `nanoclaw` format. |
 | `context_mode` | string | — | Only used by `nanoclaw` format; forwarded verbatim to upstream. |
 | `group_jid` | string | — | Only used by `nanoclaw` format. |
-| `timeout` | int (seconds) | `120` | HTTP client timeout. `<= 0` falls back to default. |
+| `timeout` | int (seconds) | `120` | HTTP client timeout. `<= 0` falls back to default. Also used as the response timeout — see [common fields](#agentconfig-common-fields). |
 
 ### CLI-specific (`type: cli`)
 

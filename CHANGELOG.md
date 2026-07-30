@@ -14,6 +14,82 @@ v0.4.3's client-side gate.
 
 ---
 
+## v0.4.6 — 2026-07-30 — fix: RC 429 backoff + large ACP lines + agent response timeout
+
+### :warning: Behavior change — agents now time out after 5 minutes
+
+Bug 3 below introduces a response timeout that applies to **every**
+agent type, not just `http`. Agents that legitimately run longer than
+5 minutes on a single turn will now be cancelled. Raise the per-agent
+`timeout` (seconds) in `config.json` if you rely on longer turns:
+
+```json
+{ "agents": { "claude": { "type": "acp", "timeout": 1800 } } }
+```
+
+### Bug 1 — RingCentral 429 responses failed the request outright (PR #141)
+
+Token refresh and every REST call surfaced `HTTP 429` straight to the
+caller. Under RingCentral's rate limits a burst of messages could fail
+a reply that would have succeeded a second later.
+
+#### Fix
+
+- **`ringcentral/auth.go`** — `refreshToken()` retries up to 2 times on
+  `429`, honouring `Retry-After` (capped at 30s, 5s fallback).
+- **`ringcentral/client.go`** — `doRequest()` gained the same retry
+  loop. The request body is buffered up-front so it can be replayed,
+  and the wait is `select`-ed against `ctx.Done()` so a cancelled
+  context aborts immediately instead of sleeping.
+- **`parseRetryAfter()`** — shared helper for the `Retry-After` header
+  (delta-seconds form), falling back to a caller-supplied default.
+- **Tests** — `ringcentral/auth_test.go`, `ringcentral/client_test.go`.
+
+### Bug 2 — ACP stdout lines over 4 MiB were dropped (PR #144)
+
+The ACP stdout scanner was capped at a 4 MiB token size. An agent
+emitting a larger JSON-RPC line (big file reads, wide tool results)
+tripped `bufio.Scanner`'s `ErrTooLong` and the response was lost.
+
+#### Fix
+
+- **`agent/acp_agent.go`** — new `newACPScanner()` starts at a 64 KiB
+  buffer and grows to a 64 MiB max token size, so the common case
+  allocates 64× less while large lines still parse.
+- **Tests** — `agent/acp_rpc_test.go`.
+
+### Bug 3 — hung agents blocked the dispatch goroutine forever (PR #148)
+
+`dispatchToAgent` and `broadcastToAgents` awaited the agent with no
+deadline. A wedged ACP subprocess or a stalled CLI agent leaked the
+goroutine and the user never got a reply — the bot simply went silent.
+
+#### Fix
+
+- **`messaging/handler.go`** — `AgentMeta.Timeout` plus an
+  `agentTimeouts` lookup; `dispatchToAgent` and each
+  `broadcastToAgents` fan-out branch wrap the context in
+  `context.WithTimeout`. Falls back to `defaultAgentTimeout`
+  (5 minutes) when unset.
+- **`cmd/start_init.go`** — maps `AgentConfig.Timeout` (seconds) into
+  `AgentMeta.Timeout` on both initial wiring and agent reload.
+- **`config/config.go`** — `Timeout` is no longer `http`-only; the doc
+  comment now reflects the widened scope.
+- **Docs** — `timeout` added to the AgentConfig common-fields table in
+  both `docs/guide/configuration.md` and the zh mirror.
+
+### Also in this release
+
+- **`messaging/handler.go`** — restored gofmt alignment on the
+  `Handler` struct field block (regressed in PR #148).
+- **Tests** — date-sensitive event tests now derive their timestamps
+  from `time.Now()` instead of a hard-coded 2026-04-01, and the npx
+  cache-retry test timeout was raised 5s → 15s to stop flaking on
+  slow CI runners (PR #149).
+- **Docs** — `mermaid` 11.14.0 → 11.15.0 (PR #143).
+
+---
+
 ## v0.4.5 — 2026-05-06 — fix: ACP JSON-RPC ID parsing + npx cache auto-recovery
 
 ### Bug 1 — Codex ACP string IDs silently dropped (PR #138)
