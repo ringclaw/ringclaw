@@ -1851,3 +1851,45 @@ func TestDoRequest_429ExhaustedRetries(t *testing.T) {
 		t.Errorf("expected 429 in error, got: %v", err)
 	}
 }
+
+func TestSendThreadReply_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		var req CreatePostRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.ThreadID != "thread-1" {
+			t.Errorf("expected threadId=thread-1, got %q", req.ThreadID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Post{ID: "p2", Text: req.Text, ThreadID: "thread-1"})
+	})
+	defer srv.Close()
+
+	post, err := client.SendThreadReply(context.Background(), "chat1", "thread-1", "hello thread")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.ThreadID != "thread-1" {
+		t.Errorf("expected threadId=thread-1, got %q", post.ThreadID)
+	}
+}
+
+func TestSendPostAsThread_Success(t *testing.T) {
+	client, srv := newTestClientWithServer(func(w http.ResponseWriter, r *http.Request) {
+		var req CreatePostRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.ParentPostID != "parent-1" {
+			t.Errorf("expected parentPostId=parent-1, got %q", req.ParentPostID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Post{ID: "p3", Text: req.Text, ThreadID: "new-thread"})
+	})
+	defer srv.Close()
+
+	post, err := client.SendPostAsThread(context.Background(), "chat1", "parent-1", "start thread")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.ThreadID != "new-thread" {
+		t.Errorf("expected threadId=new-thread, got %q", post.ThreadID)
+	}
+}

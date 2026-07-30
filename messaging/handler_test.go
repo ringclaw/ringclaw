@@ -1560,7 +1560,7 @@ func TestConversationIDForPost_DM(t *testing.T) {
 	client := ringcentral.NewBotClient("http://localhost", "token")
 	client.SetDMChatID("dm-1")
 	post := ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"}
-	id := conversationIDForPost(client, post)
+	id := conversationIDForPost(client, post, false)
 	if !strings.HasPrefix(id, "rc:dm:") {
 		t.Errorf("expected dm prefix, got %q", id)
 	}
@@ -1570,7 +1570,7 @@ func TestConversationIDForPost_Group(t *testing.T) {
 	client := ringcentral.NewBotClient("http://localhost", "token")
 	client.SetDMChatID("dm-1")
 	post := ringcentral.Post{GroupID: "group-1", CreatorID: "user-1"}
-	id := conversationIDForPost(client, post)
+	id := conversationIDForPost(client, post, false)
 	if !strings.HasPrefix(id, "rc:chat:") {
 		t.Errorf("expected chat prefix, got %q", id)
 	}
@@ -1585,8 +1585,8 @@ func TestConversationIDForPost_PerUserIsolation(t *testing.T) {
 	client.SetDMChatID("dm-1")
 
 	chatID := "group-shared"
-	a := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "alice"})
-	b := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "bob"})
+	a := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "alice"}, false)
+	b := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "bob"}, false)
 
 	if a == b {
 		t.Fatalf("expected distinct conversation IDs for different users in same chat, got %q == %q", a, b)
@@ -1607,8 +1607,8 @@ func TestConversationIDForPost_PerChatIsolation(t *testing.T) {
 	client.SetDMChatID("dm-1")
 
 	user := "alice"
-	g1 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-A", CreatorID: user})
-	g2 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-B", CreatorID: user})
+	g1 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-A", CreatorID: user}, false)
+	g2 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-B", CreatorID: user}, false)
 
 	if g1 == g2 {
 		t.Fatalf("expected distinct conversation IDs for same user in different chats, got %q == %q", g1, g2)
@@ -1628,8 +1628,8 @@ func TestConversationIDForPost_DMAndGroupNamespaces(t *testing.T) {
 	other := ringcentral.NewBotClient("http://localhost", "token")
 	other.SetDMChatID("different-id")
 
-	dmID := conversationIDForPost(client, dmPost)
-	groupID := conversationIDForPost(other, groupPost)
+	dmID := conversationIDForPost(client, dmPost, false)
+	groupID := conversationIDForPost(other, groupPost, false)
 
 	if dmID == groupID {
 		t.Fatalf("expected DM and group chat IDs to live in different namespaces, got %q == %q", dmID, groupID)
@@ -1639,6 +1639,69 @@ func TestConversationIDForPost_DMAndGroupNamespaces(t *testing.T) {
 	}
 	if !strings.HasPrefix(groupID, "rc:chat:") {
 		t.Errorf("expected chat prefix, got %q", groupID)
+	}
+}
+
+func TestConversationIDForPost_ThreadMode(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+
+	post := ringcentral.Post{GroupID: "group-1", CreatorID: "alice", ThreadID: "thread-99"}
+
+	// With thread mode off, should use per-user key
+	noThread := conversationIDForPost(client, post, false)
+	if !strings.HasPrefix(noThread, "rc:chat:") {
+		t.Errorf("expected chat prefix with threadMode=false, got %q", noThread)
+	}
+
+	// With thread mode on and threadID present, should use thread key
+	withThread := conversationIDForPost(client, post, true)
+	if !strings.HasPrefix(withThread, "rc:thread:") {
+		t.Errorf("expected thread prefix, got %q", withThread)
+	}
+	if !strings.Contains(withThread, "thread-99") {
+		t.Errorf("expected threadID in key, got %q", withThread)
+	}
+
+	// Different users in same thread share the session
+	postBob := ringcentral.Post{GroupID: "group-1", CreatorID: "bob", ThreadID: "thread-99"}
+	bobThread := conversationIDForPost(client, postBob, true)
+	if withThread != bobThread {
+		t.Errorf("expected same session for same thread, got %q != %q", withThread, bobThread)
+	}
+}
+
+func TestConversationIDForPost_ThreadMode_NoThreadID(t *testing.T) {
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+
+	// No threadID: should fall back to per-user key even with thread mode on
+	post := ringcentral.Post{GroupID: "group-1", CreatorID: "alice"}
+	id := conversationIDForPost(client, post, true)
+	if !strings.HasPrefix(id, "rc:chat:") {
+		t.Errorf("expected chat prefix when no threadID, got %q", id)
+	}
+}
+
+func TestThreadInfoFromPost(t *testing.T) {
+	// Post in existing thread
+	post := ringcentral.Post{ID: "post-1", ThreadID: "thread-99"}
+	ti := ThreadInfoFromPost(post)
+	if ti.ThreadID != "thread-99" {
+		t.Errorf("expected ThreadID=thread-99, got %q", ti.ThreadID)
+	}
+	if ti.ParentPostID != "" {
+		t.Errorf("expected empty ParentPostID, got %q", ti.ParentPostID)
+	}
+
+	// Post not in a thread — should create new thread from post
+	post2 := ringcentral.Post{ID: "post-2"}
+	ti2 := ThreadInfoFromPost(post2)
+	if ti2.ThreadID != "" {
+		t.Errorf("expected empty ThreadID, got %q", ti2.ThreadID)
+	}
+	if ti2.ParentPostID != "post-2" {
+		t.Errorf("expected ParentPostID=post-2, got %q", ti2.ParentPostID)
 	}
 }
 

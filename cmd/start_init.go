@@ -139,6 +139,10 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 		checkAliasConflicts(cfg, customAliases)
 	}
 	handler.SetGroupSummaryConfig(cfg.RC.GroupSummaryGroup(), cfg.RC.GroupSummaryLimit())
+	if cfg.RC.IsReplyInThread() {
+		handler.SetReplyInThread(true)
+		slog.Info("thread replies enabled", "component", "start")
+	}
 
 	// Persona + memory banner: a single Loader feeds every dispatch so
 	// switching agents or resetting sessions keeps the operator's

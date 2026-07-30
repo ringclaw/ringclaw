@@ -151,6 +151,12 @@ type RCConfig struct {
 	// these users through a restricted agent backend that allows
 	// only text replies and RingCentral ACTION blocks.
 	ChatUserAllow map[string][]string `json:"chat_user_allow,omitempty"`
+
+	// ReplyInThread, when true, makes the bot reply inside a thread
+	// rather than as a flat message in the chat. Each thread maps to
+	// a separate agent session so multi-turn context stays scoped to
+	// the thread. Default: false (flat replies).
+	ReplyInThread *bool `json:"reply_in_thread,omitempty"`
 }
 
 // IsAuthorizeMentionEnabled reports whether the authorize-mention OOB
@@ -172,6 +178,14 @@ func (rc RCConfig) IsAuthorizeMentionEnabled() bool {
 		return false
 	}
 	return *rc.AllowGroupMentionAuthorize
+}
+
+// IsReplyInThread reports whether thread-based replies are enabled.
+func (rc RCConfig) IsReplyInThread() bool {
+	if rc.ReplyInThread == nil {
+		return false
+	}
+	return *rc.ReplyInThread
 }
 
 // IsAuthorizeMentionExplicit reports whether the operator set the
