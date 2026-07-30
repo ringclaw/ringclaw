@@ -45,11 +45,11 @@ const defaultAgentTimeout = 5 * time.Minute
 // Handler processes incoming RingCentral messages and dispatches replies.
 type Handler struct {
 	mu            sync.RWMutex
-	defaultName    string
-	agents         map[string]agent.Agent // name -> running agent
-	agentMetas     []AgentMeta            // all configured agents (for /status)
-	agentTimeouts  map[string]time.Duration // name -> per-agent response timeout
-	customAliases  map[string]string      // custom alias -> agent name (from config)
+	defaultName   string
+	agents        map[string]agent.Agent   // name -> running agent
+	agentMetas    []AgentMeta              // all configured agents (for /status)
+	agentTimeouts map[string]time.Duration // name -> per-agent response timeout
+	customAliases map[string]string        // custom alias -> agent name (from config)
 	factory       AgentFactory
 	saveDefault   SaveDefaultFunc
 	version       string

@@ -216,6 +216,7 @@ Cron / heartbeat / HTTP API **不会** 被注入 banner——仅限 WebSocket
 | `env` | object | `{}` | 传递给 agent 子进程的额外环境变量（不影响 ringclaw 本身）。 |
 | `model` | string | 各 agent 自定 | 模型名。默认：claude → `sonnet`；openclaw → `openclaw:main`；HTTP fallback → `gpt-4o-mini`。 |
 | `system_prompt` | string | — | 会话启动时注入的 system prompt。 |
+| `timeout` | int（秒） | `300` | v0.4.6+：等待 agent 回复的最长时间，超时则取消本次派发。对**所有**类型生效；`<= 0` 回退 5 分钟默认值。 |
 
 ### ACP 专属（`type: acp`）
 
@@ -237,7 +238,7 @@ Cron / heartbeat / HTTP API **不会** 被注入 banner——仅限 WebSocket
 | `sender` | string | — | 仅 `nanoclaw` 格式使用。 |
 | `context_mode` | string | — | 仅 `nanoclaw` 格式使用；原样转发。 |
 | `group_jid` | string | — | 仅 `nanoclaw` 格式使用。 |
-| `timeout` | int（秒） | `120` | HTTP 客户端超时；`<= 0` 回退默认值。 |
+| `timeout` | int（秒） | `120` | HTTP 客户端超时；`<= 0` 回退默认值。同时作为回复超时使用，见 [公共字段](#agentconfig-公共字段)。 |
 
 ### CLI 专属（`type: cli`）
 

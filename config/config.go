@@ -311,7 +311,7 @@ type AgentConfig struct {
 	Sender       string            `json:"sender,omitempty"`        // sender name (http type, nanoclaw format)
 	ContextMode  string            `json:"context_mode,omitempty"`  // context mode (http type, nanoclaw format)
 	GroupJID     string            `json:"group_jid,omitempty"`     // group JID (http type, nanoclaw format)
-	Timeout      int               `json:"timeout,omitempty"`       // HTTP timeout in seconds (http type)
+	Timeout      int               `json:"timeout,omitempty"`       // agent response timeout in seconds (all types); also the HTTP client timeout for http type
 }
 
 // BuildAliasMap builds a map from custom alias to agent name from all agent configs.
