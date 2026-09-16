@@ -140,6 +140,15 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 	}
 	handler.SetGroupSummaryConfig(cfg.RC.GroupSummaryGroup(), cfg.RC.GroupSummaryLimit())
 
+	// Progress heartbeat: periodically rewrite the "Thinking..." placeholder
+	// with the agent's latest activity. Defaults to on at 60s.
+	handler.SetProgressConfig(cfg.ProgressEnabled(), cfg.ProgressInterval())
+	slog.Info("progress heartbeat configured",
+		"component", "start",
+		"enabled", cfg.ProgressEnabled(),
+		"interval", cfg.ProgressInterval(),
+	)
+
 	// Persona + memory banner: a single Loader feeds every dispatch so
 	// switching agents or resetting sessions keeps the operator's
 	// SOUL.md and layered memory visible. Disabled by config? the

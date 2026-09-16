@@ -128,6 +128,15 @@ type Handler struct {
 	// operator's persona / memory context. A nil loader is safe to
 	// carry (Enabled reports false).
 	personaLoader *persona.Loader
+
+	// progressEnabled / progressInterval control the "what is the agent
+	// doing" heartbeat that periodically rewrites the "Thinking..."
+	// placeholder while a long agent run is in flight. Enabled by default
+	// with a 60s interval; set via SetProgressConfig. Only agents whose
+	// context carries an agent.ProgressFunc (currently ACP) feed activity
+	// text — others still get the elapsed-time heartbeat.
+	progressEnabled  bool
+	progressInterval time.Duration
 }
 
 // NewHandler creates a new message handler.
@@ -145,7 +154,35 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc, version strin
 		pendingAuthorize:  make(map[string]bool),
 		authorizeMeta:     make(map[string]authorizeMeta),
 		authorizeCooldown: make(map[string]time.Time),
+		progressEnabled:   true,
+		progressInterval:  60 * time.Second,
 	}
+}
+
+// SetProgressConfig configures the progress heartbeat. interval <= 0 keeps
+// the current/default interval.
+func (h *Handler) SetProgressConfig(enabled bool, interval time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.progressEnabled = enabled
+	if interval > 0 {
+		h.progressInterval = interval
+	}
+}
+
+func (h *Handler) progressActive() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.progressEnabled
+}
+
+func (h *Handler) progressIntervalDuration() time.Duration {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.progressInterval <= 0 {
+		return 60 * time.Second
+	}
+	return h.progressInterval
 }
 
 // AddTrustedSender adds a user ID to the handler's defense-in-depth sender
@@ -818,6 +855,14 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 	// fs/terminal gate.
 	ctx = h.withOriginForPost(ctx, client, post)
 
+	// Capture the agent's latest activity so the progress heartbeat can tell
+	// the user what is happening instead of leaving a bare "Thinking..." for
+	// the whole (possibly many-minute) run. ACP agents report through this
+	// callback; other agent types simply never call it.
+	var latestProgress atomic.Value
+	latestProgress.Store("")
+	ctx = agent.WithProgress(ctx, func(text string) { latestProgress.Store(text) })
+
 	// Apply per-agent response timeout so a hung agent process does not
 	// block this goroutine indefinitely. The timeout is sourced from the
 	// agent's config (timeout field) with a fallback to defaultAgentTimeout.
@@ -837,12 +882,89 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 	if len(audio) == 0 {
 		images = extractImageAttachments(ctx, client, post)
 	}
+	stopProgress := h.startProgress(ctx, client, post.GroupID, placeholderID, &latestProgress)
+
 	reply, err := h.chatWithAttachments(ctx, ag, conversationID, prompt, images, audio)
 	if err != nil {
 		reply = agent.UserMessage(err)
 	}
 
+	// Stop the heartbeat before finalizing so the final reply cannot race
+	// with a late progress update on the same post.
+	stopProgress()
+
 	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
+}
+
+// startProgress launches the periodic progress updater and returns an
+// idempotent stop function. It is a no-op when progress is disabled or there
+// is no placeholder to rewrite.
+func (h *Handler) startProgress(ctx context.Context, client *ringcentral.Client, chatID, placeholderID string, latest *atomic.Value) func() {
+	if placeholderID == "" || !h.progressActive() {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.progressLoop(ctx, client, chatID, placeholderID, latest, stop)
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(stop)
+			<-done
+		})
+	}
+}
+
+// progressLoop rewrites the placeholder every progressInterval with the
+// latest activity and elapsed time, until stopped or the request ctx ends.
+func (h *Handler) progressLoop(ctx context.Context, client *ringcentral.Client, chatID, placeholderID string, latest *atomic.Value, stop <-chan struct{}) {
+	start := time.Now()
+	ticker := time.NewTicker(h.progressIntervalDuration())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			activity, _ := latest.Load().(string)
+			text := progressMessage(activity, time.Since(start))
+			// Detached timeout: a plain ctx may already be close to expiry,
+			// but the heartbeat update itself must still be bounded.
+			uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			if err := UpdatePostText(uctx, client, chatID, placeholderID, text); err != nil {
+				slog.Debug("progress update failed", "component", "handler", "error", err)
+			}
+			cancel()
+		}
+	}
+}
+
+// progressMessage renders the one-line progress text. Kept deliberately short
+// so the placeholder stays readable.
+func progressMessage(activity string, elapsed time.Duration) string {
+	if activity == "" {
+		return fmt.Sprintf("⏳ 正在处理…（已 %s）", shortDuration(elapsed))
+	}
+	return fmt.Sprintf("⏳ 正在执行：%s（已 %s）", activity, shortDuration(elapsed))
+}
+
+// shortDuration formats a duration compactly (45s, 2m, 2m10s).
+func shortDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	m := int(d / time.Minute)
+	s := int(d/time.Second) % 60
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm%ds", m, s)
 }
 
 // sendToDefaultAgent sends the message to the default agent and replies.

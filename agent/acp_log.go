@@ -183,3 +183,56 @@ func denormalizePath(original, normalized string) string {
 	}
 	return normalized
 }
+
+// describeToolActivity builds a short one-line description of a tool call for
+// progress reporting. It is deliberately terse: the tool name plus a single
+// hint argument (command / path / query / …), trimmed to fit one chat line.
+func describeToolActivity(update *sessionUpdate) string {
+	if update == nil {
+		return ""
+	}
+	tool, args := extractToolAndArgs(update.RawInput)
+	if tool == "" {
+		tool = strings.TrimPrefix(update.Title, "Tool: ")
+	}
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		return ""
+	}
+	if hint := shortArgHint(args); hint != "" {
+		return tool + " · " + hint
+	}
+	return tool
+}
+
+// shortArgHint returns a compact hint from a tool-call arguments JSON string.
+func shortArgHint(args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" || args == "null" || args == "{}" {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(args), &m); err == nil {
+		for _, k := range []string{"command", "description", "file_path", "path", "query", "url", "pattern"} {
+			if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+				return truncateLine(v, 60)
+			}
+		}
+		return ""
+	}
+	return truncateLine(args, 60)
+}
+
+// truncateLine collapses whitespace to a single line and truncates to max
+// runes, appending an ellipsis when shortened.
+func truncateLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
+}
