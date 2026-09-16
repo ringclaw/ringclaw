@@ -11,12 +11,20 @@ import (
 )
 
 // SendTypingPlaceholder sends a "Thinking..." placeholder message and returns its post ID.
-func SendTypingPlaceholder(ctx context.Context, client *ringcentral.Client, chatID string) (string, error) {
-	post, err := client.SendPost(ctx, chatID, "Thinking...")
+// When parentPostID is non-empty, the placeholder is created as a thread reply to that post,
+// so the later FinalizeReply PATCH keeps the reply association.
+func SendTypingPlaceholder(ctx context.Context, client *ringcentral.Client, chatID, parentPostID string) (string, error) {
+	var post *ringcentral.Post
+	var err error
+	if parentPostID != "" {
+		post, err = client.SendPostReply(ctx, chatID, parentPostID, "Thinking...")
+	} else {
+		post, err = client.SendPost(ctx, chatID, "Thinking...")
+	}
 	if err != nil {
 		return "", fmt.Errorf("send typing placeholder: %w", err)
 	}
-	slog.Info("sent typing placeholder", "component", "sender", "chatID", chatID, "postID", post.ID)
+	slog.Info("sent typing placeholder", "component", "sender", "chatID", chatID, "postID", post.ID, "parentPostID", parentPostID)
 	return post.ID, nil
 }
 

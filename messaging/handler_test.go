@@ -1557,20 +1557,22 @@ func TestIsKnownAgent_Unknown(t *testing.T) {
 // --- conversationIDForPost test ---
 
 func TestConversationIDForPost_DM(t *testing.T) {
+	h := NewHandler(nil, nil, "test")
 	client := ringcentral.NewBotClient("http://localhost", "token")
 	client.SetDMChatID("dm-1")
 	post := ringcentral.Post{GroupID: "dm-1", CreatorID: "user-1"}
-	id := conversationIDForPost(client, post)
+	id := h.conversationIDForPost(client, post)
 	if !strings.HasPrefix(id, "rc:dm:") {
 		t.Errorf("expected dm prefix, got %q", id)
 	}
 }
 
 func TestConversationIDForPost_Group(t *testing.T) {
+	h := NewHandler(nil, nil, "test")
 	client := ringcentral.NewBotClient("http://localhost", "token")
 	client.SetDMChatID("dm-1")
 	post := ringcentral.Post{GroupID: "group-1", CreatorID: "user-1"}
-	id := conversationIDForPost(client, post)
+	id := h.conversationIDForPost(client, post)
 	if !strings.HasPrefix(id, "rc:chat:") {
 		t.Errorf("expected chat prefix, got %q", id)
 	}
@@ -1581,12 +1583,13 @@ func TestConversationIDForPost_Group(t *testing.T) {
 // different users MUST receive distinct conversationIDs so they cannot
 // share or hijack each other's agent session.
 func TestConversationIDForPost_PerUserIsolation(t *testing.T) {
+	h := NewHandler(nil, nil, "test")
 	client := ringcentral.NewBotClient("http://localhost", "token")
 	client.SetDMChatID("dm-1")
 
 	chatID := "group-shared"
-	a := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "alice"})
-	b := conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "bob"})
+	a := h.conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "alice"})
+	b := h.conversationIDForPost(client, ringcentral.Post{GroupID: chatID, CreatorID: "bob"})
 
 	if a == b {
 		t.Fatalf("expected distinct conversation IDs for different users in same chat, got %q == %q", a, b)
@@ -1603,12 +1606,13 @@ func TestConversationIDForPost_PerUserIsolation(t *testing.T) {
 // different chats receives distinct conversationIDs. Without this,
 // private DM history could leak into a group chat (or vice versa).
 func TestConversationIDForPost_PerChatIsolation(t *testing.T) {
+	h := NewHandler(nil, nil, "test")
 	client := ringcentral.NewBotClient("http://localhost", "token")
 	client.SetDMChatID("dm-1")
 
 	user := "alice"
-	g1 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-A", CreatorID: user})
-	g2 := conversationIDForPost(client, ringcentral.Post{GroupID: "group-B", CreatorID: user})
+	g1 := h.conversationIDForPost(client, ringcentral.Post{GroupID: "group-A", CreatorID: user})
+	g2 := h.conversationIDForPost(client, ringcentral.Post{GroupID: "group-B", CreatorID: user})
 
 	if g1 == g2 {
 		t.Fatalf("expected distinct conversation IDs for same user in different chats, got %q == %q", g1, g2)
@@ -1619,6 +1623,7 @@ func TestConversationIDForPost_PerChatIsolation(t *testing.T) {
 // group chat IDs occupy disjoint namespaces, so a renamed/recycled chat
 // ID can never collide with an existing DM session.
 func TestConversationIDForPost_DMAndGroupNamespaces(t *testing.T) {
+	h := NewHandler(nil, nil, "test")
 	client := ringcentral.NewBotClient("http://localhost", "token")
 	client.SetDMChatID("shared-id")
 
@@ -1628,8 +1633,8 @@ func TestConversationIDForPost_DMAndGroupNamespaces(t *testing.T) {
 	other := ringcentral.NewBotClient("http://localhost", "token")
 	other.SetDMChatID("different-id")
 
-	dmID := conversationIDForPost(client, dmPost)
-	groupID := conversationIDForPost(other, groupPost)
+	dmID := h.conversationIDForPost(client, dmPost)
+	groupID := h.conversationIDForPost(other, groupPost)
 
 	if dmID == groupID {
 		t.Fatalf("expected DM and group chat IDs to live in different namespaces, got %q == %q", dmID, groupID)
@@ -1639,6 +1644,89 @@ func TestConversationIDForPost_DMAndGroupNamespaces(t *testing.T) {
 	}
 	if !strings.HasPrefix(groupID, "rc:chat:") {
 		t.Errorf("expected chat prefix, got %q", groupID)
+	}
+}
+
+// TestConversationIDForPost_LegacyMode checks that with thread-reply mode
+// disabled (the default) the conversation key matches the legacy flat
+// (chat, user) format, with no thread/post segment, even when the post
+// carries thread metadata.
+func TestConversationIDForPost_LegacyMode(t *testing.T) {
+	h := NewHandler(nil, nil, "test") // thread-reply defaults to off
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+
+	got := h.conversationIDForPost(client, ringcentral.Post{ID: "p-1", GroupID: "group-1", CreatorID: "alice", ThreadID: "th-1"})
+	if got != "rc:chat:group-1:user:alice" {
+		t.Errorf("legacy key = %q, want %q", got, "rc:chat:group-1:user:alice")
+	}
+
+	dm := h.conversationIDForPost(client, ringcentral.Post{ID: "p-2", GroupID: "dm-1", CreatorID: "alice", ThreadID: "th-2"})
+	if dm != "rc:dm:dm-1:alice" {
+		t.Errorf("legacy dm key = %q, want %q", dm, "rc:dm:dm-1:alice")
+	}
+}
+
+// TestConversationIDForPost_ThreadMode locks in the thread-reply key
+// format: the thread (or the post's own ID before RC assigns one) is part
+// of the key, so different threads get isolated agent contexts.
+func TestConversationIDForPost_ThreadMode(t *testing.T) {
+	h := NewHandler(nil, nil, "test")
+	h.SetThreadReplyEnabled(true)
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+
+	// Explicit thread ID is embedded in the key.
+	withThread := h.conversationIDForPost(client, ringcentral.Post{ID: "p-1", GroupID: "group-1", CreatorID: "alice", ThreadID: "th-1"})
+	if !strings.Contains(withThread, "th-1") {
+		t.Errorf("expected thread id in key, got %q", withThread)
+	}
+
+	// No thread ID yet: fall back to the post's own ID.
+	fresh1 := h.conversationIDForPost(client, ringcentral.Post{ID: "p-1", GroupID: "group-1", CreatorID: "alice"})
+	fresh2 := h.conversationIDForPost(client, ringcentral.Post{ID: "p-2", GroupID: "group-1", CreatorID: "alice"})
+	if !strings.Contains(fresh1, "p-1") || !strings.Contains(fresh2, "p-2") {
+		t.Errorf("expected post id fallback in keys, got %q / %q", fresh1, fresh2)
+	}
+	if fresh1 == fresh2 {
+		t.Error("expected distinct fresh posts to get isolated conversations")
+	}
+}
+
+// TestResolveConversationID_ThreadToggle ensures the recorded post linkage
+// is honored only in thread-reply mode; legacy mode always resolves to the
+// flat (chat, user) key.
+func TestResolveConversationID_ThreadToggle(t *testing.T) {
+	h := NewHandler(nil, nil, "test")
+	h.postConvo.Store("parent-post", "sentinel-convo")
+
+	client := ringcentral.NewBotClient("http://localhost", "token")
+	client.SetDMChatID("dm-1")
+	reply := ringcentral.Post{ID: "reply-1", GroupID: "group-1", CreatorID: "bob", ParentPostID: "parent-post"}
+
+	if got := h.resolveConversationID(client, reply); got != "rc:chat:group-1:user:bob" {
+		t.Errorf("legacy resolve = %q, want flat chat key (parent linkage must be ignored)", got)
+	}
+
+	// In thread-reply mode the sentinel linkage wins.
+	h.SetThreadReplyEnabled(true)
+	if got := h.resolveConversationID(client, reply); got != "sentinel-convo" {
+		t.Errorf("thread resolve = %q, want sentinel-convo", got)
+	}
+}
+
+// TestPlaceholderParent verifies the placeholder parenting follows the
+// thread-reply switch: empty (plain chat post) by default, the triggering
+// post ID when thread-reply mode is on.
+func TestPlaceholderParent(t *testing.T) {
+	h := NewHandler(nil, nil, "test")
+	post := ringcentral.Post{ID: "p-1"}
+	if got := h.placeholderParent(post); got != "" {
+		t.Errorf("legacy placeholder parent = %q, want empty", got)
+	}
+	h.SetThreadReplyEnabled(true)
+	if got := h.placeholderParent(post); got != "p-1" {
+		t.Errorf("thread placeholder parent = %q, want p-1", got)
 	}
 }
 

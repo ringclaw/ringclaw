@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/ringclaw/ringclaw/messaging/persona"
 )
@@ -62,6 +63,62 @@ type Config struct {
 	// value is valid (the feature defaults to enabled with stock
 	// paths); see messaging/persona for the full resolution logic.
 	Persona persona.Config `json:"persona,omitempty"`
+
+	// Progress controls the periodic "what is the agent doing"
+	// placeholder heartbeat. Zero value is valid: enabled with a 60s
+	// interval.
+	Progress ProgressConfig `json:"progress,omitempty"`
+
+	// ThreadReply controls whether bot responses (the typing placeholder
+	// and final replies) are posted as thread replies under the
+	// triggering post, with per-thread conversation isolation. Zero
+	// value is valid: disabled (legacy flat-chat behavior).
+	ThreadReply ThreadReplyConfig `json:"threadReply,omitempty"`
+}
+
+// ThreadReplyConfig controls thread-reply mode. Enabled defaults to false:
+// responses are posted as plain chat messages unless explicitly opted in.
+type ThreadReplyConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// ThreadReplyEnabled reports whether thread-reply mode is on. It defaults
+// to false (legacy flat-chat behavior) when unset.
+func (c *Config) ThreadReplyEnabled() bool {
+	if c == nil || c.ThreadReply.Enabled == nil {
+		return false
+	}
+	return *c.ThreadReply.Enabled
+}
+
+// ProgressConfig configures the periodic progress heartbeat that rewrites a
+// long-running agent's "Thinking..." placeholder. Enabled defaults to true;
+// Interval is a Go duration string (default "60s").
+type ProgressConfig struct {
+	Enabled  *bool  `json:"enabled,omitempty"`
+	Interval string `json:"interval,omitempty"`
+}
+
+// ProgressEnabled reports whether the progress heartbeat is enabled. It
+// defaults to true when unset.
+func (c *Config) ProgressEnabled() bool {
+	if c == nil || c.Progress.Enabled == nil {
+		return true
+	}
+	return *c.Progress.Enabled
+}
+
+// ProgressInterval returns the heartbeat interval, defaulting to 60s when
+// unset or invalid.
+func (c *Config) ProgressInterval() time.Duration {
+	if c == nil || strings.TrimSpace(c.Progress.Interval) == "" {
+		return 60 * time.Second
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(c.Progress.Interval))
+	if err != nil || d <= 0 {
+		return 60 * time.Second
+	}
+	return d
 }
 
 // OpenclawGatewayConfig holds the connection info for the external openclaw
@@ -272,14 +329,14 @@ func (rc RCConfig) HasGroupSummary() bool {
 
 // AgentConfig holds configuration for a single agent.
 type AgentConfig struct {
-	Type         string            `json:"type"`                    // "acp", "cli", or "http"
-	Command      string            `json:"command,omitempty"`       // binary path (cli/acp type)
-	Args         []string          `json:"args,omitempty"`          // extra args for command (e.g. ["acp"] for cursor)
-	Aliases      []string          `json:"aliases,omitempty"`       // custom trigger commands (e.g. ["gpt", "4o"])
-	Cwd          string            `json:"cwd,omitempty"`           // working directory (workspace)
-	Env          map[string]string `json:"env,omitempty"`           // extra environment variables (cli/acp type)
-	AllowWrite   bool              `json:"allow_write,omitempty"`   // grant file write permission to ACP agent (default: false)
-	FullAccess   bool              `json:"full_access,omitempty"`   // call session/set_mode "full-access" on ACP session creation
+	Type       string            `json:"type"`                  // "acp", "cli", or "http"
+	Command    string            `json:"command,omitempty"`     // binary path (cli/acp type)
+	Args       []string          `json:"args,omitempty"`        // extra args for command (e.g. ["acp"] for cursor)
+	Aliases    []string          `json:"aliases,omitempty"`     // custom trigger commands (e.g. ["gpt", "4o"])
+	Cwd        string            `json:"cwd,omitempty"`         // working directory (workspace)
+	Env        map[string]string `json:"env,omitempty"`         // extra environment variables (cli/acp type)
+	AllowWrite bool              `json:"allow_write,omitempty"` // grant file write permission to ACP agent (default: false)
+	FullAccess bool              `json:"full_access,omitempty"` // call session/set_mode "full-access" on ACP session creation
 
 	// RestrictedModeID overrides the built-in agent → restricted
 	// modeId map that ringclaw uses for non-owner senders. When

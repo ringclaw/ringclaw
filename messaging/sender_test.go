@@ -25,7 +25,7 @@ func TestSendTypingPlaceholder_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := ringcentral.NewBotClient(srv.URL, "token")
-	id, err := SendTypingPlaceholder(context.Background(), client, "chat-1")
+	id, err := SendTypingPlaceholder(context.Background(), client, "chat-1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestSendTypingPlaceholder_Error(t *testing.T) {
 	defer srv.Close()
 
 	client := ringcentral.NewBotClient(srv.URL, "token")
-	_, err := SendTypingPlaceholder(context.Background(), client, "chat-1")
+	_, err := SendTypingPlaceholder(context.Background(), client, "chat-1", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}

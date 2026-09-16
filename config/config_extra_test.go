@@ -545,3 +545,52 @@ func TestLoad_FileReadError(t *testing.T) {
 		t.Error("expected error when config.json is a directory")
 	}
 }
+
+func TestProgressEnabledDefaultAndOverride(t *testing.T) {
+	c := &Config{}
+	if !c.ProgressEnabled() {
+		t.Fatal("progress should default to enabled")
+	}
+	off := false
+	c.Progress.Enabled = &off
+	if c.ProgressEnabled() {
+		t.Fatal("progress should be disabled when explicitly set false")
+	}
+	on := true
+	c.Progress.Enabled = &on
+	if !c.ProgressEnabled() {
+		t.Fatal("progress should be enabled when explicitly set true")
+	}
+}
+
+func TestProgressIntervalDefaultAndOverride(t *testing.T) {
+	c := &Config{}
+	if got := c.ProgressInterval(); got.String() != "1m0s" {
+		t.Fatalf("default interval = %v, want 1m0s", got)
+	}
+	c.Progress.Interval = "30s"
+	if got := c.ProgressInterval(); got.String() != "30s" {
+		t.Fatalf("interval = %v, want 30s", got)
+	}
+	c.Progress.Interval = "not-a-duration"
+	if got := c.ProgressInterval(); got.String() != "1m0s" {
+		t.Fatalf("invalid interval should fall back to 1m0s, got %v", got)
+	}
+}
+
+func TestThreadReplyEnabledDefaultAndOverride(t *testing.T) {
+	c := &Config{}
+	if c.ThreadReplyEnabled() {
+		t.Fatal("thread reply should default to disabled (legacy flat-chat behavior)")
+	}
+	on := true
+	c.ThreadReply.Enabled = &on
+	if !c.ThreadReplyEnabled() {
+		t.Fatal("thread reply should be enabled when explicitly set true")
+	}
+	off := false
+	c.ThreadReply.Enabled = &off
+	if c.ThreadReplyEnabled() {
+		t.Fatal("thread reply should be disabled when explicitly set false")
+	}
+}

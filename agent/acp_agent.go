@@ -676,10 +676,18 @@ func (a *ACPAgent) chatWithEntries(ctx context.Context, conversationID string, e
 		case <-ctx.Done():
 			return "", Timeout(ctx.Err())
 		case update := <-notifyCh:
-			if update.SessionUpdate == "agent_message_chunk" {
+			switch update.SessionUpdate {
+			case "agent_message_chunk":
 				text := extractChunkText(update)
 				if text != "" {
 					textParts = append(textParts, text)
+				}
+			case "tool_call", "tool_call_update":
+				// Surface the latest tool activity so the handler's progress
+				// ticker can tell the user what is happening instead of
+				// leaving them on a bare "Thinking..." placeholder for minutes.
+				if desc := describeToolActivity(update); desc != "" {
+					reportProgress(ctx, desc)
 				}
 			}
 		case done := <-promptDone:

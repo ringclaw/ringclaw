@@ -161,6 +161,28 @@ func (c *Client) SendPost(ctx context.Context, chatID, text string) (*Post, erro
 	return &post, nil
 }
 
+// SendPostReply creates a new post in a chat as a thread reply to parentPostID.
+func (c *Client) SendPostReply(ctx context.Context, chatID, parentPostID, text string) (*Post, error) {
+	reqBody := CreatePostRequest{Text: text, ParentPostID: parentPostID}
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal post: %w", err)
+	}
+
+	path := fmt.Sprintf("/team-messaging/v1/chats/%s/posts", chatID)
+	respBody, err := c.doRequest(ctx, http.MethodPost, path, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	var post Post
+	if err := json.Unmarshal(respBody, &post); err != nil {
+		return nil, fmt.Errorf("parse post response: %w", err)
+	}
+	c.markSentPost(post.ID)
+	return &post, nil
+}
+
 // UpdatePost updates an existing post's text.
 func (c *Client) UpdatePost(ctx context.Context, chatID, postID, text string) (*Post, error) {
 	reqBody := UpdatePostRequest{Text: text}

@@ -58,6 +58,12 @@ type Handler struct {
 	seenMsgCount  int64    // approximate count for capacity limiting
 	cronStore     *CronStore
 	reloadAgents  ReloadAgentsFunc
+	// postConvo maps post ID -> conversation key for every post the handler
+	// dispatched (user posts and bot replies alike). Thread replies arrive via
+	// WS with parentPostId pointing at a previous post in the thread; this map
+	// resolves the reply back to the original conversation key so a thread
+	// keeps one agent context across turns, even before RC assigns a threadId.
+	postConvo sync.Map // map[string]string — post ID -> conversation key
 
 	groupSummaryGroupID      string
 	groupSummaryMessageLimit int
@@ -128,6 +134,22 @@ type Handler struct {
 	// operator's persona / memory context. A nil loader is safe to
 	// carry (Enabled reports false).
 	personaLoader *persona.Loader
+
+	// progressEnabled / progressInterval control the "what is the agent
+	// doing" heartbeat that periodically rewrites the "Thinking..."
+	// placeholder while a long agent run is in flight. Enabled by default
+	// with a 60s interval; set via SetProgressConfig. Only agents whose
+	// context carries an agent.ProgressFunc (currently ACP) feed activity
+	// text — others still get the elapsed-time heartbeat.
+	progressEnabled  bool
+	progressInterval time.Duration
+
+	// threadReply controls whether bot responses (the typing placeholder
+	// and final replies) are posted as thread replies under the
+	// triggering post, and whether conversations are keyed per thread.
+	// Off (default) keeps the legacy flat-chat behavior: plain chat
+	// messages and one shared agent context per (chat, user).
+	threadReply bool
 }
 
 // NewHandler creates a new message handler.
@@ -145,7 +167,61 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc, version strin
 		pendingAuthorize:  make(map[string]bool),
 		authorizeMeta:     make(map[string]authorizeMeta),
 		authorizeCooldown: make(map[string]time.Time),
+		progressEnabled:   true,
+		progressInterval:  60 * time.Second,
 	}
+}
+
+// SetProgressConfig configures the progress heartbeat. interval <= 0 keeps
+// the current/default interval.
+func (h *Handler) SetProgressConfig(enabled bool, interval time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.progressEnabled = enabled
+	if interval > 0 {
+		h.progressInterval = interval
+	}
+}
+
+func (h *Handler) progressActive() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.progressEnabled
+}
+
+func (h *Handler) progressIntervalDuration() time.Duration {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.progressInterval <= 0 {
+		return 60 * time.Second
+	}
+	return h.progressInterval
+}
+
+// SetThreadReplyEnabled toggles thread-reply mode. When enabled, the typing
+// placeholder and final replies are posted as thread replies under the
+// triggering post and conversations are keyed per thread. Disabled (the
+// default) keeps the legacy flat-chat behavior.
+func (h *Handler) SetThreadReplyEnabled(enabled bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.threadReply = enabled
+}
+
+func (h *Handler) threadReplyActive() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.threadReply
+}
+
+// placeholderParent returns the parentPostID used when sending the typing
+// placeholder: the triggering post in thread-reply mode so the placeholder
+// lands in the thread, or empty for the legacy flat-chat behavior.
+func (h *Handler) placeholderParent(post ringcentral.Post) string {
+	if h.threadReplyActive() {
+		return post.ID
+	}
+	return ""
 }
 
 // AddTrustedSender adds a user ID to the handler's defense-in-depth sender
@@ -553,6 +629,21 @@ func stripForwardedPrefix(text string) string {
 
 // HandleMessage processes a single incoming RingCentral post.
 func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post) {
+	// Enrich thread metadata: WebSocket PostAdded events for thread replies
+	// carry threadId/parentPostId, but fresh top-level posts do not (RC fills
+	// the thread association asynchronously). A single best-effort REST GET
+	// covers WS edge cases; failure is non-fatal — the conversation falls
+	// back to a per-post key. Skipped entirely when thread-reply mode is
+	// disabled: legacy conversations never consume thread metadata.
+	if h.threadReplyActive() && post.ThreadID == "" && readClient != nil && post.GroupID != "" && post.ID != "" {
+		if fresh, err := readClient.GetPost(ctx, post.GroupID, post.ID); err != nil {
+			slog.Debug("thread enrich failed", "component", "handler", "postID", post.ID, "error", err)
+		} else if fresh != nil {
+			post.ThreadID = fresh.ThreadID
+			post.ParentPostID = fresh.ParentPostID
+		}
+	}
+
 	text := strings.TrimSpace(post.Text)
 	if text == "" {
 		// Voice messages arrive as posts with empty text and an audio attachment.
@@ -662,7 +753,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ringcentral.Client,
 		}
 		return
 	} else if text == "/new" || text == "/clear" {
-		logSendError(SendTextReply(ctx, client, chatID, h.resetDefaultSession(ctx, conversationIDForPost(client, post))))
+		logSendError(SendTextReply(ctx, client, chatID, h.resetDefaultSession(ctx, h.resolveConversationID(client, post))))
 		return
 	} else if strings.HasPrefix(text, "/cwd") {
 		logSendError(SendTextReply(ctx, client, chatID, h.handleCwd(text)))
@@ -796,27 +887,86 @@ func (h *Handler) routeOOBApprovalReply(ctx context.Context, client *ringcentral
 //     across chats.
 //  3. Bot DMs and group chats live in distinct namespaces so renaming a
 //     chat ID can never collide with an existing DM session.
+//  4. In thread-reply mode, the thread is included in the key so each
+//     thread gets an isolated agent context: forwarded topics in
+//     different threads do not share history. Posts without a thread ID
+//     fall back to the post's own ID.
+//
+// In legacy mode (thread-reply disabled) the key is the flat
+// (chat, user) pair, matching the pre-thread behavior exactly.
 //
 // Any caller building an ad-hoc conversationID must preserve these
 // invariants; in particular, do not reduce the key to just the chat or
 // just the user.
-func conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) string {
+//
+// resolveConversationID returns the conversation key for a post. In
+// thread-reply mode it prefers the thread linkage recorded in h.postConvo:
+// a thread reply carries parentPostId pointing at a previously dispatched
+// post (a user message or the bot's own reply), so the reply re-joins the
+// original thread context even when RC has not yet assigned a threadId to
+// the thread root. In legacy mode the flat (chat, user) key is returned.
+func (h *Handler) resolveConversationID(client *ringcentral.Client, post ringcentral.Post) string {
+	if h.threadReplyActive() {
+		if parent := strings.TrimSpace(post.ParentPostID); parent != "" {
+			if key, ok := h.postConvo.Load(parent); ok {
+				if s, ok2 := key.(string); ok2 && s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return h.conversationIDForPost(client, post)
+}
+
+func (h *Handler) conversationIDForPost(client *ringcentral.Client, post ringcentral.Post) string {
 	chatID := strings.TrimSpace(post.GroupID)
 	creatorID := strings.TrimSpace(post.CreatorID)
-	if client != nil && client.IsBotDM(chatID) {
-		return fmt.Sprintf("rc:dm:%s:%s", chatID, creatorID)
+	isDM := client != nil && client.IsBotDM(chatID)
+	if !h.threadReplyActive() {
+		// Legacy flat-chat key: one shared agent context per (chat, user).
+		if isDM {
+			return fmt.Sprintf("rc:dm:%s:%s", chatID, creatorID)
+		}
+		return fmt.Sprintf("rc:chat:%s:user:%s", chatID, creatorID)
 	}
-	return fmt.Sprintf("rc:chat:%s:user:%s", chatID, creatorID)
+	threadID := strings.TrimSpace(post.ThreadID)
+	if threadID == "" {
+		// No thread ID yet (fresh post, RC fills it asynchronously). Use the
+		// post's own ID as the isolation key so each new top-level message
+		// starts a fresh agent context instead of sharing a chat-wide one.
+		threadID = "post:" + post.ID
+	}
+	if isDM {
+		return fmt.Sprintf("rc:dm:%s:thread:%s:%s", chatID, threadID, creatorID)
+	}
+	return fmt.Sprintf("rc:chat:%s:thread:%s:user:%s", chatID, threadID, creatorID)
 }
 
 // dispatchToAgent handles the common pattern: placeholder → extract attachments → chat → reply with actions.
 func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, ag agent.Agent, message, placeholderID string) {
-	conversationID := conversationIDForPost(client, post)
+	conversationID := h.resolveConversationID(client, post)
+	// Record the linkage so later thread replies (parentPostId → this post or
+	// the bot's placeholder) re-join this conversation. Only meaningful in
+	// thread-reply mode; resolveConversationID ignores the map otherwise.
+	if h.threadReplyActive() {
+		h.postConvo.Store(post.ID, conversationID)
+		if placeholderID != "" {
+			h.postConvo.Store(placeholderID, conversationID)
+		}
+	}
 
 	// v0.4.3: tag the request with the sender's Origin so the agent
 	// layer can apply the non-owner restricted-mode + fail-closed
 	// fs/terminal gate.
 	ctx = h.withOriginForPost(ctx, client, post)
+
+	// Capture the agent's latest activity so the progress heartbeat can tell
+	// the user what is happening instead of leaving a bare "Thinking..." for
+	// the whole (possibly many-minute) run. ACP agents report through this
+	// callback; other agent types simply never call it.
+	var latestProgress atomic.Value
+	latestProgress.Store("")
+	ctx = agent.WithProgress(ctx, func(text string) { latestProgress.Store(text) })
 
 	// Apply per-agent response timeout so a hung agent process does not
 	// block this goroutine indefinitely. The timeout is sourced from the
@@ -837,17 +987,99 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 	if len(audio) == 0 {
 		images = extractImageAttachments(ctx, client, post)
 	}
+	stopProgress := h.startProgress(ctx, client, post.GroupID, placeholderID, &latestProgress)
+
 	reply, err := h.chatWithAttachments(ctx, ag, conversationID, prompt, images, audio)
 	if err != nil {
 		reply = agent.UserMessage(err)
 	}
 
-	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
+	// Stop the heartbeat before finalizing so the final reply cannot race
+	// with a late progress update on the same post.
+	stopProgress()
+
+	// Detach from the (possibly expired) request context so a timeout still
+	// produces a visible reply instead of silently failing the PATCH/POST.
+	replyCtx, replyCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer replyCancel()
+
+	h.sendReplyWithActions(replyCtx, client, readClient, post, reply, placeholderID)
+}
+
+// startProgress launches the periodic progress updater and returns an
+// idempotent stop function. It is a no-op when progress is disabled or there
+// is no placeholder to rewrite.
+func (h *Handler) startProgress(ctx context.Context, client *ringcentral.Client, chatID, placeholderID string, latest *atomic.Value) func() {
+	if placeholderID == "" || !h.progressActive() {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.progressLoop(ctx, client, chatID, placeholderID, latest, stop)
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(stop)
+			<-done
+		})
+	}
+}
+
+// progressLoop rewrites the placeholder every progressInterval with the
+// latest activity and elapsed time, until stopped or the request ctx ends.
+func (h *Handler) progressLoop(ctx context.Context, client *ringcentral.Client, chatID, placeholderID string, latest *atomic.Value, stop <-chan struct{}) {
+	start := time.Now()
+	ticker := time.NewTicker(h.progressIntervalDuration())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			activity, _ := latest.Load().(string)
+			text := progressMessage(activity, time.Since(start))
+			// Detached timeout: a plain ctx may already be close to expiry,
+			// but the heartbeat update itself must still be bounded.
+			uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			if err := UpdatePostText(uctx, client, chatID, placeholderID, text); err != nil {
+				slog.Debug("progress update failed", "component", "handler", "error", err)
+			}
+			cancel()
+		}
+	}
+}
+
+// progressMessage renders the one-line progress text. Kept deliberately short
+// so the placeholder stays readable.
+func progressMessage(activity string, elapsed time.Duration) string {
+	if activity == "" {
+		return fmt.Sprintf("⏳ 正在处理…（已 %s）", shortDuration(elapsed))
+	}
+	return fmt.Sprintf("⏳ 正在执行：%s（已 %s）", activity, shortDuration(elapsed))
+}
+
+// shortDuration formats a duration compactly (45s, 2m, 2m10s).
+func shortDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	m := int(d / time.Minute)
+	s := int(d/time.Second) % 60
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm%ds", m, s)
 }
 
 // sendToDefaultAgent sends the message to the default agent and replies.
 func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, text string) {
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, post.GroupID)
+	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, post.GroupID, h.placeholderParent(post))
 	if placeholderErr != nil {
 		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
 	}
@@ -865,7 +1097,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ringcentral.Cl
 
 // sendToNamedAgent sends the message to a specific agent and replies.
 func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, name, message string) {
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, post.GroupID)
+	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, client, post.GroupID, h.placeholderParent(post))
 	if placeholderErr != nil {
 		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
 	}
@@ -882,7 +1114,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ringcentral.Clie
 
 // broadcastToAgents sends the message to multiple agents in parallel.
 func (h *Handler) broadcastToAgents(ctx context.Context, client *ringcentral.Client, readClient *ringcentral.Client, post ringcentral.Post, names []string, message string) {
-	conversationID := conversationIDForPost(client, post)
+	conversationID := h.resolveConversationID(client, post)
 
 	// v0.4.3: tag the broadcast ctx with Origin so every fan-out
 	// agent invocation honors the non-owner restricted-mode +
