@@ -166,7 +166,7 @@ func (h *Handler) executeSummarize(ctx context.Context, replyClient *ringcentral
 	// when a non-owner asked for the summary.
 	ctx = h.withOriginForPost(ctx, replyClient, post)
 
-	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, replyClient, chatID)
+	placeholderID, placeholderErr := SendTypingPlaceholder(ctx, replyClient, chatID, h.placeholderParent(post))
 	if placeholderErr != nil {
 		slog.Error("failed to send typing placeholder", "component", "handler", "error", placeholderErr)
 	}

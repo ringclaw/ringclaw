@@ -149,6 +149,15 @@ func initHandler(ctx context.Context, cfg *config.Config) *messaging.Handler {
 		"interval", cfg.ProgressInterval(),
 	)
 
+	// Thread-reply mode: post the placeholder and replies inside the
+	// triggering post's thread, with per-thread conversation isolation.
+	// Defaults to off (legacy flat-chat behavior).
+	handler.SetThreadReplyEnabled(cfg.ThreadReplyEnabled())
+	slog.Info("thread reply mode configured",
+		"component", "start",
+		"enabled", cfg.ThreadReplyEnabled(),
+	)
+
 	// Persona + memory banner: a single Loader feeds every dispatch so
 	// switching agents or resetting sessions keeps the operator's
 	// SOUL.md and layered memory visible. Disabled by config? the

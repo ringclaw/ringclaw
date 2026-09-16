@@ -17,6 +17,9 @@ type Post struct {
 	IconURI          string       `json:"iconUri"`
 	IconEmoji        string       `json:"iconEmoji"`
 	EventType        string       `json:"eventType"`
+	ParentPostID     string       `json:"parentPostId"`
+	ThreadID         string       `json:"threadId"`
+	IsParent         bool         `json:"isParent"`
 }
 
 // Attachment represents a post attachment.
@@ -65,7 +68,8 @@ type ListPostsOpts struct {
 
 // CreatePostRequest is the body for creating a post.
 type CreatePostRequest struct {
-	Text string `json:"text"`
+	Text         string `json:"text"`
+	ParentPostID string `json:"parentPostId,omitempty"`
 }
 
 // UpdatePostRequest is the body for updating a post.

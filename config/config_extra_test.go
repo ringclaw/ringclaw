@@ -577,3 +577,20 @@ func TestProgressIntervalDefaultAndOverride(t *testing.T) {
 		t.Fatalf("invalid interval should fall back to 1m0s, got %v", got)
 	}
 }
+
+func TestThreadReplyEnabledDefaultAndOverride(t *testing.T) {
+	c := &Config{}
+	if c.ThreadReplyEnabled() {
+		t.Fatal("thread reply should default to disabled (legacy flat-chat behavior)")
+	}
+	on := true
+	c.ThreadReply.Enabled = &on
+	if !c.ThreadReplyEnabled() {
+		t.Fatal("thread reply should be enabled when explicitly set true")
+	}
+	off := false
+	c.ThreadReply.Enabled = &off
+	if c.ThreadReplyEnabled() {
+		t.Fatal("thread reply should be disabled when explicitly set false")
+	}
+}

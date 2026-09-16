@@ -68,6 +68,27 @@ type Config struct {
 	// placeholder heartbeat. Zero value is valid: enabled with a 60s
 	// interval.
 	Progress ProgressConfig `json:"progress,omitempty"`
+
+	// ThreadReply controls whether bot responses (the typing placeholder
+	// and final replies) are posted as thread replies under the
+	// triggering post, with per-thread conversation isolation. Zero
+	// value is valid: disabled (legacy flat-chat behavior).
+	ThreadReply ThreadReplyConfig `json:"threadReply,omitempty"`
+}
+
+// ThreadReplyConfig controls thread-reply mode. Enabled defaults to false:
+// responses are posted as plain chat messages unless explicitly opted in.
+type ThreadReplyConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// ThreadReplyEnabled reports whether thread-reply mode is on. It defaults
+// to false (legacy flat-chat behavior) when unset.
+func (c *Config) ThreadReplyEnabled() bool {
+	if c == nil || c.ThreadReply.Enabled == nil {
+		return false
+	}
+	return *c.ThreadReply.Enabled
 }
 
 // ProgressConfig configures the periodic progress heartbeat that rewrites a
