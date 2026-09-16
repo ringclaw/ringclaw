@@ -998,7 +998,12 @@ func (h *Handler) dispatchToAgent(ctx context.Context, client *ringcentral.Clien
 	// with a late progress update on the same post.
 	stopProgress()
 
-	h.sendReplyWithActions(ctx, client, readClient, post, reply, placeholderID)
+	// Detach from the (possibly expired) request context so a timeout still
+	// produces a visible reply instead of silently failing the PATCH/POST.
+	replyCtx, replyCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer replyCancel()
+
+	h.sendReplyWithActions(replyCtx, client, readClient, post, reply, placeholderID)
 }
 
 // startProgress launches the periodic progress updater and returns an
